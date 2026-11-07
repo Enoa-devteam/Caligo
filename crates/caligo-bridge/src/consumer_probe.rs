@@ -620,9 +620,26 @@ pub fn build_cb_for_cookie(cookie: &crate::native_response::Cookie) -> [u64; 4] 
     ]
 }
 
-/// Drain bounded callback slots on the worker thread, then return complete
+/// Drain all bounded callback slots on the consumer thread, then return
 /// diagnostic strings for the existing response ledger interface.
 pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
+    drain_responses_matching(None)
+}
+
+/// Drain callback slots for one request cookie while preserving every other
+/// generation's ready slot. This is used by the bounded direct G3 observer;
+/// normal resident consumption continues to use [`drain_responses`].
+pub fn drain_responses_for_cookie(
+    expected: &crate::native_response::Cookie,
+) -> Vec<(crate::native_response::Cookie, i32, String)> {
+    drain_responses_matching(Some(expected))
+}
+
+fn drain_responses_matching(
+    expected: Option<&crate::native_response::Cookie>,
+) -> Vec<(crate::native_response::Cookie, i32, String)> {
+    let expected_generation = expected
+        .map(|cookie| u64::from_le_bytes(cookie.0[..8].try_into().expect("cookie width is fixed")));
     let mut responses = Vec::new();
     for slot in &RESPONSE_SLOTS {
         if slot
@@ -639,6 +656,14 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
         }
         // SAFETY: SLOT_WRITING is exclusively owned by this consumer.
         let mut capture = unsafe { *slot.capture.get() };
+        if expected.is_some_and(|cookie| capture.cookie != cookie.0) {
+            // This slot belongs to another request. Do not consume or format
+            // it; wipe only the temporary copy and republish the untouched
+            // slot for its own consumer.
+            clear_response_uid(&mut capture.response_uid);
+            slot.state.store(SLOT_READY, Ordering::Release);
+            continue;
+        }
         let context = context_for_pointer(capture.context);
         let err = match capture.err_flags {
             1 => String::from_utf8_lossy(&capture.err[..capture.err_len as usize]).into_owned(),
@@ -695,7 +720,11 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
         if slot.state.load(Ordering::Acquire) != SLOT_READY {
             continue;
         }
-        if let Some(ctx) = context_for_generation(slot.generation.load(Ordering::Relaxed)) {
+        let generation = slot.generation.load(Ordering::Relaxed);
+        if expected_generation.is_some_and(|expected| expected != generation) {
+            continue;
+        }
+        if let Some(ctx) = context_for_generation(generation) {
             let manager_calls = ctx.manager_calls.swap(0, Ordering::Relaxed);
             let overflow = ctx.callback_overflow.swap(0, Ordering::Relaxed);
             let late_callbacks = ctx.late_callbacks_rejected.swap(0, Ordering::Relaxed);
@@ -710,7 +739,11 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
             }
         }
     }
-    let orphaned = ORPHAN_CALLBACKS.swap(0, Ordering::Relaxed);
+    let orphaned = if expected.is_none() {
+        ORPHAN_CALLBACKS.swap(0, Ordering::Relaxed)
+    } else {
+        0
+    };
     if orphaned != 0 {
         if let Some(ctx) = CONTEXTS
             .iter()
@@ -791,6 +824,60 @@ mod tests {
         assert!(output.contains("\"consumer_result\""));
         assert!(output.contains("\"response_uid_state\":\"empty\""));
         let _ = std::fs::remove_file(report);
+    }
+
+    #[test]
+    fn cookie_scoped_drain_leaves_other_generation_slots_ready() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let (left, left_report, _left_wide) = context();
+        let (right, right_report, _right_wide) = context();
+        let left_nonce = 0xA11C_E001;
+        let right_nonce = 0xA11C_E002;
+        let mut left_delegate = build_cb_for_generation(left, left_nonce);
+        let mut right_delegate = build_cb_for_generation(right, right_nonce);
+
+        // SAFETY: each delegate and its immutable context stay live throughout
+        // this synchronous synthetic callback.
+        unsafe {
+            consumer_invoke(
+                left_delegate.as_mut_ptr().cast(),
+                0x10,
+                0,
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+            consumer_invoke(
+                right_delegate.as_mut_ptr().cast(),
+                0x10,
+                1006501,
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+        }
+
+        let mut left_bytes = [0u8; 16];
+        left_bytes[..8].copy_from_slice(&left.generation.to_le_bytes());
+        left_bytes[8..].copy_from_slice(&left_nonce.to_le_bytes());
+        let left_cookie = crate::native_response::Cookie(left_bytes);
+        let mut right_bytes = [0u8; 16];
+        right_bytes[..8].copy_from_slice(&right.generation.to_le_bytes());
+        right_bytes[8..].copy_from_slice(&right_nonce.to_le_bytes());
+        let right_cookie = crate::native_response::Cookie(right_bytes);
+
+        let left_drained = drain_responses_for_cookie(&left_cookie);
+        assert_eq!(left_drained, vec![(left_cookie, 0, String::new())]);
+        assert!(std::fs::read_to_string(&left_report)
+            .unwrap()
+            .contains("\"consumer_result\""));
+        assert!(!right_report.exists(), "other generation remains untouched");
+
+        let right_drained = drain_responses();
+        assert_eq!(right_drained, vec![(right_cookie, 1006501, String::new())]);
+        assert!(std::fs::read_to_string(&right_report)
+            .unwrap()
+            .contains("\"consumer_result\""));
+        let _ = std::fs::remove_file(left_report);
+        let _ = std::fs::remove_file(right_report);
     }
 
     fn short_string(s: &[u8]) -> [u8; 24] {

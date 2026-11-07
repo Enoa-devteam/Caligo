@@ -1181,11 +1181,51 @@ fn make_short_string(dst: &mut [u8; 24], s: &[u8]) {
 type OperatorNewFn = unsafe extern "system" fn(usize) -> *mut c_void;
 type SendSsoFn = unsafe extern "system" fn(usize, usize, usize, u8, usize);
 
+#[cfg(feature = "research")]
+fn observe_g3_callback(cookie: crate::native_response::Cookie, report_path: *const u16) {
+    use std::time::{Duration, Instant};
+
+    const OBSERVE_WINDOW: Duration = Duration::from_secs(5);
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    let deadline = Instant::now() + OBSERVE_WINDOW;
+    loop {
+        let matches = crate::consumer_probe::drain_responses_for_cookie(&cookie);
+        if let Some((_, err_code, err)) = matches.first() {
+            stage(
+                report_path,
+                "g3s_callback_observation",
+                true,
+                &format!(
+                    "matches={} err_code={} err_bytes={} delivery=unconfirmed",
+                    matches.len(),
+                    err_code,
+                    err.len()
+                ),
+            );
+            return;
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            stage(
+                report_path,
+                "g3s_callback_observation",
+                false,
+                "matches=0 window_ms=5000 callback_and_delivery=unknown; no retry",
+            );
+            return;
+        }
+        std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
 /// G3-P2 受控发送主入口(loader 经 `caligo_g3_send_run` 远程线程调用)。
 ///
 /// 单次调用 SendSSORequestInternal;零插桩、无常驻修改、零转发。
-/// 缓冲所有权:body data 经移转归 QQ(本侧不释放);回调为 QQ 原生空函数。
-/// 发送结果异步(无消费者),验证 = 对端收到消息(现场确认)。
+/// 缓冲所有权:body data 经移转归 QQ(本侧不释放);回调由 profile 绑定。
+/// 9.9.36 research profile 使用受控 capture 并限时观察;callback 不证明送达。
+/// 发送结果异步,delivery 仍须由受控对端确认。
 ///
 /// SAFETY: ctx 必须指向本进程内有效的 [`G3SendCtx`]。
 pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
@@ -1450,6 +1490,8 @@ unsafe fn g3_send_run_with_profile(ctx: *const G3SendCtx, profile: &G3BuildProfi
     let mut cmd = [0u8; 24];
     make_short_string(&mut cmd, b"MessageSvc.PbSendMsg");
     let mut cb = [0u64; 4];
+    #[cfg(feature = "research")]
+    let mut callback_cookie = None;
     // 消费者分支 = research 专属(default 构建 E0433 自 r2 起预存,本提交
     // 补门;default 下 use_consumer 落回空 delegate,行为与 0 无异)。
     #[cfg(feature = "research")]
@@ -1474,6 +1516,10 @@ unsafe fn g3_send_run_with_profile(ctx: *const G3SendCtx, profile: &G3BuildProfi
                 }
             };
         cb = crate::consumer_probe::build_cb_for_generation(c, callback_nonce);
+        let mut cookie = [0u8; 16];
+        cookie[..8].copy_from_slice(&cb[0].to_le_bytes());
+        cookie[8..].copy_from_slice(&cb[1].to_le_bytes());
+        callback_cookie = Some(crate::native_response::Cookie(cookie));
         stage(
             report_path,
             "g3s_consumer",
@@ -1522,11 +1568,15 @@ unsafe fn g3_send_run_with_profile(ctx: *const G3SendCtx, profile: &G3BuildProfi
             body.len()
         ),
     );
+    #[cfg(feature = "research")]
+    if let Some(cookie) = callback_cookie {
+        observe_g3_callback(cookie, report_path);
+    }
     stage(
         report_path,
         "g3s_done",
         true,
-        "ok — verify delivery on peer",
+        "submission path returned; callback observation is separate; peer delivery remains unconfirmed",
     );
     OK
 }

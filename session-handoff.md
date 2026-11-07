@@ -6,11 +6,13 @@ N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复
 
 当前-hash G3 profile 已在 PID 32496 通过零发送 P1 swap/restore。随后用户指定新启动 PID 26132 做唯一 G3-P2 样本：manifest、实际模块 hash、单一 envscan 候选、FRIEND-B 摘要和序号门均通过；sequence 4 的 `CALIGO-K3-SEND-004` 已提交一次，CLI exit 0，`g3s_submitted/g3s_done` 成功，PID 仍响应且 bridge 仍映射。发送返回为异步；报告没有 `consumer_result`。源码中直接 G3 路径只登记 capture context，而 `consumer_result` 由 `drain_responses()` 写入，本次没有启动 resident worker，因此 callback 是否发生和 delivery 均未知。`wc_uninstall` 报告恢复两个 callsite；运行后核验二者为原始字节。完整脱敏证据见 execution ledger，原始报告仅在 ignored `local-evidence/n4-r2-callback-26132-20261107/`。R2 callback OS thread/final owner/wait/QQ-native stop-drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 仍 open；feat-005/006 blocked，R4 未准入。
 
+2026-11-08 已补上 direct G3 的 research-only callback 观察路径：提交返回后按本次 cookie polling 最多 5 秒，定向 drain 只回收对应 cookie，保留其它代次 ready slots；捕获只证明 callback 被观测，不证明业务成功或对端送达。research lib tests 88/88、default check 和隔离 research release builds 通过。新 release CLI/bridge hash 分别为 `27F3B5E89C5A6D97DCEFBDCF10B089FB378ABD5944DBEE3C03C391A323D4C572` / `E5D1C83A92D6B4A4B554AB45C8790359009EAB465894B1DF99EDA630C6041299`，尚未加载进 QQ。PID 26132 固定着旧 bridge；sequence 4 仍 unknown、不得重放。
+
 ## Restartable Next Step
 
-`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；序号 3 仍 unknown。`CALIGO-K3-SEND-004` 已以 sequence 4 单次提交，delivery unknown；不得重发。PID 26132 当前仍响应且映射着已 pin 的 bridge，不要对它再次注入、热卸载或运行探针。先离线补齐单次 G3 callback 的有界 drain/观测路径，再等待用户正常重启并指定新 QQ 主进程，重新核对创建时间、模块 hash、envscan 与 bridge 状态。之后若满足合同再考虑新的唯一样本，sequence 从 5 起且使用新 marker；不能把 sequence 4 当作可重试失败。
+`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；序号 3 仍 unknown。`CALIGO-K3-SEND-004` 已以 sequence 4 单次提交，delivery unknown；不得重发。PID 26132 仍映射旧 bridge，不要对它再次注入、热卸载或运行探针。下一次动态样本需要用户正常重启并指定 fresh QQ root，重新核对进程创建时间、9.9.36-53644 模块 hash、唯一 envscan 候选及 bridge 状态；只有全部通过才考虑 sequence 5 + 新 marker 的一次性发送。新 observer 最多等待 5 秒并按 cookie 排空该请求；无匹配结果保持 unknown，不重试；callback capture 仍不等于 delivery。
 
-直接 G3-P2 路径未启动 native-resident drain worker；`consumer_probe::drain_responses()` 目前由 resident worker 调用。因此本次无 `consumer_result` 不能证明 callback 未发生，也不能证明 callback 线程、manager final owner、successful wait、stop/drain/quiescence。下一项离线工作应先确定最小安全观测路径，再进行现场样本。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
+原 sequence-4 报告没有 `consumer_result`，不能回溯证明 callback 是否发生；新增 observer 只改善未来 direct G3 样本。它不证明 QQ callback 的真实 owner/thread contract、manager final owner、successful wait 或 QQ stop/drain/quiescence。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
 
 ## Preserved Unknowns
 
