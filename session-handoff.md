@@ -4,13 +4,13 @@
 
 N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。2026-11-07 固定-hash 续查沿 `D3355C` 第二 wait caller 得到 §7.92 有界 no-hit，并检查 strict-RTTI MSFService/MSFCoreService slot-0 teardown（§7.93）：两条选定 pair-release 路径都没有 guarded-global `0x67510A0` 直接引用，pair 也未绑定到 global `+8`；成功 wait 与 manager final owner 仍未知。
 
-本轮为精确 9.9.36-53644 wrapper hash `0D8B…534C` 新增 G3 profile；research release 构建通过。用户指定 PID 32496（创建 `21:30:16 +08:00`），manifest 与实际加载模块哈希匹配，envscan 唯一候选。G3-P1 的 `g3_adopt/site/swap/restore/done` 全部成功，`g3_done captured=1`，CLI exit 0。22:18:28 +08:00 仍响应且 bridge 已映射；到 22:24:41 前 PID 已退出。发送阶段被 PID 活性检查拦截，未派发消息、序号 4 未预留。未发现对应 Application 1000/1001，退出原因未知，不据此声称由 probe 导致崩溃；其他 QQ root 未触碰。此前 `CALIGO-K3-SEND-002` 状态仍 unknown，序号 3 保留、不重放。完整证据见 execution ledger。R2 callback OS thread/final owner/wait/QQ-native stop-drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 仍 open；feat-005/006 保持 blocked，R4 不准入。
+当前-hash G3 profile 已在 PID 32496 通过零发送 P1 swap/restore。随后用户指定新启动 PID 26132 做唯一 G3-P2 样本：manifest、实际模块 hash、单一 envscan 候选、FRIEND-B 摘要和序号门均通过；sequence 4 的 `CALIGO-K3-SEND-004` 已提交一次，CLI exit 0，`g3s_submitted/g3s_done` 成功，PID 仍响应且 bridge 仍映射。发送返回为异步；报告没有 `consumer_result`。源码中直接 G3 路径只登记 capture context，而 `consumer_result` 由 `drain_responses()` 写入，本次没有启动 resident worker，因此 callback 是否发生和 delivery 均未知。`wc_uninstall` 报告恢复两个 callsite；运行后核验二者为原始字节。完整脱敏证据见 execution ledger，原始报告仅在 ignored `local-evidence/n4-r2-callback-26132-20261107/`。R2 callback OS thread/final owner/wait/QQ-native stop-drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 仍 open；feat-005/006 blocked，R4 未准入。
 
 ## Restartable Next Step
 
-`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 都保持不重放。PID 32496 已退出，且未发现能判定退出原因为崩溃的 Application 1000/1001 事件；不要自动改选仍运行的其他 QQ root。等待用户正常重启并指定本轮 QQ 主进程 PID 后，再核对创建时间、响应状态、精确模块 hash、envscan 与 bridge 状态。序号 3 仍已保留且 delivery unknown；本轮没有派发消息或预留序号 4。下一次如用户继续授权并指定实例，才可考虑用 `CALIGO-K3-SEND-004` / client sequence 4 做单次后续；发送前重新检查 FRIEND-B 本地映射 hash 和序列计数，不得使用 3 或重放 `CALIGO-K3-SEND-002`。当前 hash profile 的 P1 已在 PID 32496 通过，但不能因此跳过新实例准入或声称 callback thread/quiescence 已证。
+`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；序号 3 仍 unknown。`CALIGO-K3-SEND-004` 已以 sequence 4 单次提交，delivery unknown；不得重发。PID 26132 当前仍响应且映射着已 pin 的 bridge，不要对它再次注入、热卸载或运行探针。先离线补齐单次 G3 callback 的有界 drain/观测路径，再等待用户正常重启并指定新 QQ 主进程，重新核对创建时间、模块 hash、envscan 与 bridge 状态。之后若满足合同再考虑新的唯一样本，sequence 从 5 起且使用新 marker；不能把 sequence 4 当作可重试失败。
 
-下一步等待用户重启并指定新的 QQ 主进程 PID，再核对精确模块哈希、单实例准入和 bridge 状态；当前 9.9.36 G3 profile 已有 P1 swap/restore 证据，不必重复旧 callsite census。若新实例通过准入且序列文件仍记录 FRIEND-B 序号 3，可继续一次 G3-P2 callback 样本，client sequence 4，运行前重新校验本地 alias hash，并在消息入口前先保存阶段计数；目标退出、阶段失败或 consumer 异常即停止。R2 的 callback OS thread、manager final owner、successful wait 和 QQ stop/drain/quiescence 仍 open。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
+直接 G3-P2 路径未启动 native-resident drain worker；`consumer_probe::drain_responses()` 目前由 resident worker 调用。因此本次无 `consumer_result` 不能证明 callback 未发生，也不能证明 callback 线程、manager final owner、successful wait、stop/drain/quiescence。下一项离线工作应先确定最小安全观测路径，再进行现场样本。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
 
 ## Preserved Unknowns
 
@@ -20,6 +20,7 @@ N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复
 - QQ callback 的现场 OS thread、final owner、成功 wait、stop/drain/quiescence。
 - 旧 dump 本身仍没有 V8 sanity 返回值，且未包含 TryCatch 构造函数或 bridge 调用页。独立的新运行已证明修复版 bridge 可以完成 V8 sanity 与 scope 清理，但不改变旧 dump 的证据内容。
 - 本轮 G3-P1 仅临时替换 transport slot 7 并成功恢复，捕获计数 1；没有注册 listener、调用 SendSSORequestInternal 或执行 send-response callback。发送阶段未能进入，R2 callback 的现场 OS thread/final owner/wait/quiescence 与 R3 native GroupService resolver 仍未知。
+- PID 26132 的 G3-P2 单次调用已提交并返回 async，sequence 4 不重放。`g3-send.jsonl` 只有 G3 阶段行，没有 `consumer_result` / worker summary；调用没有配置 native-resident worker，故无法从报告确定 callback 是否执行。进程仍响应，bridge 已 pin 到进程生命周期；callsite uninstall 报告恢复 2 处，后读两处都等于原始字节。记录见 ignored `local-evidence/n4-r2-callback-26132-20261107/`。
 
 ## Scope and Validation
 
