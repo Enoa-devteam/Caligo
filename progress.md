@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-07 R3 Group UID provider/adapter 与响应身份静态边界复核：精确构建研究已把 cached GroupService schema 绑定到 wrapper N-API `getUidByUins` 项，但没有证明运行时选中的 provider 或 `{uinList:[value]}`→数组适配。Phase4163 的 `r_75143` 仅是带多项运行时条件的 LightWindow provider 候选；Phase4170–4172 的完整 ASAR 字面量/资源核查未建立 handler/adapter。SendMsgResult 的 CPB slot `+0x158` / key `0x9c7a` 也是未定型的条件候选，独立 MsgRecord producer 与它没有对象身份边；没有 response UID→CPB/native ID 桥。当前 Caligo 仍把 response UID 留在诊断指纹，CPB 缺 `native_id`/`sender_uin` 时 fail closed。详细证据和下一步见 [N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md)。R2 现场 owner/thread/wait/quiescence、R3 provider/adapter/strong identity 均 open；R4 未准入，feat-005/006 blocked，产品 NOT READY。
+
 2026-11-07 N4 首次 V8 sanity 崩溃根因与本地修复：精确 QQNT.dll SHA-256 `75B19E58A123B0513E99DF4DF3EBC6524478535BA44651024D6A20821F5086E5` 的 `TryCatch` 构造函数写入 `this+0x28`；旧 Rust backing store 仅 32 字节，构造函数的该写入与 `scope_dtor` 指针槽重叠，并把 `QQNT+0x1F2AB0` 低字节 `0xB0` 改成 `0xB6`，解释了 dump 中错误入口 `+0x1F2AB6`。已将缓冲区扩为 48 字节；隔离 research release build 通过，生成 bridge SHA-256 `7BDADFDE00776AFA16459FF46C3A6731256D2CCE42CBEF35B378D4D728D3237F`，反汇编确认新对象与析构指针槽不重叠。没有运行测试或 QQ 现场验证；R2/R3 现场门仍 open，R4 未准入，产品 NOT READY。详细因果与限制见 [N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md)。
 
 2026-11-07 R3 response UID / CPB identity 源码审计：`consumer_invoke` 第五参数只进入有界诊断捕获；worker 仅记同进程指纹，并返回 cookie/code/error 给 ledger，`errCode=0` 仍为 `BusinessAccepted`。CPB decoder 当前没有已证 `native_id` 或 resolved `sender_uin`，事件构造器因此 fail closed。源码中不存在 response UID→CPB/native ID 的接线；这证明当前 Caligo 实现的边界，不证明 QQ 协议无法提供身份桥。详细调用链、GitNexus 索引限制和精确证据见 [N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md)。R2 owner/thread/wait/quiescence、R3 strong identity/provider/adapter 仍 open；feat-005/006 blocked、R4 未准入、产品 NOT READY。
