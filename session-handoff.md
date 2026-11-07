@@ -2,13 +2,13 @@
 
 ## Current Objective
 
-N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。2026-11-07 固定-hash 续查沿 `D3355C` 第二 wait caller 得到 §7.92 有界 no-hit，并检查 strict-RTTI MSFService/MSFCoreService slot-0 teardown（§7.93）：两条选定 pair-release 路径都没有 guarded-global `0x67510A0` 直接引用，pair 也未绑定到 global `+8`；成功 wait 与 manager final owner 仍未知。最新只读 surface-only 运行在用户指定 PID 31156：18 阶段全部成功到 session，`getGroupService()` 仍返回空，resolver 未派发；owner pump shutdown 成功，QQ 仍响应。此 PID 内的 research bridge 仍映射，不能重注入或热卸载。QQ send-response callback 生命周期、实际 callback thread、最终 owner、successful wait、QQ 原生 stop/drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 强关联仍 open；feat-005/006 保持 blocked，R4 不准入。
+N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。2026-11-07 固定-hash 续查沿 `D3355C` 第二 wait caller 得到 §7.92 有界 no-hit，并检查 strict-RTTI MSFService/MSFCoreService slot-0 teardown（§7.93）：两条选定 pair-release 路径都没有 guarded-global `0x67510A0` 直接引用，pair 也未绑定到 global `+8`；成功 wait 与 manager final owner 仍未知。用户重启后指定的 PID 11172 通过本地 9.9.36-53644 manifest 与唯一 envscan 预检；一次 G3 callback 诊断 bootstrap/handshake 成功，但目标在 `g3s_submitted`/`g3s_done` 及 callback 记录出现前退出。报告只有两条 `wc_verify` mismatch 和 `wc_install patched=0`，没有对应 Application 1000/1001 事件，原因未证；唯一消息 `CALIGO-K3-SEND-002` 结果保持 unknown、不重试，序号 3 已预留。另一根进程 PID 22704 未触碰且仍响应。完整证据见 execution ledger。R2 callback OS thread/final owner/wait/QQ-native stop-drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 仍 open；feat-005/006 保持 blocked，R4 不准入。
 
 ## Restartable Next Step
 
-`CALIGO-K1-PROBE-001` 保持为旧崩溃样本，不重放。离线栈审计已定位并修复该样本的根因：精确 QQNT.dll 哈希的 `TryCatch` 构造函数在 `this+0x28` 写 flag；旧 `[usize;4]` 与 `scope_dtor` 槽重叠。修复使用 `[usize;6]`（48 字节）。修复后 PID 38356 与 PID 31156 两次只读运行都到达 session，但 `getGroupService()` 返回空；两次都未派发 resolver，18 个阶段无失败，owner pump shutdown 成功，QQ 进程保持响应。PID 31156 是当前最近样本，bridge 仍映射；不在该进程重注入或热卸载。
+`CALIGO-K1-PROBE-001` 和本轮 `CALIGO-K3-SEND-002` 都保持不重放。PID 11172 已退出；PID 22704 是另一个未触碰实例，不要自动改选或 attach。等待用户正常重启后再检查新 root PID、创建时间、响应状态、模块 hash 与 bridge 状态。序号 3 已提前保留，delivery unknown 不得重试。此次报告中 `wc_verify` 在 RVA `0x732a3e`、`0x7333e6` 未命中原始 call target，`wc_install` 为 `patched=0`；先离线核对这一固定调用点证据与当前 wrapper hash，再设计下一步。已有 `observe-msf` 绑定 wrapper SHA-256 `63112AB9…26187A5F0`，不匹配当前 pilot 的 `0D8B9444…4FBD534C`，不能直接把旧 RVA profile 套到当前模块。任何后续 callback 现场探针须基于当前精确模块 hash 和当次准入；原因未明前不重复这一 send。
 
-下一步保持离线：在用户再次重启前不要碰当前已映射 bridge 的 PID 31156，不热卸载，也不重复 GroupService 空值探针。按执行计划转向一个有界的 R3 provider/adapter 静态证据任务，复核固定 hash 的 wrapper getter、cached method 与已存 Phase4163–4173 证据，只有能指出不同且有 hash 依据的调用入口时才拟定新只读 runtime gate。R2 的 D3355C 第二 caller、MSFService/MSFCoreService 两个 typed slot-0 teardown 候选及 §7.59 guarded-global finalizer/detach 屏幕已复核；没有新的固定-hash 引用前，不重复 whole-image xref、caller 或 destructor census。resolver result 与 response UID→CPB/native ID 关联仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 仍不准入。
+下一步先完成 R2 callback callsite mismatch 的有界离线核对，不重复 whole-image xref、caller 或 destructor census；确认某个新入口前仍不运行 `observe-msf` 的旧 hash profile。R2 的 callback OS thread、manager final owner、successful wait 和 QQ stop/drain/quiescence 仍 open。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
 
 ## Preserved Unknowns
 
