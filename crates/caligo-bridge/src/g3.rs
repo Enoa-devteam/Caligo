@@ -55,6 +55,9 @@ const STR_CAP: usize = 128;
 /// 每槽 qword 数(记录布局见下)。
 const SLOT_QWORDS: usize = 96;
 
+#[cfg(feature = "research")]
+static G3_CALLBACK_NONCE: AtomicU64 = AtomicU64::new(1);
+
 // 记录布局(槽内偏移):
 //  [0]       seq|1(完成位;0=未完成)
 //  [2..8]    a1..a6
@@ -1359,26 +1362,29 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
         // 732A80 把 arg5 内层 delegate 移入捕获块,响应经 0x73C34C → 73bd6c
         // 门(manager op=4 答 0 = 非空)→ invoke(5 参:inner/tag/errCode/errStr/responseUid)。
         // 防御式实现(consumer_probe;RPM-self 安全读,布局误判不崩)。
-        let c = match crate::consumer_probe::leak_ctx(wrapper_base, report_path, 0) {
-            Some(c) => c,
-            None => {
-                stage(
-                    report_path,
-                    "g3s_consumer",
-                    false,
-                    "callback module pin or generation context registry unavailable",
-                );
-                return ERR_SEND_ALLOC;
-            }
-        };
-        cb = crate::consumer_probe::build_cb(wrapper_base, c);
+        let callback_generation = G3_CALLBACK_NONCE.fetch_add(1, Ordering::Relaxed).max(1);
+        let callback_nonce = G3_CALLBACK_NONCE.fetch_add(1, Ordering::Relaxed).max(1);
+        let c =
+            match crate::consumer_probe::leak_ctx(wrapper_base, report_path, callback_generation) {
+                Some(c) => c,
+                None => {
+                    stage(
+                        report_path,
+                        "g3s_consumer",
+                        false,
+                        "callback module pin or generation context registry unavailable",
+                    );
+                    return ERR_SEND_ALLOC;
+                }
+            };
+        cb = crate::consumer_probe::build_cb_for_generation(c, callback_nonce);
         stage(
             report_path,
             "g3s_consumer",
             true,
             &format!(
-                "ctx={:p} manager={:x} invoke={:x}",
-                c as *const _, cb[2], cb[3]
+                "generation={} manager={:x} invoke={:x}",
+                c.generation, cb[2], cb[3]
             ),
         );
     }

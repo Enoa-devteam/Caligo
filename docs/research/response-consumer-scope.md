@@ -1,9 +1,38 @@
 # 响应侧拒绝码消费者 — 范围与锚点(下一工作块起点)
 
-日期:2026-10-09。状态:**范围已定;静态合同大幅闭合(同日 N 阶段增补,见文末);实现未开始**。
+日期:2026-10-09。原始范围与静态合同记录见下文;当前实现状态以本节开头的
+2026-10-16 更新为准。
 动机:群聊 @ 消息 r20–r28b 八轮静默拒(普通文本同桥 PASS,见
 `g3-send-27624-r2x.jsonl`),无 retCode 无法继续定位;发送失败可观测性
 是 @ 元素与一切后续功能(回复/转发)的调试前提。
+
+## 2026-10-16 当前状态
+
+- `consumer_probe::consumer_invoke` 与固定-hash `73BD6C` 的五参 ABI 对齐。现在回调期间将
+  第五参按有界 libc++ string 形态复制到预分配槽;resident worker 在同一条记录中写入状态、长度,
+  本地 request cookie 与 response UID 的 domain-separated keyed fingerprint;两者原值均不落盘。
+  SSO 长度超过 22、不可读或超预算均失败关闭;enqueue 后立即擦除回调栈副本(含队列溢出),
+  worker 消费后擦除其副本和槽。
+ 实现/合成测试只证明捕获合同,不证明 QQ 现场 callback 已触发。
+- fingerprint 只供同一进程内后续对比,绝不是 native ID,也没有进入账本或成功回执。
+  `code==0` 仍是 `BusinessAccepted`;回调 cookie、response UID 与 CPB 身份之间尚无已证桥。
+- `G3NativeOps::native_submit` 目前只将本地 cookie 放入 callback delegate;群聊 protobuf
+  由 `encode_group_text` 编码,没有从该 cookie 到 QQ `msgUid` 的已证请求字段。CPB decoder
+  当前只填已证 seq/time/peer/sender UID/session/text,`native_id` 与 `sender_uin` 继续为空。
+  R3 强身份与 UID→UIN 仍未闭合,不得用正文/时间/seq 相似度替代。
+- 对本机 `_reference/caligo-n3-resident-20261009/` 的历史 R10 样本仅核对字段结构:
+  `r10-sends.json` 与 `g2x-r10-capture.jsonl` 没有 response callback UID/cookie 字段。
+  该接收侧样本不能证明 request cookie→response UID 或 response UID→CPB native ID。
+  原文提到的 repository ledger `2026-10-10` 小节在当前仓库中不存在,该引用已收窄为本地样本及此边界。
+- 2026-10-16 用户授权的一次 UIN-only G3 请求未在目标会话出现;独立 90 秒 resident drain
+  没有 callback result/worker/orphan diagnostic。随后源码检查发现 direct G3 的旧 delegate
+  把 `ConsumerCtx*` 当作 cookie,而 `consumer_invoke` 会将它识别为上下文指针并拒绝作为
+  per-send cookie。已改为每请求独立的 `{generation, unique nonce}` 并固定配对报告路径,定向测试 11/11、`init.ps1 -Mode all`
+  默认与 research 均通过。这解释了该探针可能无法产生日志,但不证明 QQ 曾调用 callback,
+  也不解释消息未出现;两项现场结果都保持 unknown。用户正常重启后 PID 40240 已退出;新根进程 PID 34760 未加载 Caligo。
+  修正后的 research DLL 已离线构建,hash 为 `F5547E5E999A2BAF63A3B77D1325E7DD333BF8F63D0AA7AAEBA0A3319A64F7FE`,尚未注入或现场验证。
+- 随后用户授权在新 PID 34760 上以修正 DLL 进行一次新的 UIN-only G3 callback 样本。Manifest 与指定实例门通过;CLI 返回 0,sequence 2,consumer 已启用,`g3s_done` 前各发送阶段均为 `ok:true`。90 秒后 callback 报告仍无 `consumer_result`、`consumer_worker_summary` 或 `consumer_orphan_callback`;目标仍存活/响应且加载 bridge。此结果只能表述为**未观察到 callback 诊断**;不能证明 QQ 没有调用 callback,也不能证明消息送达。该单次请求仍 delivery-unknown,不重试;OneBot 私聊路径仍在 native 前拒绝,因此不是 OneBot 端到端验收。记录: `local-evidence/n4-r4-g3send-34760-20261016/callback-sample-summary.json` 与同目录本地 raw logs。
+- 该样本之后用户报告未收到对方回复并确认已正常重启 QQ;发出的正文是否显示未单独确认。只读盘点确认样本 PID 34760 已退出,当前 PID 34532 与 47560 均 alive/responding、加载同一冻结 wrapper hash 且未加载 Caligo。故 pinned image 已通过正常进程退出释放,但无回复和进程健康不能判定消息是否可见/送达,也不能判定 callback 是否发生。请求继续保持 **delivery unknown**,不重发;R2/R3 及 R4 状态不变。脱敏记录: `local-evidence/n4-r4-g3send-34760-20261016/post-restart-verification.json`。
 
 ## 已解契约(2026-10-09,反编译 r4-g3 phaseAE2)
 
@@ -94,6 +123,6 @@
 - **池观测替代路径(诊断用,低风险)**:响应层日志串(got empty response/
   [MSF] Unknow Error! 等)经共享池可扫 —— 发送后扫池即可观测发送结局日志,
   不必先完成消费者安装;生产 OneBot 回执仍需正规消费者。
-- 同期接收侧对照实验记录见 ledger 2026-10-10 节(N3R10 自产流量:API 发送
-  → get_msg 真值 → 存储记录命中;seq 以 ASCII 出现在 QQ 日志行
-  `[roam_*]OnQueryMessageList, chat_type=2 … begin_seq:…`)。
+- 同期接收侧对照实验只作为 N3R10 的接收/序号校验参考,原始内容仍留在本机
+  `_reference/caligo-n3-resident-20261009/`;它不包含响应消费者回调 UID,不能作为 R3
+  发送请求与 CPB native identity 的关联证据。

@@ -154,12 +154,20 @@ impl G3NativeOps {
 
     /// 完整 g3 发送序列: cached service → transport → allocate → send。
     /// 732A80 在本次同步调用内复制 body；返回后通过同一 QQ allocator pair 释放输入。
-    fn native_submit(&mut self, _cookie: &Cookie, body: &[u8]) -> Result<(), OpsError> {
+    fn native_submit(
+        &mut self,
+        service_addr: usize,
+        _cookie: &Cookie,
+        body: &[u8],
+    ) -> Result<(), OpsError> {
         let wb = self.wrapper_base;
         let pair = self
             .service_pair
             .as_ref()
             .ok_or(OpsError::PreCall("g3 submit: service lease missing"))?;
+        if pair.obj != service_addr {
+            return Err(OpsError::PreCall("g3 submit: service lease mismatch"));
+        }
         let svc = pair.obj;
         self.validate_service(svc)
             .map_err(|_| OpsError::NotReady("g3 submit: service/transport invalid".into()))?;
@@ -223,11 +231,11 @@ impl NativeOps for G3NativeOps {
 
     fn submit(
         &mut self,
-        _service_addr: usize,
+        service_addr: usize,
         cookie: &Cookie,
         body: &[u8],
     ) -> Result<(), OpsError> {
-        self.native_submit(cookie, body)
+        self.native_submit(service_addr, cookie, body)
     }
 }
 
@@ -251,5 +259,25 @@ fn read_qword(addr: usize) -> Option<u64> {
         Some(out)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submit_rejects_service_address_different_from_retained_lease() {
+        let mut ops = G3NativeOps::new(0);
+        ops.service_pair = Some(ServicePair {
+            obj: 0x10000,
+            ctrl: 0x20000,
+        });
+        let result = ops.submit(0x30000, &Cookie([0; 16]), b"BODY");
+        assert_eq!(
+            result,
+            Err(OpsError::PreCall("g3 submit: service lease mismatch"))
+        );
+        assert!(!ops.submitted);
     }
 }

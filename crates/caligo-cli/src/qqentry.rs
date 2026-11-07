@@ -25,12 +25,17 @@ struct QqEntryArgs {
     daemon_auth: Option<String>,
     daemon_generation: Option<u64>,
     daemon_account: Option<String>,
+    /// One-shot read-only QQNT identity-map probe; paired with uid_map_result.
+    uid_map_uin: Option<u64>,
+    uid_map_result: Option<PathBuf>,
+    uid_map_timeout_ms: u32,
 }
 
 fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
     let mut a = QqEntryArgs {
         wait_s: 600,
         wait_ms: 10_000,
+        uid_map_timeout_ms: 60_000,
         ..Default::default()
     };
     let mut i = 0;
@@ -58,6 +63,20 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
                 a.daemon_generation = next(&mut i).and_then(|s| s.parse().ok());
             }
             "--daemon-account" => a.daemon_account = next(&mut i),
+            "--uid-map-uin" => {
+                let Some(value) = next(&mut i) else {
+                    return Err("--uid-map-uin requires a decimal UIN".into());
+                };
+                a.uid_map_uin = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| "--uid-map-uin must be a decimal u64".to_string())?,
+                );
+            }
+            "--uid-map-result" => a.uid_map_result = next(&mut i).map(PathBuf::from),
+            "--uid-map-timeout-ms" => {
+                a.uid_map_timeout_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(60_000)
+            }
             other => return Err(format!("未知参数: {other}")),
         }
         i += 1;
@@ -106,7 +125,7 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
 }
 
@@ -127,6 +146,18 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
+    if a.uid_map_uin.is_some() != a.uid_map_result.is_some() {
+        eprintln!("[uid-map] --uid-map-uin 与 --uid-map-result 必须同时提供");
+        return Err(ExitCode::FAILURE);
+    }
+    if a.uid_map_uin.is_some() && (a.daemon_pipe.is_some() || a.daemon_auth.is_some()) {
+        eprintln!("[uid-map] 一次性身份查询不能与 daemon hook 共用 owner pump");
+        return Err(ExitCode::FAILURE);
+    }
+    if !(1_000..=180_000).contains(&a.uid_map_timeout_ms) {
+        eprintln!("[uid-map] timeout 必须在 1000–180000 ms 之间");
+        return Err(ExitCode::FAILURE);
+    }
     let (pid, bridge, manifest, report, env, wait_s, wait_ms, confirmed) = (
         a.pid.clone(),
         a.bridge.clone(),
@@ -193,19 +224,105 @@ fn absolute_report_path(report: &Path) -> PathBuf {
     }
 }
 
+/// Reserve a fresh raw-identity report only inside ignored local-evidence.
+#[cfg(feature = "research")]
+fn prepare_uid_map_result(path: &Path) -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
+    let evidence_root = cwd
+        .join("local-evidence")
+        .canonicalize()
+        .map_err(|e| format!("local-evidence directory unavailable: {e}"))?;
+    let requested = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let parent = requested
+        .parent()
+        .ok_or_else(|| "result path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("create result directory: {e}"))?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|e| format!("canonicalize result directory: {e}"))?;
+    if !parent.starts_with(&evidence_root) {
+        return Err("raw identity result path must be under ignored local-evidence".into());
+    }
+    let name = requested
+        .file_name()
+        .ok_or_else(|| "result path has no file name".to_string())?;
+    let output = parent.join(name);
+    let _reservation = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output)
+        .map_err(|e| format!("result path must be new and writable: {e}"))?;
+    Ok(output)
+}
+
+#[cfg(feature = "research")]
+fn print_uid_map_summary(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("[uid-map] result file missing: {}", path.display());
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        eprintln!("[uid-map] result file is not valid JSON");
+        return false;
+    };
+    let status = v
+        .get("status")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown");
+    let uid_count = v
+        .get("uid_candidates")
+        .and_then(|x| x.as_array())
+        .map_or(0, Vec::len);
+    let roundtrip = v
+        .get("roundtrip_match")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    println!("[uid-map] status={status} uid_candidates={uid_count} reverse_matches_requested_uin={roundtrip}");
+    println!(
+        "[uid-map] raw identity values kept local at {}",
+        path.display()
+    );
+    status == "roundtrip_match" && uid_count == 1 && roundtrip
+}
+
 pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     let (pid, bridge, report, env, wait_s, _wait_ms, extra) = match gates(args, true) {
         Ok(v) => v,
         Err(c) => return c,
     };
+    #[cfg(feature = "research")]
+    let uid_map = match (extra.uid_map_uin, extra.uid_map_result.as_deref()) {
+        (Some(uin), Some(path)) => match prepare_uid_map_result(path) {
+            Ok(path) => Some((uin, path)),
+            Err(e) => {
+                eprintln!("[uid-map] {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => None,
+    };
     println!("[qq-entry] QQNT 基址解析 …");
-    let qqnt_base = match winutil::module_bases_in(pid) {
-        Ok(b) => *b.get("QQNT.dll").unwrap_or(&0),
+    let module_bases = match winutil::module_bases_in(pid) {
+        Ok(b) => b,
         Err(e) => {
             eprintln!("module_bases_in: {e}");
             return ExitCode::FAILURE;
         }
     };
+    #[cfg(feature = "research")]
+    if uid_map.is_some()
+        && module_bases
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("caligo_bridge.dll"))
+    {
+        eprintln!("[uid-map] selected QQ process already has a Caligo bridge; use a clean restarted instance");
+        return ExitCode::from(2);
+    }
+    let qqnt_base = *module_bases.get("QQNT.dll").unwrap_or(&0);
     if qqnt_base == 0 {
         eprintln!("QQNT.dll 基址未解析(主进程判据复核:test-scope §4)");
         return ExitCode::FAILURE;
@@ -258,10 +375,66 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     };
     let verdict = map_code(code);
     println!("[qq-entry] bootstrap exit={code:#x} ({verdict:?})");
+    #[cfg(feature = "research")]
+    if let Some((uin, output)) = uid_map {
+        // The identity probe requires a fresh owner generation so its one-shot pump
+        // hook cannot collide with a pre-existing daemon hook.
+        if verdict != QqEntryExit::Ok {
+            eprintln!("[uid-map] bootstrap was not a fresh success; no resolver request was made");
+            return ExitCode::from(2);
+        }
+        let query = unsafe {
+            remote_uid_map_probe(pid, remote_base, uin, &output, extra.uid_map_timeout_ms)
+        };
+        let (query_code, may_run) = match query {
+            Ok(code) => (Some(code), false),
+            Err((e, may_run)) => {
+                eprintln!("[uid-map] {e}");
+                (None, may_run)
+            }
+        };
+        if may_run {
+            eprintln!("[uid-map] remote query thread completion is unknown; do not retry; close QQ normally to release the pinned bridge");
+            return ExitCode::from(2);
+        }
+        let matched = query_code == Some(caligo_bridge::uid_map_probe::code::OK)
+            && print_uid_map_summary(&output);
+        let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000) };
+        let shutdown_ok = match shutdown {
+            Ok(code) if map_code(code) == QqEntryExit::Ok => {
+                println!(
+                    "[qq-entry] owner pump closed cleanly; bridge remains mapped until QQ exits"
+                );
+                true
+            }
+            Ok(code) => {
+                eprintln!(
+                    "[qq-entry] owner pump close exit={code:#x} ({:?})",
+                    map_code(code)
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!("[qq-entry] owner pump close failed: {e}; do not hot-unload");
+                false
+            }
+        };
+        return if matched && shutdown_ok {
+            ExitCode::SUCCESS
+        } else {
+            if let Some(code) = query_code {
+                if code != caligo_bridge::uid_map_probe::code::OK {
+                    eprintln!("[uid-map] probe exit={code:#x}; no retry was attempted");
+                }
+            }
+            ExitCode::from(2)
+        };
+    }
     print_report(&report);
     // D7b:bootstrap 成功后启动 daemon 客户端(可选)。
     if verdict == QqEntryExit::Ok {
-        let (Some(pipe), Some(auth)) = (extra.daemon_pipe.clone(), extra.daemon_auth.clone()) else {
+        let (Some(pipe), Some(auth)) = (extra.daemon_pipe.clone(), extra.daemon_auth.clone())
+        else {
             return ExitCode::SUCCESS;
         };
         let generation = extra.daemon_generation.unwrap_or(1);
@@ -307,11 +480,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
 
 /// SAFETY: 前置:bridge 已加载。
 /// daemon 启动导出为单指针签名(NUL 结尾 UTF-8 JSON)。
-unsafe fn remote_daemon_start(
-    pid: u32,
-    remote_base: usize,
-    cfg_json: &str,
-) -> Result<u32, String> {
+unsafe fn remote_daemon_start(pid: u32, remote_base: usize, cfg_json: &str) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
     use windows_sys::Win32::System::Memory::{
@@ -337,12 +506,9 @@ unsafe fn remote_daemon_start(
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
         let result = (|| -> Result<u32, String> {
-            let addr = winutil::read_remote_export(
-                proc_h,
-                remote_base,
-                "caligo_qq_daemon_client_start",
-            )?
-            .ok_or("caligo_qq_daemon_client_start not found(bridge 是否 research 构建?)")?;
+            let addr =
+                winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_client_start")?
+                    .ok_or("caligo_qq_daemon_client_start not found(bridge 是否 research 构建?)")?;
             let mut bytes = cfg_json.as_bytes().to_vec();
             bytes.push(0); // NUL 结尾
             let remote_cfg = VirtualAllocEx(
@@ -356,8 +522,13 @@ unsafe fn remote_daemon_start(
                 return Err(format!("alloc daemon cfg: Win32 error {}", GetLastError()));
             }
             let mut w: usize = 0;
-            if WriteProcessMemory(proc_h, remote_cfg, bytes.as_ptr().cast(), bytes.len(), &mut w)
-                == 0
+            if WriteProcessMemory(
+                proc_h,
+                remote_cfg,
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                &mut w,
+            ) == 0
                 || w != bytes.len()
             {
                 VirtualFreeEx(proc_h, remote_cfg, 0, MEM_RELEASE);
@@ -475,11 +646,8 @@ unsafe fn remote_status(pid: u32, remote_base: usize) -> Result<u32, String> {
         if proc_h.is_null() || proc_h == INVALID_HANDLE_VALUE {
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
-        let addr = match winutil::read_remote_export(
-            proc_h,
-            remote_base,
-            "caligo_qq_daemon_status",
-        ) {
+        let addr = match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_status")
+        {
             Ok(Some(a)) => a,
             Ok(None) => {
                 CloseHandle(proc_h);
@@ -529,9 +697,7 @@ unsafe fn remote_bootstrap(
     report: &Path,
     wait_s: u32,
 ) -> Result<u32, String> {
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
     use windows_sys::Win32::System::Memory::{
         VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
@@ -556,12 +722,9 @@ unsafe fn remote_bootstrap(
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
         let result = (|| -> Result<u32, String> {
-            let addr = winutil::read_remote_export(
-                proc_h,
-                remote_base,
-                "caligo_qq_entry_bootstrap",
-            )?
-            .ok_or("caligo_qq_entry_bootstrap not found(bridge 是否 research 构建?)")?;
+            let addr =
+                winutil::read_remote_export(proc_h, remote_base, "caligo_qq_entry_bootstrap")?
+                    .ok_or("caligo_qq_entry_bootstrap not found(bridge 是否 research 构建?)")?;
             // D7 缺陷修复:相对路径会按 QQ 进程的工作目录解析(首入阶段日志
             // 即因此丢失)。传给 DLL 的报告路径必须绝对化。
             let report_abs = absolute_report_path(report);
@@ -581,8 +744,13 @@ unsafe fn remote_bootstrap(
                 return Err(format!("alloc report path: Win32 error {}", GetLastError()));
             }
             let mut w: usize = 0;
-            if WriteProcessMemory(proc_h, remote_path, wide.as_ptr().cast(), wide.len() * 2, &mut w)
-                == 0
+            if WriteProcessMemory(
+                proc_h,
+                remote_path,
+                wide.as_ptr().cast(),
+                wide.len() * 2,
+                &mut w,
+            ) == 0
                 || w != wide.len() * 2
             {
                 VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
@@ -673,6 +841,182 @@ unsafe fn remote_bootstrap(
     }
 }
 
+/// SAFETY: bridge was loaded by the gated `qq-entry` path and PID is the confirmed target.
+/// The remote thread only queues a fixed read-only owner-pump operation.
+#[cfg(feature = "research")]
+unsafe fn remote_uid_map_probe(
+    pid: u32,
+    remote_base: usize,
+    uin: u64,
+    output: &Path,
+    timeout_ms: u32,
+) -> Result<u32, (String, bool)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+    use windows_sys::Win32::System::Memory::{
+        VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
+        PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ,
+        PROCESS_VM_WRITE,
+    };
+    // SAFETY: each remote buffer stays allocated through the thread's completion;
+    // a wait timeout retains both buffers in the existing remote-allocation ledger.
+    unsafe {
+        let proc_h = OpenProcess(
+            PROCESS_CREATE_THREAD
+                | PROCESS_QUERY_INFORMATION
+                | PROCESS_VM_OPERATION
+                | PROCESS_VM_WRITE
+                | PROCESS_VM_READ,
+            0,
+            pid,
+        );
+        if proc_h.is_null() || proc_h == INVALID_HANDLE_VALUE {
+            return Err((
+                format!("OpenProcess: Win32 error {}", GetLastError()),
+                false,
+            ));
+        }
+        let result = (|| -> Result<u32, (String, bool)> {
+            let addr = winutil::read_remote_export(proc_h, remote_base, "caligo_qq_uid_map_probe")
+                .map_err(|e| (e, false))?
+                .ok_or_else(|| {
+                    (
+                        "caligo_qq_uid_map_probe not found (bridge must be a research build)"
+                            .into(),
+                        false,
+                    )
+                })?;
+            let output_abs = absolute_report_path(output);
+            let wide: Vec<u16> = output_abs
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let remote_path = VirtualAllocEx(
+                proc_h,
+                std::ptr::null(),
+                wide.len() * 2,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            );
+            if remote_path.is_null() {
+                return Err((
+                    format!("alloc UID-map result path: Win32 error {}", GetLastError()),
+                    false,
+                ));
+            }
+            let mut written = 0usize;
+            if WriteProcessMemory(
+                proc_h,
+                remote_path,
+                wide.as_ptr().cast(),
+                wide.len() * 2,
+                &mut written,
+            ) == 0
+                || written != wide.len() * 2
+            {
+                VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
+                return Err(("write UID-map result path incomplete".into(), false));
+            }
+            // repr(C) QqUidMapProbeCtx is { u64, usize, u32, u32 } on x64.
+            let mut ctx = Vec::with_capacity(24);
+            ctx.extend_from_slice(&uin.to_le_bytes());
+            ctx.extend_from_slice(&(remote_path as usize).to_le_bytes());
+            ctx.extend_from_slice(&timeout_ms.to_le_bytes());
+            ctx.extend_from_slice(&0u32.to_le_bytes());
+            let remote_ctx = VirtualAllocEx(
+                proc_h,
+                std::ptr::null(),
+                ctx.len(),
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            );
+            if remote_ctx.is_null() {
+                VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
+                return Err((
+                    format!("alloc UID-map context: Win32 error {}", GetLastError()),
+                    false,
+                ));
+            }
+            let mut written_ctx = 0usize;
+            if WriteProcessMemory(
+                proc_h,
+                remote_ctx,
+                ctx.as_ptr().cast(),
+                ctx.len(),
+                &mut written_ctx,
+            ) == 0
+                || written_ctx != ctx.len()
+            {
+                VirtualFreeEx(proc_h, remote_ctx, 0, MEM_RELEASE);
+                VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
+                return Err(("write UID-map context incomplete".into(), false));
+            }
+            let start: winutil::RemoteThreadFn =
+                std::mem::transmute::<usize, winutil::RemoteThreadFn>(addr);
+            let thread = CreateRemoteThread(
+                proc_h,
+                std::ptr::null(),
+                0,
+                Some(start),
+                remote_ctx,
+                0,
+                std::ptr::null_mut(),
+            );
+            if thread.is_null() {
+                VirtualFreeEx(proc_h, remote_ctx, 0, MEM_RELEASE);
+                VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
+                return Err((
+                    format!(
+                        "CreateRemoteThread(uid-map): Win32 error {}",
+                        GetLastError()
+                    ),
+                    false,
+                ));
+            }
+            let wait_total = timeout_ms.saturating_add(30_000);
+            let wait = WaitForSingleObject(thread, wait_total);
+            let mut code = u32::MAX;
+            let exit_read = GetExitCodeThread(thread, &mut code);
+            CloseHandle(thread);
+            if wait != 0 {
+                winutil::retain_remote_pub(
+                    pid,
+                    remote_ctx as usize,
+                    ctx.len(),
+                    "qq UID-map probe context",
+                    "wait-timeout",
+                );
+                winutil::retain_remote_pub(
+                    pid,
+                    remote_path as usize,
+                    wide.len() * 2,
+                    "qq UID-map result path",
+                    "wait-timeout",
+                );
+                return Err((
+                    format!("UID-map remote thread completion unknown: wait={wait:#x}; buffers retained"),
+                    true,
+                ));
+            }
+            VirtualFreeEx(proc_h, remote_ctx, 0, MEM_RELEASE);
+            VirtualFreeEx(proc_h, remote_path, 0, MEM_RELEASE);
+            if exit_read == 0 {
+                return Err((
+                    format!("GetExitCodeThread(uid-map): Win32 error {}", GetLastError()),
+                    false,
+                ));
+            }
+            Ok(code)
+        })();
+        CloseHandle(proc_h);
+        result
+    }
+}
+
 pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
     let (pid, bridge, report, _env, _wait_s, wait_ms, _extra) = match gates(args, false) {
         Ok(v) => v,
@@ -754,21 +1098,18 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32) -> Result<
         if proc_h.is_null() || proc_h == INVALID_HANDLE_VALUE {
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
-        let addr = match winutil::read_remote_export(
-            proc_h,
-            remote_base,
-            "caligo_qq_entry_shutdown",
-        ) {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                CloseHandle(proc_h);
-                return Err("caligo_qq_entry_shutdown not found".into());
-            }
-            Err(e) => {
-                CloseHandle(proc_h);
-                return Err(e);
-            }
-        };
+        let addr =
+            match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_entry_shutdown") {
+                Ok(Some(a)) => a,
+                Ok(None) => {
+                    CloseHandle(proc_h);
+                    return Err("caligo_qq_entry_shutdown not found".into());
+                }
+                Err(e) => {
+                    CloseHandle(proc_h);
+                    return Err(e);
+                }
+            };
         let start: winutil::RemoteThreadFn =
             std::mem::transmute::<usize, winutil::RemoteThreadFn>(addr);
         let thread = CreateRemoteThread(

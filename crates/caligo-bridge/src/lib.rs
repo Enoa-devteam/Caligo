@@ -75,6 +75,8 @@ pub mod qq_v8;
 pub mod register;
 pub mod resident;
 #[cfg(feature = "research")]
+pub mod uid_map_probe;
+#[cfg(feature = "research")]
 pub mod wirecap;
 
 /// 注册入口结果码。
@@ -645,8 +647,8 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
     };
     match bootstrap(&cfg, &symbols) {
         Ok(handle) => {
-            // 存档句柄(daemon 导出取用)+ 唤醒面地址 + 报告路径。
-            qq_entry::register_report_path(view.report_path as *const u16);
+            // 存档句柄(daemon 导出取用)+ 唤醒面地址。
+            // bootstrap 已复制并泄漏进程生存期路径；不要保存 loader 的临时远程缓冲。
             qq_entry::store_entry_handle(handle, qq_entry::wake_trampoline_addr());
             qq_entry_code::OK
         }
@@ -660,6 +662,41 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
             EntryError::AlreadyBootstrapped => qq_entry_code::ERR_ALREADY,
         },
     }
+}
+
+/// One-shot QQNT UID/UIN resolver probe context. This is research-only and
+/// accepts only one numeric UIN plus a local result path; it cannot send messages.
+#[cfg(feature = "research")]
+#[repr(C)]
+pub struct QqUidMapProbeCtx {
+    pub uin: u64,
+    /// NUL-terminated UTF-16 path under the workspace's ignored local-evidence directory.
+    pub output_path: usize,
+    pub timeout_ms: u32,
+    pub _pad: u32,
+}
+
+/// Query QQNT's `getUidByUins` then `getUinByUids` on the owner pump.
+///
+/// The remote loader thread only queues this fixed operation and waits. V8 and
+/// the selected QQNT wrapper methods run from the established K4 owner loop.
+/// The result contains raw identity values and must remain local-only under
+/// `local-evidence/`.
+#[cfg(feature = "research")]
+#[no_mangle]
+pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx) -> u32 {
+    if ctx.is_null() {
+        return uid_map_probe::code::ERR_NOT_BOOTSTRAPPED;
+    }
+    // SAFETY: loader supplies this fixed repr(C) context in target process memory.
+    let view = unsafe { &*ctx };
+    if view.uin == 0 || view.output_path == 0 {
+        return uid_map_probe::code::ERR_REPORT;
+    }
+    let Some(path) = wide_ptr_to_string(view.output_path as *const u16) else {
+        return uid_map_probe::code::ERR_REPORT;
+    };
+    uid_map_probe::run(view.uin, std::path::PathBuf::from(path), view.timeout_ms)
 }
 
 /// 关闭协议(计划 §6.7:owner 线程 uv_close,等待关闭回调)。

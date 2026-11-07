@@ -7,6 +7,10 @@ edition.workspace = true
 name = "caligo-cli"
 path = "src/main.rs"
 
+[features]
+default = []
+research = ["caligo-bridge/research"]
+
 [dependencies]
 caligo-model = { workspace = true }
 caligo-core = { workspace = true }
