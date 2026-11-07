@@ -383,9 +383,9 @@ pub unsafe fn inject_and_probe(
     native_run_ms: u32,
     g2_run_report: Option<&Path>,
     g2_run_ms: u32,
-    g3_run_report: Option<&Path>,
+    g3_run_report: Option<(&Path, u32)>,
     g3_run_ms: u32,
-    g3_send: Option<(&Path, u64, &str, Option<&str>, u64, u32, u32, Option<std::path::PathBuf>, Option<(String, u32)>, u32, u32)>, // (report, peer_uin, text, uid, group_code, seq, rand, seq_state, (at_uid, at_uin), use_ch, use_consumer)
+    g3_send: Option<(&Path, u64, &str, Option<&str>, u64, u32, u32, Option<std::path::PathBuf>, Option<(String, u32)>, u32, u32, u32)>, // previous fields + exact wrapper profile id
     g3_session: Option<(&Path, u64, &str, u32)>, // (report, group_code, text, observe_ms)
     native_resident: Option<&NativeResidentRequest>,
 ) -> Result<InjectOutcome, String> {
@@ -829,10 +829,15 @@ pub unsafe fn inject_and_probe(
             // 可选:G3 发送探测 P1(caligo_g3_probe_run):transport slot7
             // 捕获交换,有界窗口同步返回。零发送。
             let mut g3_exit: Option<u32> = None;
-            if let Some(g3_path) = g3_run_report {
-                let g3_addr = match read_remote_export(proc_h, remote_base, "caligo_g3_probe_run") {
+            if let Some((g3_path, g3_profile_id)) = g3_run_report {
+                let export = match g3_profile_id {
+                    caligo_bridge::g3::G3_PROFILE_ID_9933 => "caligo_g3_probe_run",
+                    caligo_bridge::g3::G3_PROFILE_ID_9936 => "caligo_g3_probe_run_9936",
+                    _ => return Err(format!("unsupported G3 profile id {g3_profile_id}")),
+                };
+                let g3_addr = match read_remote_export(proc_h, remote_base, export) {
                     Ok(Some(a)) => a,
-                    Ok(None) => return Err("caligo_g3_probe_run not found in remote".into()),
+                    Ok(None) => return Err(format!("{export} not found in remote")),
                     Err(e) => return Err(format!("remote export lookup (g3): {e}")),
                 };
                 let wrapper_base = *module_bases_in(pid)?.get("wrapper.node").unwrap_or(&0);
@@ -890,14 +895,18 @@ pub unsafe fn inject_and_probe(
             // 可选:G3-P2 受控发送(caligo_g3_send_run):单次调用,
             // 零插桩。同步返回(发送本身异步)。
             let mut g3_send_exit: Option<u32> = None;
-            if let Some((send_report, peer_uin, text, uid, group_code, seq, rand, _seq_state, at, ch_flag, consumer_flag)) = g3_send {
+            if let Some((send_report, peer_uin, text, uid, group_code, seq, rand, _seq_state, at, ch_flag, consumer_flag, g3_profile_id)) = g3_send {
                 let (at_uid_s, at_uin_v) = at.clone().unwrap_or_default();
-                let send_addr =
-                    match read_remote_export(proc_h, remote_base, "caligo_g3_send_run") {
-                        Ok(Some(a)) => a,
-                        Ok(None) => return Err("caligo_g3_send_run not found in remote".into()),
-                        Err(e) => return Err(format!("remote export lookup (g3s): {e}")),
-                    };
+                let export = match g3_profile_id {
+                    caligo_bridge::g3::G3_PROFILE_ID_9933 => "caligo_g3_send_run",
+                    caligo_bridge::g3::G3_PROFILE_ID_9936 => "caligo_g3_send_run_9936",
+                    _ => return Err(format!("unsupported G3 profile id {g3_profile_id}")),
+                };
+                let send_addr = match read_remote_export(proc_h, remote_base, export) {
+                    Ok(Some(a)) => a,
+                    Ok(None) => return Err(format!("{export} not found in remote")),
+                    Err(e) => return Err(format!("remote export lookup (g3s): {e}")),
+                };
                 let wrapper_base = *module_bases_in(pid)?.get("wrapper.node").unwrap_or(&0);
                 if wrapper_base == 0 {
                     return Err("wrapper.node base unresolved in target (g3s)".into());

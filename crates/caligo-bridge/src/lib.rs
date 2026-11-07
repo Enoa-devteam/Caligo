@@ -452,6 +452,20 @@ pub unsafe extern "system" fn caligo_g3_probe_run(ctx: *const g3::G3Ctx) -> u32 
     unsafe { g3::g3_probe_run(ctx) }
 }
 
+/// G3-P1 zero-send probe for the exact QQ 9.9.36-53644 wrapper profile.
+/// The caller must have matched the wrapper SHA-256 before dispatch.
+#[no_mangle]
+pub unsafe extern "system" fn caligo_g3_probe_run_9936(ctx: *const g3::G3Ctx) -> u32 {
+    if let Some(code) = gate::reject_legacy() {
+        return code;
+    }
+    if ctx.is_null() {
+        return probe_code::ERR_NULL_PATH;
+    }
+    // SAFETY: ctx 由 loader 写入且位于本进程;CLI 已按 wrapper hash 选择 profile。
+    unsafe { g3::g3_probe_run_9936(ctx) }
+}
+
 /// G3-P2 受控发送(P7;`g3.rs`):单次调用 SendSSORequestInternal,
 /// 零插桩、无常驻修改。发送结果异步,验证 = 对端收到消息。
 ///
@@ -470,6 +484,21 @@ pub unsafe extern "system" fn caligo_g3_send_run(ctx: *const g3::G3SendCtx) -> u
     }
     // SAFETY: ctx 由 loader 写入且位于本进程。
     unsafe { g3::g3_send_run(ctx) }
+}
+
+/// G3-P2 one-shot send for the exact QQ 9.9.36-53644 wrapper profile.
+/// Requires the research response consumer; the empty-delegate RVAs are unknown.
+#[cfg(feature = "research")]
+#[no_mangle]
+pub unsafe extern "system" fn caligo_g3_send_run_9936(ctx: *const g3::G3SendCtx) -> u32 {
+    if let Some(code) = gate::reject_legacy() {
+        return code;
+    }
+    if ctx.is_null() {
+        return probe_code::ERR_NULL_PATH;
+    }
+    // SAFETY: ctx 由 loader 写入且位于本进程;CLI 已按 wrapper hash 选择 profile。
+    unsafe { g3::g3_send_run_9936(ctx) }
 }
 
 pub unsafe extern "system" fn caligo_obs_run2(ctx: *const obs::ObsCtx) -> u32 {

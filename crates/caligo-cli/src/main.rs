@@ -247,6 +247,44 @@ fn verify_manifest(path: &Path) -> Result<bool, String> {
     Ok(all_ok)
 }
 
+/// Resolve the exact G3 probe/send profile from the already verified manifest.
+/// Unknown, unchecked, or duplicate wrapper entries are rejected.
+fn g3_profile_id_from_manifest(path: &Path) -> Result<u32, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let manifest: Manifest =
+        serde_json::from_str(&raw).map_err(|e| format!("parse manifest: {e}"))?;
+    let mut wrappers = manifest
+        .modules
+        .iter()
+        .filter(|module| module.role == "session-shell-wrapper");
+    let wrapper = wrappers
+        .next()
+        .ok_or_else(|| "G3 profile requires one session-shell-wrapper module".to_owned())?;
+    if wrappers.next().is_some() {
+        return Err("G3 profile rejects duplicate session-shell-wrapper modules".into());
+    }
+    if !wrapper.hash_checked {
+        return Err("G3 profile requires a hash-checked wrapper module".into());
+    }
+    if wrapper
+        .sha256
+        .eq_ignore_ascii_case(caligo_bridge::g3::G3_PROFILE_9933_WRAPPER_SHA256)
+    {
+        Ok(caligo_bridge::g3::G3_PROFILE_ID_9933)
+    } else if wrapper
+        .sha256
+        .eq_ignore_ascii_case(caligo_bridge::g3::G3_PROFILE_9936_WRAPPER_SHA256)
+    {
+        Ok(caligo_bridge::g3::G3_PROFILE_ID_9936)
+    } else {
+        Err(format!(
+            "unsupported G3 wrapper SHA-256: {}",
+            wrapper.sha256
+        ))
+    }
+}
+
 fn cmd_process() -> Result<(), String> {
     let procs = winutil::list_processes("QQ.exe")?;
     if procs.is_empty() {
@@ -1754,6 +1792,37 @@ fn cmd_inject(args: &[String]) -> ExitCode {
         }
     }
 
+    let g3_requested = g3_run_report.is_some() || g3_send_report.is_some() || g3_session.is_some();
+    let g3_profile_id = if g3_requested {
+        match g3_profile_id_from_manifest(&manifest) {
+            Ok(profile_id) => {
+                println!("[G3 profile] wrapper hash selected profile id {profile_id}");
+                profile_id
+            }
+            Err(e) => {
+                eprintln!("[G3 profile] REJECT — {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        caligo_bridge::g3::G3_PROFILE_ID_9933
+    };
+    if g3_profile_id == caligo_bridge::g3::G3_PROFILE_ID_9936 && g3_session.is_some() {
+        eprintln!(
+            "[G3 profile] REJECT — g3-session still uses the 9.9.33 G3NativeOps profile"
+        );
+        return ExitCode::from(2);
+    }
+    if g3_profile_id == caligo_bridge::g3::G3_PROFILE_ID_9936
+        && g3_send_report.is_some()
+        && g3_send_consumer == 0
+    {
+        eprintln!(
+            "[G3 profile] REJECT — 9.9.36-53644 G3-send requires --g3-send-consumer 1"
+        );
+        return ExitCode::from(2);
+    }
+
     // 门 2:执行者显式确认测试实例(test-scope §4:运行实例不自动成为实验目标)。
     if !confirmed {
         eprintln!(
@@ -1784,9 +1853,28 @@ fn cmd_inject(args: &[String]) -> ExitCode {
             native_run_ms,
             g2_run_report.as_deref(),
             g2_run_ms,
-            g3_run_report.as_deref(),
+            g3_run_report
+                .as_deref()
+                .map(|path| (path, g3_profile_id)),
             g3_run_ms,
-            g3_send.clone(),
+            g3_send.clone().map(
+                |(report, peer, text, uid, group, seq, rand, state, at, ch, consumer)| {
+                    (
+                        report,
+                        peer,
+                        text,
+                        uid,
+                        group,
+                        seq,
+                        rand,
+                        state,
+                        at,
+                        ch,
+                        consumer,
+                        g3_profile_id,
+                    )
+                },
+            ),
             g3_session.clone(),
             native_resident.as_ref(),
         )
