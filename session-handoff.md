@@ -2,13 +2,13 @@
 
 ## Current Objective
 
-N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。2026-11-07 固定-hash 静态续查了 `D3355C` 第二 wait caller 到 `0x5B060` 的 owner 候选，但未找到严格 RTTI/vtable、valid-`.pdata` direct caller 或 guarded-global `0x67510A0` 引用边；wait return 仍被忽略，manager final strong owner 未识别。用户授权后的一次只读现场探针中，修复版 V8 路径与 Caligo owner pump 成功运行并关闭，但 `getGroupService()` 返回空、resolver API 未派发。QQ send-response callback 生命周期、实际 callback thread、最终 owner、successful wait、QQ 原生 stop/drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 强关联仍 open；feat-005/006 保持 blocked，R4 不准入。
+N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。2026-11-07 固定-hash 续查先沿 `D3355C` 第二 wait caller 得到 §7.92 有界 no-hit，再检查 strict-RTTI MSFService/MSFCoreService slot-0 teardown（§7.93）：两条选定 pair-release 路径都没有 guarded-global `0x67510A0` 直接引用，pair 也未绑定到 global `+8`；成功 wait 与 manager final owner 仍未知。用户授权后的一次只读现场探针中，修复版 V8 路径与 Caligo owner pump 成功运行并关闭，但 `getGroupService()` 返回空、resolver API 未派发。QQ send-response callback 生命周期、实际 callback thread、最终 owner、successful wait、QQ 原生 stop/drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 强关联仍 open；feat-005/006 保持 blocked，R4 不准入。
 
 ## Restartable Next Step
 
 `CALIGO-K1-PROBE-001` 保持为旧崩溃样本，不重放。离线栈审计已定位并修复根因：精确 QQNT.dll 哈希的 `TryCatch` 构造函数在 `this+0x28` 写 flag；旧 `[usize;4]` 与 `scope_dtor` 槽重叠。修复使用 `[usize;6]`（48 字节）。新的 `CALIGO-K1-PROBE-002` 在用户指定的当前 QQ PID 38356 上跑过 `uid_map_v8_ready`、state、binding、wrapper、session 和 GroupService 检查；GroupService 返回空，记录 `api_call_attempted=false`，没有派发 resolver。18 个阶段无失败，owner pump shutdown 回执成功；QQ 未崩溃且仍响应，但 bridge 仍映射在该 QQ 进程内。不要在同一进程重注入或热卸载。
 
-下一步固定-hash R2 owner 查找只处理一个候选：复核 [qq-native-lifetime-contract.md](docs/research/qq-native-lifetime-contract.md) §7.78 中 strict-RTTI `MSFCoreService` slot 16 → `0xB81758` 的 guarded-state setup 路径，检查同一 typed owner teardown 是否释放 `0x67510A0` 或其 pair，并核对该 teardown 若有 wait 是否检查返回值。复用 §7.75/§7.78 的既有固定样本报告，不重跑全映像 state-reference 或 caller census；无法绑定 teardown 时记录有界 no-hit。`D3355C` 第二 caller 的 no-hit 已记录于 §7.92。R3 的运行时 GroupService/provider 尚无结果；不重复本次探针或 ASAR 字面量普查，不猜 `0x9c7a` 语义。PID 38356 仍持有 bridge，不重注入或热卸载；在 R1–R3 与 ABI/线程/寿命门通过前，R4 仍不准入。
+下一步优先等待当前已映射 bridge 的 QQ 进程自然退出；不对 PID 38356 重注入或热卸载。QQ 正常重启后，使用用户已授权的只读动态范围复核 GroupService 是否可取得，并在 API 派发前停止；不得发送消息、注册 listener 或把旧 PID 证据套到新进程。离线 R2 已复核 D3355C 第二 caller、MSFService/MSFCoreService 两个 typed slot-0 teardown 候选及 §7.59 的 guarded-global finalizer/detach 屏幕；没有新的固定-hash 引用前，不重复 whole-image xref、caller 或 destructor census。R3 provider/adapter、resolver result 与 response UID→CPB/native ID 关联仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 仍不准入。
 
 ## Preserved Unknowns
 
