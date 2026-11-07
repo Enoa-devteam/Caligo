@@ -160,6 +160,22 @@ fn join_owned_thread(
     }
 }
 
+/// Wait until callback admission is closed and all admitted calls have left
+/// before running the final, diagnostic-only slot drain on the pump thread.
+fn after_callback_quarantine<T>(
+    quarantined: &AtomicBool,
+    wake_pair: &Arc<(Mutex<bool>, Condvar)>,
+    drain: impl FnOnce() -> T,
+) -> T {
+    let (wake, cv) = &**wake_pair;
+    let mut guard = wake.lock().unwrap();
+    while !quarantined.load(Ordering::Acquire) {
+        guard = cv.wait(guard).unwrap();
+    }
+    drop(guard);
+    drain()
+}
+
 // ---------------------------------------------------------------------------
 // kind 判别(纯函数;零猜测 —— 只认部署配置群号表)
 // ---------------------------------------------------------------------------
@@ -714,12 +730,23 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
     let (result_tx, result_rx) = std::sync::mpsc::channel::<crate::resident::ResidentNotice>();
     let (event_tx, event_rx) = std::sync::mpsc::channel::<OwnedEvent>();
     let wake_pair = Arc::new((Mutex::new(false), Condvar::new()));
+    let callback_quarantine_complete = Arc::new(AtomicBool::new(false));
+    let signal_callback_quarantine = || {
+        #[cfg(feature = "research")]
+        callback_generation.quarantine();
+        let (wake, cv) = &*wake_pair;
+        let mut guard = wake.lock().unwrap();
+        *guard = true;
+        callback_quarantine_complete.store(true, Ordering::Release);
+        cv.notify_all();
+    };
 
     // ④ 泵线程:bootstrap → drain 循环(锁序/回调纪律由 Resident 承担)。
     let pump_handle = {
         let resident = resident.clone();
         let stop_pump = stop.clone();
         let wake_pair = wake_pair.clone();
+        let callback_quarantine_complete = callback_quarantine_complete.clone();
         let result_tx = result_tx.clone();
         let event_tx = event_tx.clone();
         let report_pump = report.clone();
@@ -779,6 +806,24 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
                         let _ = event_tx.send(ev);
                     }
                 }
+                // Stop may race a callback that filled a slot just after the
+                // last regular drain. Wait for the generation fence, then
+                // fingerprint and clear those residual slots without applying
+                // their outcomes; close classifies unresolved sends as unknown.
+                let final_captures = after_callback_quarantine(
+                    &callback_quarantine_complete,
+                    &wake_pair,
+                    crate::consumer_probe::drain_responses,
+                );
+                stage(
+                    &report_pump,
+                    "n3res_callback_final_drain",
+                    true,
+                    &format!(
+                        "captured={} outcomes=discarded_as_unknown",
+                        final_captures.len()
+                    ),
+                );
                 // 关闭(诚实分类;报告只写计数,不虚假 Clean)。
                 match resident.close() {
                     Ok(cr) => stage(
@@ -869,8 +914,7 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
             Ok(handle) => handle,
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
-                let (_, cv) = &*wake_pair;
-                cv.notify_all();
+                signal_callback_quarantine();
                 let pump_joined = join_owned_thread(
                     pump_handle,
                     &report,
@@ -913,8 +957,7 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
             Ok(h) => h,
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
-                let (_, cv) = &*wake_pair;
-                cv.notify_all();
+                signal_callback_quarantine();
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 let recv_joined =
                     join_owned_thread(recv_handle, &report, "n3res_recv_join", deadline);
@@ -942,15 +985,10 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
     }
     stage(&report, "n3res_stopping", true, "stop signal");
     stop.store(true, Ordering::Relaxed);
-    // From this point, unresolved sends remain unknown. Close callback
-    // admission and wait for calls already inside; responses not consumed by
-    // the pump remain unknown. The QQ-owned dispatcher itself is not drained.
-    #[cfg(feature = "research")]
-    callback_generation.quarantine();
-    {
-        let (_, cv) = &*wake_pair;
-        cv.notify_all();
-    }
+    // Close callback admission and wait for calls already inside. The pump
+    // then clears residual diagnostic slots; it does not apply their outcomes,
+    // and the QQ-owned dispatcher itself is not drained.
+    signal_callback_quarantine();
 
     // ⑧ 汇合 worker(守护上限 30s;超时如实记录,不悬挂)。
     let join_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -1030,6 +1068,43 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_callback_drain_waits_for_generation_quarantine() {
+        let quarantined = Arc::new(AtomicBool::new(false));
+        let wake_pair = Arc::new((Mutex::new(false), Condvar::new()));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+        let worker_quarantined = quarantined.clone();
+        let worker_wake_pair = wake_pair.clone();
+
+        let worker = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            after_callback_quarantine(&worker_quarantined, &worker_wake_pair, || {
+                let _ = drained_tx.send(());
+            });
+        });
+
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(matches!(
+            drained_rx.recv_timeout(std::time::Duration::from_millis(25)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let (wake, cv) = &*wake_pair;
+        let mut guard = wake.lock().unwrap();
+        *guard = true;
+        quarantined.store(true, Ordering::Release);
+        cv.notify_all();
+        drop(guard);
+
+        drained_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        worker.join().unwrap();
+    }
 
     #[test]
     fn callback_nonzero_code_stays_unknown_with_raw_diagnostic() {

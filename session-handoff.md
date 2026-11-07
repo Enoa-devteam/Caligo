@@ -2,13 +2,13 @@
 
 ## Current Objective
 
-N4-R2/R3 的离线实现与合成合同检查点已提交。用户授权后新增一次固定 hash 的只读现场探针：修复版 V8 路径与 Caligo owner pump 成功运行并关闭，但当前 `getGroupService()` 返回空，resolver API 未派发。QQ send-response callback 生命周期、R2 最终 owner/thread/wait/quiescence、R3 provider/adapter 与 response UID→CPB/native ID 强关联仍 open；R4 不准入。
+N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复让本地 pump 在 generation quarantine 完成后做一次诊断尾槽 drain，清空副本但不应用回执；定向回归与 `init.ps1 -Mode all` 通过。用户授权后的一次固定 hash 只读现场探针中，修复版 V8 路径与 Caligo owner pump 成功运行并关闭，但 `getGroupService()` 返回空、resolver API 未派发。QQ send-response callback 生命周期、实际 callback thread、最终 owner、successful wait、QQ 原生 stop/drain/quiescence 与 R3 provider/adapter、response UID→CPB/native ID 强关联仍 open；feat-005/006 保持 blocked，R4 不准入。
 
 ## Restartable Next Step
 
 `CALIGO-K1-PROBE-001` 保持为旧崩溃样本，不重放。离线栈审计已定位并修复根因：精确 QQNT.dll 哈希的 `TryCatch` 构造函数在 `this+0x28` 写 flag；旧 `[usize;4]` 与 `scope_dtor` 槽重叠。修复使用 `[usize;6]`（48 字节）。新的 `CALIGO-K1-PROBE-002` 在用户指定的当前 QQ PID 38356 上跑过 `uid_map_v8_ready`、state、binding、wrapper、session 和 GroupService 检查；GroupService 返回空，记录 `api_call_attempted=false`，没有派发 resolver。18 个阶段无失败，owner pump shutdown 回执成功；QQ 未崩溃且仍响应，但 bridge 仍映射在该 QQ 进程内。不要在同一进程重注入或热卸载。
 
-下一步先做 R2 的离线固定-hash 生命周期闭合：核对 callback OS thread、最终强 owner、成功 wait、stop/drain/quiescence 与资源所有权，明确哪些由 LAB/静态证据闭合、哪些仍需专门准入现场观察。R3 的运行时 GroupService/provider 尚无结果；不重复本次探针或 ASAR 字面量普查，不猜 `0x9c7a` 语义。新运行的原始身份材料仅在 ignored `local-evidence/n4-r2-r3-closure-20261107/`。在 R1–R3 与 ABI/线程/寿命门通过前，R4 仍不准入。
+下一步继续固定-hash R2 静态寿命审计，从 [qq-native-lifetime-contract.md](docs/research/qq-native-lifetime-contract.md) §7.69–§7.91 的已知 `D3355C` wait 路径与 manager-owner 候选出发，只追一条能否绑定到 response consumer/global manager 的 owner-release 边；必须同时核对 wait 返回值和最后 strong owner，遇到 no-hit 就保留 unknown，不做全仓重扫。R3 的运行时 GroupService/provider 尚无结果；不重复本次探针或 ASAR 字面量普查，不猜 `0x9c7a` 语义。新运行的原始身份材料仅在 ignored `local-evidence/n4-r2-r3-closure-20261107/`。当前进程仍持有 bridge，不重注入或热卸载；在 R1–R3 与 ABI/线程/寿命门通过前，R4 仍不准入。
 
 ## Preserved Unknowns
 
