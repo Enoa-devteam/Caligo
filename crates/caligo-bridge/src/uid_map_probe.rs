@@ -20,6 +20,7 @@ pub mod code {
     pub const ERR_V8: u32 = 6;
     pub const ERR_REPORT: u32 = 7;
     pub const ERR_BAD_TIMEOUT: u32 = 8;
+    pub const ERR_BAD_MODE: u32 = 9;
 }
 
 const START: usize = 0;
@@ -114,6 +115,16 @@ where
 /// `output_path` is supplied by the CLI and must point into ignored local-evidence.
 /// The output intentionally contains the exact IDs so they remain available for local review.
 pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
+    run_inner(Some(uin), output_path, timeout_ms)
+}
+
+/// Record only whether the active wrapper session exposes a GroupService object.
+/// This mode never reads or calls UID/UIN resolver methods.
+pub fn run_surface_only(output_path: PathBuf, timeout_ms: u32) -> u32 {
+    run_inner(None, output_path, timeout_ms)
+}
+
+fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if timeout_ms < 1_000 || timeout_ms > 180_000 {
         return code::ERR_BAD_TIMEOUT;
     }
@@ -133,8 +144,10 @@ pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
     let last_logged_stage = Arc::new(AtomicUsize::new(usize::MAX));
     let hook_last_logged_stage = last_logged_stage.clone();
     let hook_cancelled = cancelled.clone();
-    let query_uin = uin.to_string();
-    let hook_uin = query_uin.clone();
+    let surface_only = query_uin.is_none();
+    let hook_surface_only = surface_only;
+    let query_uin = query_uin.map(|uin| uin.to_string());
+    let hook_uin = query_uin.clone().unwrap_or_default();
     let hook_output = output_path.clone();
     let hook_tx = tx.clone();
 
@@ -213,6 +226,17 @@ pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 "GROUP_READY",
                 crate::qq_v8::start_uid_map_group,
             ),
+            METHODS if hook_surface_only => run_owner_step(
+                &hook_stage,
+                &hook_last_logged_stage,
+                &hook_tx,
+                METHODS,
+                POLL,
+                "uid_map_surface_only_entered",
+                "uid_map_surface_only_ready",
+                "SURFACE_DONE",
+                crate::qq_v8::finish_uid_map_surface_only,
+            ),
             METHODS => run_owner_step(
                 &hook_stage,
                 &hook_last_logged_stage,
@@ -224,6 +248,11 @@ pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 "METHODS_READY",
                 || crate::qq_v8::start_uid_map_methods(&hook_uin),
             ),
+            QUERY if hook_surface_only => {
+                hook_stage.store(DONE, Ordering::Release);
+                let _ = hook_tx.try_send(Err(code::ERR_BAD_MODE));
+                1
+            }
             QUERY => run_owner_step(
                 &hook_stage,
                 &hook_last_logged_stage,
@@ -261,35 +290,50 @@ pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
                         .get("reverseUinValues")
                         .cloned()
                         .unwrap_or(Value::Null);
-                    let report = json!({
-                        "schema": 1,
-                        "captured_unix_ms": SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_millis())
-                            .unwrap_or_default(),
-                        "pid": std::process::id(),
-                        "requested_uin": query_uin,
-                        "forward_api": "nodeIKernelGroupService/getUidByUins",
-                        "forward_payload_shape": "[[uin]]",
-                        "reverse_api": "nodeIKernelGroupService/getUinByUids",
-                        "reverse_payload_shape": "[uidList]",
-                        "route": result.get("route").cloned().unwrap_or(Value::Null),
-                        "api_call_attempted": result
-                            .get("apiCallAttempted")
-                            .cloned()
-                            .unwrap_or(Value::Bool(false)),
-                        "forward_arity": result.get("forward_arity").cloned().unwrap_or(Value::Null),
-                        "reverse_arity": result.get("reverse_arity").cloned().unwrap_or(Value::Null),
-                        "status": status,
-                        "uid_candidates": uids,
-                        "reverse_uin_values": reverse_uins,
-                        "roundtrip_match": status == "roundtrip_match",
-                        "forward_result": result.get("forward").cloned().unwrap_or(Value::Null),
-                        "reverse_result": result.get("reverse").cloned().unwrap_or(Value::Null),
-                        "error": result.get("error").cloned().unwrap_or(Value::Null),
-                        "raw_identity_values_written": true,
-                        "raw_chat_text_written": false
-                    });
+                    let captured_unix_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or_default();
+                    let report = if hook_surface_only {
+                        json!({
+                            "schema": 1,
+                            "captured_unix_ms": captured_unix_ms,
+                            "pid": std::process::id(),
+                            "route": result.get("route").cloned().unwrap_or(Value::Null),
+                            "group_service_available": status == "group_service_available",
+                            "status": status,
+                            "api_call_attempted": false,
+                            "raw_identity_values_written": false,
+                            "raw_chat_text_written": false
+                        })
+                    } else {
+                        json!({
+                            "schema": 1,
+                            "captured_unix_ms": captured_unix_ms,
+                            "pid": std::process::id(),
+                            "requested_uin": query_uin.clone().unwrap_or_default(),
+                            "forward_api": "nodeIKernelGroupService/getUidByUins",
+                            "forward_payload_shape": "[[uin]]",
+                            "reverse_api": "nodeIKernelGroupService/getUinByUids",
+                            "reverse_payload_shape": "[uidList]",
+                            "route": result.get("route").cloned().unwrap_or(Value::Null),
+                            "api_call_attempted": result
+                                .get("apiCallAttempted")
+                                .cloned()
+                                .unwrap_or(Value::Bool(false)),
+                            "forward_arity": result.get("forward_arity").cloned().unwrap_or(Value::Null),
+                            "reverse_arity": result.get("reverse_arity").cloned().unwrap_or(Value::Null),
+                            "status": status,
+                            "uid_candidates": uids,
+                            "reverse_uin_values": reverse_uins,
+                            "roundtrip_match": status == "roundtrip_match",
+                            "forward_result": result.get("forward").cloned().unwrap_or(Value::Null),
+                            "reverse_result": result.get("reverse").cloned().unwrap_or(Value::Null),
+                            "error": result.get("error").cloned().unwrap_or(Value::Null),
+                            "raw_identity_values_written": true,
+                            "raw_chat_text_written": false
+                        })
+                    };
                     let write_result = serde_json::to_vec_pretty(&report)
                         .map_err(|_| ())
                         .and_then(|bytes| std::fs::write(&hook_output, bytes).map_err(|_| ()))
@@ -300,7 +344,11 @@ pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
                             crate::qq_entry::append_stage_simple(
                                 "uid_map_probe",
                                 true,
-                                "one read-only batch round-trip result written to local evidence",
+                                if hook_surface_only {
+                                    "GroupService surface result written; resolver API not dispatched"
+                                } else {
+                                    "one read-only batch round-trip result written to local evidence"
+                                },
                             );
                             let _ = hook_tx.try_send(Ok(()));
                         }

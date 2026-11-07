@@ -25,8 +25,10 @@ struct QqEntryArgs {
     daemon_auth: Option<String>,
     daemon_generation: Option<u64>,
     daemon_account: Option<String>,
-    /// One-shot read-only QQNT identity-map probe; paired with uid_map_result.
+    /// One-shot read-only QQNT identity-map round-trip; paired with uid_map_result.
     uid_map_uin: Option<u64>,
+    /// Inspect only whether the active session exposes GroupService.
+    uid_map_surface_only: bool,
     uid_map_result: Option<PathBuf>,
     uid_map_timeout_ms: u32,
 }
@@ -74,6 +76,7 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
                 );
             }
             "--uid-map-result" => a.uid_map_result = next(&mut i).map(PathBuf::from),
+            "--uid-map-surface-only" => a.uid_map_surface_only = true,
             "--uid-map-timeout-ms" => {
                 a.uid_map_timeout_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(60_000)
             }
@@ -125,8 +128,15 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
+}
+
+#[cfg(feature = "research")]
+#[derive(Debug)]
+enum UidMapRequest {
+    RoundTrip { uin: u64, output: PathBuf },
+    SurfaceOnly { output: PathBuf },
 }
 
 /// 公共前置:研究门控 + 必填参数 + 门 1(manifest)+ 门 2(实例确认)。
@@ -146,12 +156,34 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
-    if a.uid_map_uin.is_some() != a.uid_map_result.is_some() {
-        eprintln!("[uid-map] --uid-map-uin 与 --uid-map-result 必须同时提供");
+    if !need_env && a.uid_map_surface_only {
+        eprintln!("[uid-map] surface-only mode is available only through qq-entry");
         return Err(ExitCode::FAILURE);
     }
-    if a.uid_map_uin.is_some() && (a.daemon_pipe.is_some() || a.daemon_auth.is_some()) {
-        eprintln!("[uid-map] 一次性身份查询不能与 daemon hook 共用 owner pump");
+    let uid_map_mode_valid = if need_env {
+        matches!(
+            (
+                a.uid_map_uin.is_some(),
+                a.uid_map_surface_only,
+                a.uid_map_result.is_some(),
+            ),
+            (true, false, true) | (false, true, true) | (false, false, false)
+        )
+    } else {
+        a.uid_map_uin.is_some() == a.uid_map_result.is_some()
+    };
+    if !uid_map_mode_valid {
+        eprintln!("[uid-map] 请选择 round-trip(--uid-map-uin + --uid-map-result)、surface-only(--uid-map-surface-only + --uid-map-result)，或不启用 UID-map");
+        return Err(ExitCode::FAILURE);
+    }
+    if need_env && a.uid_map_uin == Some(0) {
+        eprintln!("[uid-map] round-trip UIN 必须大于零");
+        return Err(ExitCode::FAILURE);
+    }
+    if (a.uid_map_uin.is_some() || a.uid_map_surface_only)
+        && (a.daemon_pipe.is_some() || a.daemon_auth.is_some())
+    {
+        eprintln!("[uid-map] 一次性 UID-map 探针不能与 daemon hook 共用 owner pump");
         return Err(ExitCode::FAILURE);
     }
     if !(1_000..=180_000).contains(&a.uid_map_timeout_ms) {
@@ -224,7 +256,7 @@ fn absolute_report_path(report: &Path) -> PathBuf {
     }
 }
 
-/// Reserve a fresh raw-identity report only inside ignored local-evidence.
+/// Reserve a fresh UID-map result only inside ignored local-evidence.
 #[cfg(feature = "research")]
 fn prepare_uid_map_result(path: &Path) -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
@@ -245,7 +277,7 @@ fn prepare_uid_map_result(path: &Path) -> Result<PathBuf, String> {
         .canonicalize()
         .map_err(|e| format!("canonicalize result directory: {e}"))?;
     if !parent.starts_with(&evidence_root) {
-        return Err("raw identity result path must be under ignored local-evidence".into());
+        return Err("UID-map result path must be under ignored local-evidence".into());
     }
     let name = requested
         .file_name()
@@ -289,17 +321,71 @@ fn print_uid_map_summary(path: &Path) -> bool {
     status == "roundtrip_match" && uid_count == 1 && roundtrip
 }
 
+#[cfg(feature = "research")]
+fn print_uid_map_surface_summary(path: &Path, expected_pid: u32) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("[uid-map-surface] result file missing: {}", path.display());
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        eprintln!("[uid-map-surface] result file is not valid JSON");
+        return false;
+    };
+    let status = v
+        .get("status")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown");
+    let available = v
+        .get("group_service_available")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let api_call_attempted = v
+        .get("api_call_attempted")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(true);
+    let raw_identity_values_written = v
+        .get("raw_identity_values_written")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(true);
+    let raw_chat_text_written = v
+        .get("raw_chat_text_written")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(true);
+    let pid_matches = v.get("pid").and_then(|x| x.as_u64()) == Some(u64::from(expected_pid));
+    println!("[uid-map-surface] status={status} group_service_available={available} api_call_attempted={api_call_attempted} pid_matches={pid_matches}");
+    println!(
+        "[uid-map-surface] raw identity values written={raw_identity_values_written}; report={}",
+        path.display()
+    );
+    available
+        && !api_call_attempted
+        && !raw_identity_values_written
+        && !raw_chat_text_written
+        && pid_matches
+}
+
 pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     let (pid, bridge, report, env, wait_s, _wait_ms, extra) = match gates(args, true) {
         Ok(v) => v,
         Err(c) => return c,
     };
     #[cfg(feature = "research")]
-    let uid_map = match (extra.uid_map_uin, extra.uid_map_result.as_deref()) {
-        (Some(uin), Some(path)) => match prepare_uid_map_result(path) {
-            Ok(path) => Some((uin, path)),
+    let uid_map = match (
+        extra.uid_map_uin,
+        extra.uid_map_surface_only,
+        extra.uid_map_result.as_deref(),
+    ) {
+        (Some(uin), false, Some(path)) => match prepare_uid_map_result(path) {
+            Ok(output) => Some(UidMapRequest::RoundTrip { uin, output }),
             Err(e) => {
                 eprintln!("[uid-map] {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        (None, true, Some(path)) => match prepare_uid_map_result(path) {
+            Ok(output) => Some(UidMapRequest::SurfaceOnly { output }),
+            Err(e) => {
+                eprintln!("[uid-map-surface] {e}");
                 return ExitCode::FAILURE;
             }
         },
@@ -376,15 +462,26 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     let verdict = map_code(code);
     println!("[qq-entry] bootstrap exit={code:#x} ({verdict:?})");
     #[cfg(feature = "research")]
-    if let Some((uin, output)) = uid_map {
-        // The identity probe requires a fresh owner generation so its one-shot pump
-        // hook cannot collide with a pre-existing daemon hook.
+    if let Some(request) = uid_map {
+        // Both one-shot modes require a fresh owner generation so their pump hook
+        // cannot collide with a pre-existing daemon hook.
         if verdict != QqEntryExit::Ok {
-            eprintln!("[uid-map] bootstrap was not a fresh success; no resolver request was made");
+            eprintln!("[uid-map] bootstrap was not a fresh success; no UID-map operation was made");
             return ExitCode::from(2);
         }
+        let (uin, mode, output, surface_only) = match request {
+            UidMapRequest::RoundTrip { uin, output } => (uin, 0, output, false),
+            UidMapRequest::SurfaceOnly { output } => (0, 1, output, true),
+        };
         let query = unsafe {
-            remote_uid_map_probe(pid, remote_base, uin, &output, extra.uid_map_timeout_ms)
+            remote_uid_map_probe(
+                pid,
+                remote_base,
+                uin,
+                mode,
+                &output,
+                extra.uid_map_timeout_ms,
+            )
         };
         let (query_code, may_run) = match query {
             Ok(code) => (Some(code), false),
@@ -397,8 +494,15 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             eprintln!("[uid-map] remote query thread completion is unknown; do not retry; close QQ normally to release the pinned bridge");
             return ExitCode::from(2);
         }
-        let matched = query_code == Some(caligo_bridge::uid_map_probe::code::OK)
-            && print_uid_map_summary(&output);
+        let operation_ok = if query_code == Some(caligo_bridge::uid_map_probe::code::OK) {
+            if surface_only {
+                print_uid_map_surface_summary(&output, pid)
+            } else {
+                print_uid_map_summary(&output)
+            }
+        } else {
+            false
+        };
         let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000) };
         let shutdown_ok = match shutdown {
             Ok(code) if map_code(code) == QqEntryExit::Ok => {
@@ -419,7 +523,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
                 false
             }
         };
-        return if matched && shutdown_ok {
+        return if operation_ok && shutdown_ok {
             ExitCode::SUCCESS
         } else {
             if let Some(code) = query_code {
@@ -848,6 +952,7 @@ unsafe fn remote_uid_map_probe(
     pid: u32,
     remote_base: usize,
     uin: u64,
+    mode: u32,
     output: &Path,
     timeout_ms: u32,
 ) -> Result<u32, (String, bool)> {
@@ -926,7 +1031,7 @@ unsafe fn remote_uid_map_probe(
             ctx.extend_from_slice(&uin.to_le_bytes());
             ctx.extend_from_slice(&(remote_path as usize).to_le_bytes());
             ctx.extend_from_slice(&timeout_ms.to_le_bytes());
-            ctx.extend_from_slice(&0u32.to_le_bytes());
+            ctx.extend_from_slice(&mode.to_le_bytes());
             let remote_ctx = VirtualAllocEx(
                 proc_h,
                 std::ptr::null(),

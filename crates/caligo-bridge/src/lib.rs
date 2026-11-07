@@ -664,8 +664,8 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
     }
 }
 
-/// One-shot QQNT UID/UIN resolver probe context. This is research-only and
-/// accepts only one numeric UIN plus a local result path; it cannot send messages.
+/// One-shot QQNT identity-map context. This is research-only, writes only to
+/// the supplied local result path, and cannot send messages.
 #[cfg(feature = "research")]
 #[repr(C)]
 pub struct QqUidMapProbeCtx {
@@ -673,14 +673,15 @@ pub struct QqUidMapProbeCtx {
     /// NUL-terminated UTF-16 path under the workspace's ignored local-evidence directory.
     pub output_path: usize,
     pub timeout_ms: u32,
-    pub _pad: u32,
+    /// 0 = round-trip resolver query; 1 = GroupService surface only.
+    pub mode: u32,
 }
 
-/// Query QQNT's `getUidByUins` then `getUinByUids` on the owner pump.
+/// Run the selected read-only UID-map operation on the owner pump.
 ///
 /// The remote loader thread only queues this fixed operation and waits. V8 and
 /// the selected QQNT wrapper methods run from the established K4 owner loop.
-/// The result contains raw identity values and must remain local-only under
+/// Round-trip results contain raw identity values; all output stays under
 /// `local-evidence/`.
 #[cfg(feature = "research")]
 #[no_mangle]
@@ -690,13 +691,23 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
     }
     // SAFETY: loader supplies this fixed repr(C) context in target process memory.
     let view = unsafe { &*ctx };
-    if view.uin == 0 || view.output_path == 0 {
+    let surface_only = match view.mode {
+        0 if view.uin > 0 => false,
+        1 if view.uin == 0 => true,
+        _ => return uid_map_probe::code::ERR_BAD_MODE,
+    };
+    if view.output_path == 0 {
         return uid_map_probe::code::ERR_REPORT;
     }
     let Some(path) = wide_ptr_to_string(view.output_path as *const u16) else {
         return uid_map_probe::code::ERR_REPORT;
     };
-    uid_map_probe::run(view.uin, std::path::PathBuf::from(path), view.timeout_ms)
+    let output = std::path::PathBuf::from(path);
+    if surface_only {
+        uid_map_probe::run_surface_only(output, view.timeout_ms)
+    } else {
+        uid_map_probe::run(view.uin, output, view.timeout_ms)
+    }
 }
 
 /// 关闭协议(计划 §6.7:owner 线程 uv_close,等待关闭回调)。

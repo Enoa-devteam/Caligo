@@ -598,6 +598,21 @@ const UID_MAP_GROUP_JS: &str = r#"
 })()
 "#;
 
+/// Complete a GroupService-only surface check without reading or calling resolver methods.
+const UID_MAP_SURFACE_DONE_JS: &str = r#"
+(function () {
+  try {
+    var S = globalThis.__caligo_uid_map_main;
+    if (!S || S.phase !== 'methods') return 'ERR:group-service surface is not ready';
+    S.route = 'QQNT NodeIQQNTWrapperSession.getGroupService';
+    S.status = 'group_service_available';
+    S.apiCallAttempted = false;
+    S.phase = 'done';
+    return 'SURFACE_DONE';
+  } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
+})()
+"#;
+
 pub fn build_uid_map_methods_js(uin: &str) -> String {
     let uin_json = serde_json::to_string(uin).unwrap_or_else(|_| "\"\"".into());
     let mut js = String::with_capacity(1_200);
@@ -805,6 +820,13 @@ pub fn start_uid_map_methods(uin: &str) -> Result<String, V8Error> {
         return Err(V8Error::NoCurrentContext);
     };
     unsafe { exec_script(&syms, isolate_addr(), &build_uid_map_methods_js(uin)) }
+}
+
+pub fn finish_uid_map_surface_only() -> Result<String, V8Error> {
+    let Some(syms) = symbols() else {
+        return Err(V8Error::NoCurrentContext);
+    };
+    unsafe { exec_script(&syms, isolate_addr(), UID_MAP_SURFACE_DONE_JS) }
 }
 
 pub fn start_uid_map_query() -> Result<String, V8Error> {
@@ -1028,7 +1050,8 @@ mod exec_script_lab_tests {
 mod uid_map_script_tests {
     use super::{
         build_uid_map_methods_js, UID_MAP_BINDING_JS, UID_MAP_GROUP_JS, UID_MAP_QUERY_JS,
-        UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS, UID_MAP_WRAPPERS_JS,
+        UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS, UID_MAP_SURFACE_DONE_JS,
+        UID_MAP_WRAPPERS_JS,
     };
 
     #[test]
@@ -1065,6 +1088,15 @@ mod uid_map_script_tests {
         let encoded = serde_json::to_string(input).unwrap();
         assert!(js.contains(&format!("S.uin = {encoded};")));
         assert!(!js.contains("S.uin = \"123\";globalThis.bad"));
+    }
+
+    #[test]
+    fn uid_map_surface_only_completion_records_availability_without_resolver_dispatch() {
+        assert!(UID_MAP_SURFACE_DONE_JS.contains("group_service_available"));
+        assert!(UID_MAP_SURFACE_DONE_JS.contains("S.apiCallAttempted = false"));
+        assert!(!UID_MAP_SURFACE_DONE_JS.contains("getUidByUins"));
+        assert!(!UID_MAP_SURFACE_DONE_JS.contains("getUinByUids"));
+        assert!(!UID_MAP_SURFACE_DONE_JS.contains(".call("));
     }
 }
 
