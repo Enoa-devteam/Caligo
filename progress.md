@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-08 FRIEND-B 接收端检查反馈：用户在当次检查时未看到 `CALIGO-K3-SEND-004`；检查时间未提供，因此这只是一次负向接收观察，不能证明永久未送达。sequence 4 与投递状态继续保持 unknown，不重发。此反馈不改变 R2/R3 的未闭合项或 R4 准入状态。
+
 2026-11-08 R2 单次 callback 观察路径离线补齐：research G3 P2 在提交返回后以本次 16-byte cookie 限时观察 5 秒；新增 cookie-scoped drain 保留其它代次 READY 槽，超时记 callback/delivery unknown，不改账本、不重试。`caligo-bridge` research lib tests 88/88、default `cargo check`、隔离 research release CLI/bridge build、触及文件 rustfmt 检查均通过；CLI/bridge SHA-256 为 `27F3B5E89C5A6D97DCEFBDCF10B089FB378ABD5944DBEE3C03C391A323D4C572` / `E5D1C83A92D6B4A4B554AB45C8790359009EAB465894B1DF99EDA630C6041299`。新 artifact 尚未在 QQ 运行。PID 26132 仍固定着旧 bridge，不可再次使用；sequence 4 / `CALIGO-K3-SEND-004` 仍 unknown，不重放。下次动态样本必须等 fresh user-designated QQ root 并从 sequence 5 开始。该离线修复只闭合 direct G3 的本地诊断 drain；R2 QQ owner/thread/quiescence 与 R3 强身份仍 open，R4 未准入，feat-005/006 blocked，产品 NOT READY。
 
 2026-11-07 R2 当前-hash G3-P2 单次样本：用户指定新启动 PID 26132（`23:05:55 +08:00`），9.9.36-53644 pilot manifest 和全部已加载模块路径/hash 匹配，envscan 仅一个候选，注入前无 Caligo/第三方 backend。隔离 research CLI/bridge hash 分别为 `471D…C2E0` / `CF552…665C`。FRIEND-B 本地别名摘要未变，序号 3 后预留 4，唯一发送 `CALIGO-K3-SEND-004`；`g3s_submitted`、`g3s_done` 与 CLI exit 0，调用返回为异步。`wc_uninstall` 记录恢复两个 callsite，运行后实读均为原始字节；发送前也曾读到原始字节，期间为何变更未知。报告无 `consumer_result`；本次未启动负责 `drain_responses()` 的 resident worker，故不能判断 callback 是否执行、线程为何或消息是否送达。PID 仍响应、bridge 仍映射；不重发、不热卸载。R2 callback thread/final owner/wait/native quiescence 仍 open；R3 不变，R4 未准入，feat-005/006 blocked，产品 NOT READY。脱敏记录见 [N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md)，原始报告仅在 ignored `local-evidence/n4-r2-callback-26132-20261107/`。

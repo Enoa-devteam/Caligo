@@ -8,9 +8,11 @@ N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复
 
 2026-11-08 已补上 direct G3 的 research-only callback 观察路径：提交返回后按本次 cookie polling 最多 5 秒，定向 drain 只回收对应 cookie，保留其它代次 ready slots；捕获只证明 callback 被观测，不证明业务成功或对端送达。research lib tests 88/88、default check 和隔离 research release builds 通过。新 release CLI/bridge hash 分别为 `27F3B5E89C5A6D97DCEFBDCF10B089FB378ABD5944DBEE3C03C391A323D4C572` / `E5D1C83A92D6B4A4B554AB45C8790359009EAB465894B1DF99EDA630C6041299`，尚未加载进 QQ。PID 26132 固定着旧 bridge；sequence 4 仍 unknown、不得重放。
 
+用户随后反馈 FRIEND-B 接收端当次检查未显示 `CALIGO-K3-SEND-004`；检查时间未提供。将其记录为负向观察，不据此推断永久未送达；sequence 4 及 delivery 状态仍 unknown，禁止重发。详见 progress 与 N4 execution ledger。
+
 ## Restartable Next Step
 
-`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；序号 3 仍 unknown。`CALIGO-K3-SEND-004` 已以 sequence 4 单次提交，delivery unknown；不得重发。PID 26132 仍映射旧 bridge，不要对它再次注入、热卸载或运行探针。下一次动态样本需要用户正常重启并指定 fresh QQ root，重新核对进程创建时间、9.9.36-53644 模块 hash、唯一 envscan 候选及 bridge 状态；只有全部通过才考虑 sequence 5 + 新 marker 的一次性发送。新 observer 最多等待 5 秒并按 cookie 排空该请求；无匹配结果保持 unknown，不重试；callback capture 仍不等于 delivery。
+`CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；序号 3 仍 unknown。`CALIGO-K3-SEND-004` 已以 sequence 4 单次提交，FRIEND-B 当次检查未显示该 marker（检查时间未提供），delivery 仍 unknown；不得重发。PID 26132 仍映射旧 bridge，不要对它再次注入、热卸载或运行探针。下一次动态样本需要用户正常重启并指定 fresh QQ root，重新核对进程创建时间、9.9.36-53644 模块 hash、唯一 envscan 候选及 bridge 状态；只有全部通过才考虑 sequence 5 + 新 marker 的一次性发送。新 observer 最多等待 5 秒并按 cookie 排空该请求；无匹配结果保持 unknown，不重试；callback capture 仍不等于 delivery。
 
 原 sequence-4 报告没有 `consumer_result`，不能回溯证明 callback 是否发生；新增 observer 只改善未来 direct G3 样本。它不证明 QQ callback 的真实 owner/thread contract、manager final owner、successful wait 或 QQ stop/drain/quiescence。R3 resolver provider/request adapter/result 与 response UID→CPB/native ID 仍 open；不猜 `0x9c7a` 语义。R1–R3 与 ABI/线程/寿命门通过前，R4 不准入。
 
@@ -23,6 +25,7 @@ N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复
 - 旧 dump 本身仍没有 V8 sanity 返回值，且未包含 TryCatch 构造函数或 bridge 调用页。独立的新运行已证明修复版 bridge 可以完成 V8 sanity 与 scope 清理，但不改变旧 dump 的证据内容。
 - 本轮 G3-P1 仅临时替换 transport slot 7 并成功恢复，捕获计数 1；没有注册 listener、调用 SendSSORequestInternal 或执行 send-response callback。发送阶段未能进入，R2 callback 的现场 OS thread/final owner/wait/quiescence 与 R3 native GroupService resolver 仍未知。
 - PID 26132 的 G3-P2 单次调用已提交并返回 async，sequence 4 不重放。`g3-send.jsonl` 只有 G3 阶段行，没有 `consumer_result` / worker summary；调用没有配置 native-resident worker，故无法从报告确定 callback 是否执行。进程仍响应，bridge 已 pin 到进程生命周期；callsite uninstall 报告恢复 2 处，后读两处都等于原始字节。记录见 ignored `local-evidence/n4-r2-callback-26132-20261107/`。
+- FRIEND-B 接收端后来反馈当次检查未显示 `CALIGO-K3-SEND-004`，但没有提供检查时间；该负向观察不能证明永久未送达，故 delivery 保持 unknown，sequence 4 不重放。
 
 ## Scope and Validation
 

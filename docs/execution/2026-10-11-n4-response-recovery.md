@@ -1303,3 +1303,7 @@ Verification on 2026-11-08: `cargo test -p caligo-bridge --lib --features resear
 Release artifact hashes: CLI `27F3B5E89C5A6D97DCEFBDCF10B089FB378ABD5944DBEE3C03C391A323D4C572`; bridge `E5D1C83A92D6B4A4B554AB45C8790359009EAB465894B1DF99EDA630C6041299`. These artifacts have not been loaded into QQ. PID 26132 remains bound to the earlier bridge and must not be reused. A fresh user-designated QQ root and a new sequence/marker are required for any next sample; sequence 4 / `CALIGO-K3-SEND-004` remains unknown and must not be replayed.
 
 This closes only the direct one-shot path's local, cookie-scoped drain observation. It does not identify QQ's callback thread contract beyond recording the observed TID, final owner, successful native wait, QQ dispatcher stop/drain/quiescence, stable business identity, or peer delivery. R2/R3 remain open; R4 remains unadmitted; `feat-005/006` stay blocked and product status stays **NOT READY**.
+
+### 2026-11-08 FRIEND-B recipient check for sequence 4
+
+The user reported that FRIEND-B did not display `CALIGO-K3-SEND-004` when checked. The check time was not provided, so record this as a negative recipient observation at an unspecified time; it cannot establish that delivery never occurred. Sequence 4 remains reserved and delivery remains **unknown**. Do not retry or send the same marker again. This observation does not change the R2 callback/thread/owner/wait/quiescence gaps, the R3 identity/provider gaps, or R4 admission; `feat-005/006` remain blocked and product status remains **NOT READY**.
