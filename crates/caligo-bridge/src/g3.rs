@@ -614,8 +614,17 @@ unsafe fn g3_probe_run_with_profile(ctx: *const G3Ctx, profile: &G3BuildProfile)
         return ERR_NO_OBSERVER;
     }
     let vptr = unsafe { core::ptr::read_volatile(pair.obj as *const u64) };
-    if (vptr as usize).wrapping_sub(wrapper_base) != profile.anchor_svc_vtbl_rva {
-        stage(report_path, "g3_adopt", false, "anchor mismatch");
+    let actual_vtbl_rva = (vptr as usize).wrapping_sub(wrapper_base);
+    if actual_vtbl_rva != profile.anchor_svc_vtbl_rva {
+        stage(
+            report_path,
+            "g3_adopt",
+            false,
+            &format!(
+                "anchor mismatch actual_vtbl_rva=0x{:x} expected_vtbl_rva=0x{:x}",
+                actual_vtbl_rva, profile.anchor_svc_vtbl_rva
+            ),
+        );
         return ERR_SWAP_STATE;
     }
     stage(
@@ -1315,8 +1324,17 @@ unsafe fn g3_send_run_with_profile(ctx: *const G3SendCtx, profile: &G3BuildProfi
         return ERR_NO_OBSERVER;
     }
     let vptr = unsafe { core::ptr::read_volatile(pair.obj as *const u64) };
-    if (vptr as usize).wrapping_sub(wrapper_base) != profile.anchor_svc_vtbl_rva {
-        stage(report_path, "g3s_adopt", false, "anchor mismatch");
+    let actual_vtbl_rva = (vptr as usize).wrapping_sub(wrapper_base);
+    if actual_vtbl_rva != profile.anchor_svc_vtbl_rva {
+        stage(
+            report_path,
+            "g3s_adopt",
+            false,
+            &format!(
+                "anchor mismatch actual_vtbl_rva=0x{:x} expected_vtbl_rva=0x{:x}",
+                actual_vtbl_rva, profile.anchor_svc_vtbl_rva
+            ),
+        );
         return ERR_SWAP_STATE;
     }
     let svc = pair.obj as usize;
