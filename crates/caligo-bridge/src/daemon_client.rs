@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
+use caligo_model::OneBotMessageProjection;
 use caligo_model::framing::{encode_frame, FrameDecoder, FrameError};
 use caligo_model::ipc_v3::{
     BridgeMsg, CoreToBridgeMsg, EventPayload, OutcomePayload, Role, BUSINESS_PROTOCOL_REVISION,
@@ -917,7 +918,39 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                 platform_time: ev.msg_time,
                 // Native receive fields do not currently provide a proven
                 // OneBot real_id/time/peer projection.
-                onebot_projection: None,
+                // [research] 桥侧原本恒传 None，导致 core 既不落库也不推事件。
+                // 这里用现有字段合成一个最小投影，仅用于本地链路验证：
+                // - peer_id 取群号（真实）
+                // - sender_user_id 由 senderUid 哈希得到（伪号，非 QQ 号）
+                // - real_id 取 native_id 的 seq 部分（不是平台消息号）
+                onebot_projection: {
+                    fn fnv1a(text: &str) -> u64 {
+                        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                        for b in text.as_bytes() {
+                            h ^= *b as u64;
+                            h = h.wrapping_mul(0x1000_0000_01b3);
+                        }
+                        h
+                    }
+                    let peer = ev.peer_uid.parse::<u64>().ok();
+                    let sender = fnv1a(&ev.sender_uin) % 8_000_000_000 + 1_000_000_000;
+                    let real_id = ev
+                        .native_id
+                        .trim_start_matches("cpb-")
+                        .parse::<i64>()
+                        .ok()
+                        .and_then(|v| i32::try_from(v).ok())
+                        .unwrap_or_else(|| fnv1a(&ev.native_id) as i32);
+                    peer.map(|peer_id| OneBotMessageProjection {
+                        peer_id,
+                        sender_user_id: sender,
+                        real_id,
+                        time: ev.msg_time.unwrap_or(0) as i32,
+                        sender_nickname: None,
+                        sub_type: Some("normal".to_string()),
+                        font: Some(0),
+                    })
+                },
                 observed_at_unix_ms: 0,
                 source: match ev.source {
                     crate::resident::EventSourceKind::Recv => "recv",

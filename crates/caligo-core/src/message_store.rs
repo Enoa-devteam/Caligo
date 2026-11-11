@@ -284,6 +284,17 @@ impl MessageStore {
 }
 
 impl StoreReader for MessageStore {
+    fn group_peers(&self) -> Vec<String> {
+        // [research] QQ 不提供群列表接口，只能从已入库的群消息里学习。
+        let mut peers = std::collections::BTreeSet::new();
+        for message in self.by_id.values() {
+            if matches!(message.identity.chat_type, ChatType::Group) {
+                peers.insert(message.identity.peer_id.clone());
+            }
+        }
+        peers.into_iter().collect()
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<StoredMessageView> {
         let m = self.by_id.get(&message_id)?;
         Some(StoredMessageView {

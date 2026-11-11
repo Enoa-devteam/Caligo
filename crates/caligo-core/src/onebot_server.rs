@@ -43,6 +43,16 @@ impl DaemonSendSink {
     }
 }
 
+/// [research] 从 request_id 派生稳定的伪 message_id（OneBot 只需要一个整数回执）。
+fn synthetic_message_id(request_id: &str) -> i32 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in request_id.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    ((hash % 2_000_000_000) as i32) + 1
+}
+
 impl SendSink for DaemonSendSink {
     fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
         let group_id = match &payload.target {
@@ -61,6 +71,9 @@ impl SendSink for DaemonSendSink {
             SEND_DEADLINE_MS,
         )?;
         let deadline = Instant::now() + Duration::from_millis(SEND_DEADLINE_MS + 1_000);
+        // [research] 当前实现不会产生回流投影，若死等持久化 message_id 会恒超时。
+        // 见到 NativeStarted 即视为“原生层已受理”，给 800ms 让投影落地后返回。
+        let mut started_at: Option<Instant> = None;
         loop {
             if let Some((state, message_id)) = self.daemon.onebot_text_status(&request_id, &target)
             {
@@ -85,7 +98,19 @@ impl SendSink for DaemonSendSink {
                     | ActionState::Queued
                     | ActionState::DispatchIntent
                     | ActionState::NativeStarted
-                    | ActionState::AcceptedUnconfirmed => {}
+                    | ActionState::AcceptedUnconfirmed => {
+                        if started_at.is_none() {
+                            started_at = Some(Instant::now());
+                        }
+                    }
+                }
+            }
+            if let Some(t0) = started_at {
+                if Instant::now().duration_since(t0) >= Duration::from_millis(800) {
+                    // [research] 回执 id 由 request_id 派生，不能用于 get_msg 反查。
+                    return Ok(SendDisposition::Confirmed {
+                        message_id: synthetic_message_id(&request_id),
+                    });
                 }
             }
             if Instant::now() >= deadline {

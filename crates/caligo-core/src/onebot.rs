@@ -207,6 +207,9 @@ pub fn is_supported_action(action: &str) -> bool {
             | "send_private_msg_async"
             | "send_msg_async"
             | "get_msg"
+            | "get_group_list"
+            | "get_group_info"
+            | "get_friend_list"
             | "get_login_info"
             | "get_status"
             | "get_version_info"
@@ -251,6 +254,39 @@ pub fn handle_action(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
+        // [research] QQ 没有群列表接口，这里只能回放“已经从消息里学到的群”。
+        "get_group_list" => {
+            let list: Vec<serde_json::Value> = store
+                .group_peers()
+                .into_iter()
+                .map(|peer| {
+                    let id = peer.parse::<i64>().unwrap_or(0);
+                    serde_json::json!({
+                        "group_id": id,
+                        "group_name": format!("群 {}", peer),
+                        "member_count": 0,
+                        "max_member_count": 0
+                    })
+                })
+                .collect();
+            ActionResponse::ok(serde_json::Value::Array(list), echo)
+        }
+        "get_group_info" => {
+            let id = params
+                .get("group_id")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            ActionResponse::ok(
+                serde_json::json!({
+                    "group_id": id,
+                    "group_name": format!("群 {}", id),
+                    "member_count": 0,
+                    "max_member_count": 0
+                }),
+                echo,
+            )
+        }
+        "get_friend_list" => ActionResponse::ok(serde_json::Value::Array(Vec::new()), echo),
         "get_login_info" => match store.login_info() {
             Some((user_id, nickname)) => ActionResponse::ok(
                 serde_json::json!({"user_id": user_id, "nickname": nickname}),
