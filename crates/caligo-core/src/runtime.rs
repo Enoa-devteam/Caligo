@@ -1330,4 +1330,11 @@ impl StoreReader for AccountActor {
     fn online_status(&self) -> Option<bool> {
         Some(self.phase == Phase::Active)
     }
+
+    fn group_peers(&self) -> Vec<String> {
+        self.message_store
+            .as_ref()
+            .map(|s| s.group_peers())
+            .unwrap_or_default()
+    }
 }
