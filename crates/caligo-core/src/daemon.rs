@@ -1014,6 +1014,13 @@ impl StoreReader for Daemon {
     fn online_status(&self) -> Option<bool> {
         self.actor.lock().ok()?.online_status()
     }
+
+    fn group_peers(&self) -> Vec<String> {
+        self.actor
+            .lock()
+            .map(|a| a.group_peers())
+            .unwrap_or_default()
+    }
 }
 
 fn native_of_summary(actor: &AccountActor, id: &str) -> Option<String> {
