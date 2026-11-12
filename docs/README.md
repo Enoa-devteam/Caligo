@@ -12,6 +12,7 @@
 | Agent 开始/收尾 | [AGENTS](../AGENTS.md)、[handoff](../session-handoff.md) |
 | 模块边界与调用链 | [架构](guides/architecture.md) |
 | 构建与测试 | [开发验证](guides/development.md) |
+| OneBot 群/好友查询动作 | [查询动作](guides/onebot-queries.md) |
 | FFI、适配、现场准入 | [原生研究](guides/native-research.md) |
 | 新规则、状态、文档维护 | [文档规范](guides/documentation.md) |
 | 工作块依赖与完成门 | [feature_list](../feature_list.json) |
