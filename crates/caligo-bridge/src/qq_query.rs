@@ -4,8 +4,9 @@
 //! executes them on the QQ owner thread through `qq_v8::exec_script`.
 
 use caligo_model::capability::{
-    HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, MAX_QUERY_BYTES,
-    MAX_QUERY_TIMEOUT_MS, MAX_VOICE_BYTES, MAX_VOICE_DOWNLOAD_BYTES,
+    HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, MAX_IMAGE_BYTES,
+    MAX_IMAGE_DOWNLOAD_BYTES, MAX_QUERY_BYTES, MAX_QUERY_TIMEOUT_MS, MAX_VOICE_BYTES,
+    MAX_VOICE_DOWNLOAD_BYTES,
 };
 use serde_json::Value;
 
@@ -22,11 +23,13 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::VoiceInfo,
     QueryCapability::VoiceDownload,
     QueryCapability::ExactVoiceDownload,
+    QueryCapability::ImageInfo,
+    QueryCapability::ImageDownload,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
-    // Voice operations form a suffix admitted only by the exact pilot profile.
-    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 3]
+    // Media operations form a suffix admitted only by the exact pilot profile.
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 5]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
@@ -91,6 +94,8 @@ fn kind(query: &HostQuery) -> &'static str {
         HostQuery::VoiceInfo { .. } => "voice_info",
         HostQuery::VoiceDownload { .. } => "voice_download",
         HostQuery::ExactVoiceDownload { .. } => "exact_voice_download",
+        HostQuery::ImageInfo { .. } => "image_info",
+        HostQuery::ImageDownload { .. } => "image_download",
     }
 }
 
@@ -131,6 +136,12 @@ fn query_args(query: &HostQuery) -> String {
         HostQuery::ExactVoiceDownload { chat_type, peer_uid, sender_uin, message_id, element_id } => format!(
             "{{chatType:{chat_type},peerUid:{},senderUin:{},msgId:{},elementId:{},maxBytes:{MAX_VOICE_DOWNLOAD_BYTES}}}",
             json_string(peer_uid), json_string(sender_uin), json_string(message_id), json_string(element_id)
+        ),
+        HostQuery::ImageInfo { chat_type, peer_uid, sender_uin, message_id, element_id }
+        | HostQuery::ImageDownload { chat_type, peer_uid, sender_uin, message_id, element_id } => format!(
+            "{{chatType:{chat_type},peerUid:{},senderUin:{},msgId:{},elementId:{},maxBytes:{}}}",
+            json_string(peer_uid), json_string(sender_uin), json_string(message_id), json_string(element_id),
+            if matches!(query, HostQuery::ImageDownload { .. }) { MAX_IMAGE_DOWNLOAD_BYTES } else { MAX_IMAGE_BYTES }
         ),
         HostQuery::LoginInfo | HostQuery::FriendList | HostQuery::GroupList => "{}".into(),
     }
@@ -175,15 +186,16 @@ const COMMON_JS: &str = r#"
       binding.sessionGeneration === scope.sessionGeneration && binding.connectionEpoch === scope.connectionEpoch &&
       binding.sid === String(sid);
   }
-  function startVoiceDownload(R, p, service, info, chatType) {
+  function startMediaDownload(R, p, service, info, chatType) {
     var fs = process.getBuiltinModule('node:fs');
     var path = process.getBuiltinModule('node:path');
     var os = process.getBuiltinModule('node:os');
     var crypto = process.getBuiltinModule('node:crypto');
     if (!fs || !path || !os || !crypto) throw new Error('voice file helpers unavailable');
     var root = fs.realpathSync(os.tmpdir());
-    var directory = fs.mkdtempSync(path.join(root, 'caligo-voice-'));
-    var file = path.join(directory, 'voice.silk');
+    var image = info.pic_type === 1001;
+    var directory = fs.mkdtempSync(path.join(root, 'caligo-media-'));
+    var file = path.join(directory, image ? 'image.png' : 'voice.silk');
     function cleanup() {
       try {
         if (!fs.lstatSync(directory).isSymbolicLink() && fs.realpathSync(directory) === directory) {
@@ -218,10 +230,16 @@ const COMMON_JS: &str = r#"
         }
         if (fs.fstatSync(descriptor).size !== info.size ||
             crypto.createHash('md5').update(data).digest('hex') !== info.md5) throw new Error('voice output integrity');
-        if (data.subarray(0,9).toString('ascii') !== '#!SILK_V3' &&
-            !(data[0] === 2 && data.subarray(1,10).toString('ascii') === '#!SILK_V3')) throw new Error('voice output format');
-        finish(p, {kind:'voice_download',data:{info:info,silk_hex:data.toString('hex')}});
-      } catch (e) { fail(p, 'voice output validation failed'); }
+        if (image) {
+          if (data.length < 33 || data.subarray(0,16).toString('hex') !== '89504e470d0a1a0a0000000d49484452' ||
+              data.readUInt32BE(16) !== info.width || data.readUInt32BE(20) !== info.height) throw new Error('image output format');
+          finish(p, {kind:'image_download',data:{info:info,png_hex:data.toString('hex')}});
+        } else {
+          if (data.subarray(0,9).toString('ascii') !== '#!SILK_V3' &&
+              !(data[0] === 2 && data.subarray(1,10).toString('ascii') === '#!SILK_V3')) throw new Error('voice output format');
+          finish(p, {kind:'voice_download',data:{info:info,silk_hex:data.toString('hex')}});
+        }
+      } catch (e) { fail(p, 'media output validation failed'); }
       finally {
         if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch (e) {} }
         cleanup();
@@ -354,7 +372,45 @@ pub fn build_query_start_js(
           return;
         }
         if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
-        startVoiceDownload(R, p, voiceService, info, chatType);
+        startMediaDownload(R, p, voiceService, info, chatType);
+      });
+      return reply('pending');
+    }
+    if (queryKind === 'image_info' || queryKind === 'image_download') {
+      var imageService = R.session.getMsgService && R.session.getMsgService();
+      if (!imageService || typeof imageService.getMsgsByMsgId !== 'function') return terminal(p, 'unsupported');
+      var imageDownload = queryKind === 'image_download';
+      if (imageDownload && (typeof imageService.downloadRichMedia !== 'function' ||
+          !R.listener || typeof R.listener.onRichMediaDownloadComplete !== 'function' ||
+          typeof process.getBuiltinModule !== 'function')) return terminal(p, 'unsupported');
+      if (imageDownload && R.voiceDownload) return terminal(p, 'rejected', 409, 'media download already in flight');
+      settle(imageService.getMsgsByMsgId({chatType:args.chatType,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
+        if (R.stopped || R.queryPending.get(requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
+        if (!value || value.result !== 0 || !Array.isArray(value.msgList) || value.msgList.length !== 1) throw new Error('image readback shape');
+        var m = value.msgList[0];
+        if (!m || m.msgId !== args.msgId || m.chatType !== args.chatType || m.peerUid !== args.peerUid ||
+            m.senderUin !== args.senderUin || (m.senderUin === scope.account && m.sendStatus !== 2) ||
+            (args.chatType === 1 && m.senderUin !== scope.account && m.senderUid !== args.peerUid) ||
+            (args.chatType === 2 && m.peerUin !== args.peerUid) ||
+            !Array.isArray(m.elements) || m.elements.length !== 1) throw new Error('image message identity');
+        var element = m.elements[0];
+        if (!element || element.elementId !== args.elementId || element.elementType !== 2 ||
+            !element.picElement) throw new Error('image element identity');
+        var pic = element.picElement;
+        if (pic.picType !== 1001 || pic.picSubType !== 0) throw new Error('unsupported image format or subtype');
+        var size = pic.fileSize;
+        if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
+        if (!Number.isInteger(size) || size < 33 || size > args.maxBytes ||
+            !Number.isInteger(pic.picWidth) || pic.picWidth < 1 || pic.picWidth > 32768 ||
+            !Number.isInteger(pic.picHeight) || pic.picHeight < 1 || pic.picHeight > 32768 ||
+            pic.picWidth * pic.picHeight > 100000000 || typeof pic.md5HexStr !== 'string' ||
+            !/^[0-9a-fA-F]{32}$/.test(pic.md5HexStr)) throw new Error('image metadata shape');
+        var info = {chat_type:args.chatType,peer_uid:args.peerUid,sender_uin:args.senderUin,
+          message_id:args.msgId,element_id:args.elementId,size:size,md5:pic.md5HexStr.toLowerCase(),
+          width:pic.picWidth,height:pic.picHeight,pic_type:pic.picType};
+        if (!imageDownload) { finish(p, {kind:'image_info',data:info}); return; }
+        if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
+        startMediaDownload(R, p, imageService, info, args.chatType);
       });
       return reply('pending');
     }

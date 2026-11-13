@@ -522,3 +522,61 @@ fn voice_download_requires_scoped_advertisement_and_exact_owned_response() {
         assert_eq!(waiter.join().unwrap(), expected);
     }
 }
+
+#[test]
+fn image_queries_require_advertised_scope_and_exact_png_response() {
+    use caligo_model::capability::{ImageDownload, ImageInfo};
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.bridge();
+    let query = HostQuery::ImageDownload {
+        chat_type: 2, peer_uid: "30003".into(), sender_uin: "20002".into(),
+        message_id: "90071992547409939999".into(), element_id: "9007199254740994".into(),
+    };
+    let timeout = Duration::from_secs(3);
+    advertise(&mut bridge, &scope, vec![QueryCapability::ImageInfo]);
+    assert_eq!(lab.daemon.query_host(query.clone(), timeout), QueryOutcome::Unsupported);
+    advertise(&mut bridge, &scope, vec![QueryCapability::ImageInfo, QueryCapability::ImageDownload]);
+    let good = ImageDownload {
+        info: ImageInfo {
+            chat_type: 2, peer_uid: "30003".into(), sender_uin: "20002".into(),
+            message_id: "90071992547409939999".into(), element_id: "9007199254740994".into(),
+            size: 70, md5: "e605ef58c3bb5f33463782ab90d58295".into(), width: 1, height: 1, pic_type: 1001,
+        },
+        png_hex: "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63105432fe0f000214016604e0de7f0000000049454e44ae426082".into(),
+    };
+    let mut wrong_sender = good.clone(); wrong_sender.info.sender_uin = "20003".into();
+    let mut wrong_header = good.clone(); wrong_header.info.width = 2;
+    let mut over_budget = good.clone(); over_budget.info.size = 131073;
+    for (data, expected) in [
+        (wrong_sender, QueryOutcome::InvalidResponse),
+        (wrong_header, QueryOutcome::InvalidResponse),
+        (over_budget, QueryOutcome::InvalidResponse),
+        (good.clone(), QueryOutcome::Success(QueryData::ImageDownload(good.clone()))),
+    ] {
+        let daemon = lab.daemon.clone();
+        let submitted = query.clone();
+        let waiter = std::thread::spawn(move || daemon.query_host(submitted, timeout));
+        let CoreToBridgeMsg::Query { request_id, scope: wire_scope, query: wire_query, .. } = bridge.recv().unwrap() else {
+            panic!("missing image query");
+        };
+        assert_eq!(wire_query, query);
+        assert_eq!(wire_scope, scope);
+        reply(&bridge, request_id, scope.clone(), QueryOutcome::Success(QueryData::ImageDownload(data)));
+        assert_eq!(waiter.join().unwrap(), expected);
+    }
+    let info_query = HostQuery::ImageInfo {
+        chat_type: 2, peer_uid: "30003".into(), sender_uin: "20002".into(),
+        message_id: "90071992547409939999".into(), element_id: "9007199254740994".into(),
+    };
+    let daemon = lab.daemon.clone();
+    let submitted = info_query.clone();
+    let waiter = std::thread::spawn(move || daemon.query_host(submitted, timeout));
+    let CoreToBridgeMsg::Query { request_id: id, scope: wire_scope, query: wire_query, .. } = bridge.recv().unwrap() else {
+        panic!("missing image metadata query");
+    };
+    assert_eq!(wire_query, info_query);
+    assert_eq!(wire_scope, scope);
+    let result = QueryOutcome::Success(QueryData::ImageInfo(good.info));
+    reply(&bridge, id, scope, result.clone());
+    assert_eq!(waiter.join().unwrap(), result);
+}

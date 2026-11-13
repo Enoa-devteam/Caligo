@@ -1500,11 +1500,11 @@
     },
     "voice_download": {
       "status": "partial_offline",
-      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk through a scoped daemon host query.",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.",
       "implementation": [
         {
           "path": "crates/caligo-bridge/src/qq_query.rs",
-          "symbol": "function startVoiceDownload("
+          "symbol": "function startMediaDownload("
         },
         {
           "path": "crates/caligo-bridge/src/qq_v8.rs",
@@ -1542,7 +1542,7 @@
           "evidence": [
             {
               "path": "crates/caligo-bridge/src/qq_query.rs",
-              "symbol": "function startVoiceDownload("
+              "symbol": "function startMediaDownload("
             }
           ]
         }
@@ -1574,9 +1574,13 @@
           {
             "path": "crates/caligo-core/tests/capability_query_lab.rs",
             "symbol": "fn voice_download_requires_scoped_advertisement_and_exact_owned_response()"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_image_contract.rs",
+            "symbol": "fn image_download_binds_callback_file_scope_integrity_and_lifetime()"
           }
         ],
-        "limits": "Private and group Silk only. Caligo QQ field acceptance remains open."
+        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. OneBot image segments, upload, other image formats, and Caligo QQ field acceptance remain open."
       }
     },
     "record": {
@@ -1635,7 +1639,7 @@
           "evidence": [
             {
               "path": "crates/caligo-bridge/src/qq_query.rs",
-              "symbol": "function startVoiceDownload("
+              "symbol": "function startMediaDownload("
             }
           ]
         },
@@ -35955,7 +35959,7 @@
       "reference_id": "wrapper_interface.NodeIKernelMsgService.downloadRichMedia.471",
       "category": "wrapper_interfaces",
       "status": "partial_offline",
-      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk through a scoped daemon host query.",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.",
       "assessment": "voice_download"
     },
     {

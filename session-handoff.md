@@ -14,7 +14,7 @@
 
 `3ddb47d` 接通可选 WAV/OGG。私聊 `record` 发送已有 scoped IPC、owner 提交、精确回读与 OneBot 持久消息 ID。下一工作块核对群语音和其他媒体的宿主文件、关联与资源寿命，再推进 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。候选冻结前继续离线。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
 
-群入站、已发送私聊语音和群语音发送已接入。下一工作块从单图片开始，核对固定参考的 `picElement` 尺寸、格式、文件归属和下载回调，随后处理视频、文件和 SSO。[群语音接线证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-群语音发送)
+群入站、已发送私聊语音和群语音发送已接入。普通单 PNG 的 `ImageInfo` / `ImageDownload` 已接固定 profile 的 scoped 查询，合成宿主和真实命名管道验证见[图片查询证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)。下一工作块接单图片的持久身份、D8 入站、共享事件和 `get_image`，沿用当前精确 sender/conversation/element 合同；随后推进图片上传、其他格式、视频、文件和 SSO。下载当前仅普通 PNG（picType=1001、picSubType=0），元数据上限 16 MiB、owned bytes 上限 128 KiB；仅验证 PNG 头部与声明尺寸，不声明完整解码验收。取消/超时/stop 不主动回收尚待回调的共享媒体槽。候选冻结前不启动 QQ，历史 unknown 不重发。
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

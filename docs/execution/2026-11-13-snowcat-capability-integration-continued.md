@@ -137,3 +137,25 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 固定参考 `7cf025f` 的 `action/msg/SendMsg.ts` 将 `group_id` 映射为普通群会话，`api/file.ts` 构造 PTT 元素，`snowcat-core/apis/msg.ts` 用同一 `sendMsg` 提交并关联终态更新。Caligo 沿用私聊语音的内容指纹、宿主缓存校验、持久请求和精确回读。群语音独立声明能力，使用 `DispatchGroupVoice`，目标为十进制群号，跳过私聊 UID 查询。群发送成功需同群的终态记录入库；已发送群语音沿用精确下载。
 
 离线夹具覆盖群与私聊能力独立、跨会话同 native ID、错误会话回调、精确投影及旧文本路径。串行 `init.ps1 -Mode all` 通过，命名管道动作回归 4/4，wrapper 发送和查询回归 7/7，真实 Rust registry 覆盖检查 12/12。实际群语音投递、下载和宿主缓存寿命仍待 QQ 现场验收。
+
+
+## A2 普通 PNG 图片精确回读与下载
+
+本块从 HEAD `ca07bd9` 继续 A2，沿用固定参考 `7cf025fe1e7f9c609e02a8643c6e6398eeec0d64`。只读参考 `packages/snowcat-core/types/element.ts` 的 `PicElement`、`types/msg.ts` 的 PIC/PNG 枚举以及 `apis/file.ts:251–285` 的下载调用合同，没有执行参考代码。Caligo 增加 `ImageInfo` / `ImageDownload`；正常 `Daemon::query_host` → scoped IPC → resident owner queue → `QqOwnerAdapter` 可达，仅在既有三角色精确 hash 的 9.9.36-53644 pilot 声明。
+
+只接受普通私聊或群聊的单个 PNG 元素（`picType=1001`、`picSubType=0`）。精确匹配 chat type、peer、sender UIN、消息与元素 ID；群 peer UIN 与会话一致，私聊入站 sender UID 与 peer 一致，自发消息须 sendStatus=2。大小接受参考的整数或十进制字符串，元数据上限 16 MiB；尺寸各不超过 32768，像素积不超过一亿。返回 owned 元数据，排除 sourcePath/filePath、下载 URL 和媒体凭据。
+
+下载回读后使用自有唯一临时目标，与语音共用现有 `voiceDownload` 在途槽及 D8 回调转发，先登记再派发 `downloadRichMedia`。回调须匹配消息、元素、chat type 与目标路径；打开文件后比对类型、真实路径、文件身份、长度和 MD5，另校验 PNG signature/IHDR 与声明尺寸，最多返回 128 KiB 的 hex owned bytes。此校验不等于完整 PNG 解码或所有格式支持。Promise 受理不构成下载完成；取消、超时、提交结果 unknown 及 stop 后保留槽和目标，直到精确回调才清理。不主动取消未知 native 工作，不自动重试。
+
+GitNexus 1.6.12 绑定 Windows checkout `E:/stella/Caligo` / `ca07bd9`，初始索引内容 current。Linux runner 无法读取 Windows-owned 索引，改用本机 Windows runner；随后以 `analyze --index-only --skip-fts --pdg` 更新该 checkout 的原索引，没有用 Linux runner 重建 Windows-owned 存储。FTS unavailable 的概念查询为空，按 UNKNOWN 处理，改用精确符号和源码补证。`HostQuery::validate` 上游 HIGH（10 symbols / 4 direct / 4 flows）；`build_query_start_js`、`QueryData::validate_for`、`supported_capabilities` 和 coverage `initialProfiles` 为 LOW。同名 kind/capability/validate 初查有歧义，已用文件/UID 消歧。
+
+实际验证（起点 HEAD `ca07bd9`，Windows MSVC，`--locked --offline --target-dir target-harness`）：
+
+- research `wrapper_image_contract` 4/4（含两个已有 query/profile 单测）；原 `wrapper_query_contract` 5/5。图片覆盖普通 PNG 元数据、精确大整数 ID、错会话/发送者/元素、重复/混合元素、大小/尺寸/格式拒绝、路径凭据隔离，以及同步回调、错 callback、超时、迟到、提交 unknown、文件长度/MD5/IHDR 不符和 stop 后目标清理。
+- research `capability_query_lab` 最终 11/11，覆盖真实 Windows 命名管道的图片能力声明、查询序列化、错 sender/IHDR/预算拒绝和正确元数据/owned bytes 返回。首轮为 10 PASS / 1 FAIL：新图片场景误用只接受 FriendList 的测试辅助函数；改为检查真实 ImageInfo 请求后通过。原失败日志保留 `local-evidence/snowcat-image-pipe.log`，最终结果为 `snowcat-image-pipe-final.log`；随后更换为 CRC 正确的自造 1×1 PNG fixture，最终全仓再次覆盖。
+- `$env:RUST_TEST_THREADS='1'; .\init.ps1 -Mode all` 退出 0，default/research 全仓通过。独立默认并发 research 全仓 `cargo test --workspace --features caligo-core/research,caligo-cli/research --locked --offline --target-dir target-harness` 退出 0。日志分别为本机 ignored `local-evidence/snowcat-image-all.log` 和 `snowcat-image-parallel.log`。
+- `node scripts/check-snowcat-coverage.mjs --refresh` 用真实 registry 重生成映射；`$env:COVERAGE_RUN_RUST='1'; node --test scripts/check-snowcat-coverage.test.mjs` 12/12，无 skipped。分母保持 5,711，OneBot 图片段/上传不计已接线。
+- `init.ps1 -Mode docs` PASS（15 live docs / 258 local links / 35 historical entries / 10 features）。Windows 原生 `git diff --check` PASS；Linux Git 对仓库既有 CRLF 报尾随空白，未为此批量改动原文件。已审阅本块 source/coverage/state 变更，原有改动和本机证据不纳入本块提交。
+- GitNexus 变更检查报告 CRITICAL；初次 all 为 9 files / 40 symbols / 265 flows，混入 Markdown section 对多条流程的关联，未据此降低风险。提交前另外对包含新测试的 staged/all 执行结构化完整检查，原始报告保留本机 `snowcat-image-detect-*.json`。索引另报告部分 PDG 控制依赖跳过和执行流召回限制，图中无路径不代表无调用。
+
+OneBot 图片身份持久化、image 事件/get_image、上传、其他图片格式、视频/文件/SSO 和 B2 QQ 验收仍未完成。feat-008 保持 in-progress；完整候选未冻结，产品 NOT READY。

@@ -8,6 +8,8 @@ pub const MAX_QUERY_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_VOICE_BYTES: u32 = 16 * 1024 * 1024;
 /// Hex encoding plus the typed response envelope must fit one IPC frame.
 pub const MAX_VOICE_DOWNLOAD_BYTES: u32 = 128 * 1024;
+pub const MAX_IMAGE_BYTES: u32 = 16 * 1024 * 1024;
+pub const MAX_IMAGE_DOWNLOAD_BYTES: u32 = 128 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +24,8 @@ pub enum QueryCapability {
     VoiceInfo,
     VoiceDownload,
     ExactVoiceDownload,
+    ImageInfo,
+    ImageDownload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +82,21 @@ pub enum HostQuery {
         message_id: String,
         element_id: String,
     },
+    /// One ordinary PNG element, identified by its exact conversation and sender.
+    ImageInfo {
+        chat_type: u32,
+        peer_uid: String,
+        sender_uin: String,
+        message_id: String,
+        element_id: String,
+    },
+    ImageDownload {
+        chat_type: u32,
+        peer_uid: String,
+        sender_uin: String,
+        message_id: String,
+        element_id: String,
+    },
 }
 
 fn native_message_id(value: &str) -> bool {
@@ -128,6 +147,8 @@ impl HostQuery {
             Self::VoiceInfo { .. } => QueryCapability::VoiceInfo,
             Self::VoiceDownload { .. } => QueryCapability::VoiceDownload,
             Self::ExactVoiceDownload { .. } => QueryCapability::ExactVoiceDownload,
+            Self::ImageInfo { .. } => QueryCapability::ImageInfo,
+            Self::ImageDownload { .. } => QueryCapability::ImageDownload,
         }
     }
 
@@ -173,16 +194,35 @@ impl HostQuery {
                 }
                 Ok(())
             }
-            Self::ExactVoiceDownload { chat_type, peer_uid, sender_uin, message_id, element_id }
-                if !match *chat_type {
-                    1 => native_uid(peer_uid),
-                    2 => positive_decimal(peer_uid),
-                    _ => false,
-                } || !positive_decimal(sender_uin)
-                    || !native_message_id(message_id)
-                    || !native_message_id(element_id) =>
+            Self::ExactVoiceDownload {
+                chat_type,
+                peer_uid,
+                sender_uin,
+                message_id,
+                element_id,
+            }
+            | Self::ImageInfo {
+                chat_type,
+                peer_uid,
+                sender_uin,
+                message_id,
+                element_id,
+            }
+            | Self::ImageDownload {
+                chat_type,
+                peer_uid,
+                sender_uin,
+                message_id,
+                element_id,
+            } if !match *chat_type {
+                1 => native_uid(peer_uid),
+                2 => positive_decimal(peer_uid),
+                _ => false,
+            } || !positive_decimal(sender_uin)
+                || !native_message_id(message_id)
+                || !native_message_id(element_id) =>
             {
-                Err("invalid exact voice identity")
+                Err("invalid exact media identity")
             }
             _ => Ok(()),
         }
@@ -248,6 +288,77 @@ pub struct VoiceDownload {
     pub silk_hex: String,
 }
 
+/// Only owned, non-secret metadata crosses IPC. PNG is the first admitted format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageInfo {
+    pub chat_type: u32,
+    pub peer_uid: String,
+    pub sender_uin: String,
+    pub message_id: String,
+    pub element_id: String,
+    pub size: u32,
+    pub md5: String,
+    pub width: u32,
+    pub height: u32,
+    pub pic_type: u32,
+}
+
+impl ImageInfo {
+    fn matches(&self, query: &HostQuery, limit: u32) -> bool {
+        let (HostQuery::ImageInfo {
+            chat_type,
+            peer_uid,
+            sender_uin,
+            message_id,
+            element_id,
+        }
+        | HostQuery::ImageDownload {
+            chat_type,
+            peer_uid,
+            sender_uin,
+            message_id,
+            element_id,
+        }) = query
+        else {
+            return false;
+        };
+        query.validate().is_ok()
+            && self.chat_type == *chat_type
+            && self.sender_uin == *sender_uin
+            && self.size >= 33
+            && self.peer_uid == *peer_uid
+            && self.message_id == *message_id
+            && self.element_id == *element_id
+            && self.size <= limit
+            && self.md5.len() == 32
+            && self
+                .md5
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && self.pic_type == 1001
+            && (1..=32768).contains(&self.width)
+            && (1..=32768).contains(&self.height)
+            && u64::from(self.width) * u64::from(self.height) <= 100_000_000
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageDownload {
+    pub info: ImageInfo,
+    pub png_hex: String,
+}
+
+impl ImageDownload {
+    fn valid_png_header(&self) -> bool {
+        self.png_hex.len() >= 66
+            && self.png_hex.starts_with("89504e470d0a1a0a0000000d49484452")
+            && u32::from_str_radix(&self.png_hex[32..40], 16) == Ok(self.info.width)
+            && u32::from_str_radix(&self.png_hex[40..48], 16) == Ok(self.info.height)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -265,6 +376,8 @@ pub enum QueryData {
     Messages(Vec<crate::wrapper_message::WrapperMessage>),
     VoiceInfo(VoiceInfo),
     VoiceDownload(VoiceDownload),
+    ImageInfo(ImageInfo),
+    ImageDownload(ImageDownload),
 }
 
 impl QueryData {
@@ -307,6 +420,18 @@ impl QueryData {
             }
             (HostQuery::UinToUid { .. }, Self::Uid(uid)) => native_uid(uid),
             (HostQuery::UidToUin { .. }, Self::Uin(uin)) => positive_decimal(uin),
+            (HostQuery::ImageInfo { .. }, Self::ImageInfo(info)) => {
+                info.matches(query, MAX_IMAGE_BYTES)
+            }
+            (HostQuery::ImageDownload { .. }, Self::ImageDownload(download)) => {
+                download.info.matches(query, MAX_IMAGE_DOWNLOAD_BYTES)
+                    && download.png_hex.len() == download.info.size as usize * 2
+                    && download
+                        .png_hex
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                    && download.valid_png_header()
+            }
             (
                 HostQuery::VoiceInfo {
                     peer_uid,
@@ -320,7 +445,8 @@ impl QueryData {
                     peer_uid,
                     message_id,
                     element_id,
-                } | HostQuery::ExactVoiceDownload {
+                }
+                | HostQuery::ExactVoiceDownload {
                     peer_uid,
                     message_id,
                     element_id,

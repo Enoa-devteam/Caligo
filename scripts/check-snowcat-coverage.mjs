@@ -156,13 +156,13 @@ export function initialProfiles() {
     [{ name: 'Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds', state: 'partial_offline', evidence: [src(MEDIA, 'pub fn verify_tools('), src(MEDIA, 'impl MediaProcessRunner for OsProcessRunner')] }],
     [src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS'), src('crates/caligo-core/tests/media_tool_lab.rs', '#[test]')],
     'No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented.');
-  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private and group Silk through a scoped daemon host query.',
-    [src(QUERY, 'function startVoiceDownload('), src('crates/caligo-bridge/src/qq_v8.rs', 'onRichMediaDownloadComplete:')],
+  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.',
+    [src(QUERY, 'function startMediaDownload('), src('crates/caligo-bridge/src/qq_v8.rs', 'onRichMediaDownloadComplete:')],
     [src(DAEMON, 'pub fn query_host('), src(RESIDENT, 'pub fn drain_queries(&self)')],
     { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
-    [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startVoiceDownload(')] }],
-    [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()')],
-    'Private and group Silk only. Caligo QQ field acceptance remains open.');
+    [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startMediaDownload(')] }],
+    [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()'), src('crates/caligo-bridge/tests/wrapper_image_contract.rs', 'fn image_download_binds_callback_file_scope_integrity_and_lifetime()')],
+    'Private and group Silk; ordinary PNG images only through Rust host-query API. OneBot image segments, upload, other image formats, and Caligo QQ field acceptance remain open.');
   voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
   const record = scoped('partial_offline', 'Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
     [src(ONEBOT, 'fn get_record('), src(ONEBOT, 'fn send_payload('), src(EVENTS, 'voice_file_token('), src('crates/caligo-core/src/media_tool.rs', 'pub fn silk_to_container(')], sharedEntry, actionPermission,
