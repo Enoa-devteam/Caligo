@@ -18,8 +18,8 @@
 //! 全程阶段化 JSONL 取证(每阶段可独立 PASS/FAIL,供 D7 报告逐行引用)。
 //! 单进程单实例(计划 §6.1:每宿主代次初始化一次)。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::exec::EXPECTED_VTABLE_RVA;
@@ -787,12 +787,13 @@ pub fn test_reset_state() {
 /// 发送(D9)显式拒绝,不用占位成果冒充能力。
 pub struct QqOwnerAdapter {
     handle: EntryHandle,
+    account: String,
 }
 
 impl QqOwnerAdapter {
     /// 首入成功后构造。`f` 由 bootstrap 侧提供。
-    pub fn new(handle: EntryHandle) -> Self {
-        Self { handle }
+    pub fn new(handle: EntryHandle, account: String) -> Self {
+        Self { handle, account }
     }
 
     pub fn entry(&self) -> &EntryHandle {
@@ -889,12 +890,22 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
             // D9:参数化发送(K3 验证脚本经 V8 阶梯;fired 非终态,
             // Promise 结果经轮询 sendResults 回收 —— 见 daemon pump 钩子)。
             HostOp::SendText {
+                request_id,
+                wire_seq,
+                timeout_ms,
                 chat_type,
                 peer_uid,
                 text,
-                ..
             } => {
-                match crate::qq_v8::send_text(chat_type, &peer_uid, &text) {
+                match crate::qq_v8::send_text(
+                    chat_type,
+                    &peer_uid,
+                    &text,
+                    &self.account,
+                    &request_id,
+                    wire_seq,
+                    timeout_ms,
+                ) {
                     Ok(out) => {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
                             if v.get("fired").and_then(|x| x.as_bool()) == Some(true) {
@@ -915,6 +926,36 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
                     Err(_) => Err(HostError::EnvInvalid),
                 }
             }
+        }
+    }
+
+    fn send_capabilities(&self) -> (bool, bool) {
+        (true, true)
+    }
+
+    fn cancel_query(&mut self, request_id: &str, scope: &caligo_model::capability::QueryScope) {
+        let script = crate::qq_query::build_query_cancel_js(request_id, scope);
+        let _ = crate::qq_v8::run_fixed_query_script(&script);
+    }
+
+    fn query(
+        &mut self,
+        request_id: &str,
+        scope: &caligo_model::capability::QueryScope,
+        query: &caligo_model::capability::HostQuery,
+        timeout_ms: u64,
+        poll_only: bool,
+    ) -> Option<caligo_model::capability::QueryOutcome> {
+        let script = if poll_only {
+            crate::qq_query::build_query_poll_js(request_id, scope)
+        } else {
+            crate::qq_query::build_query_start_js(request_id, scope, query, timeout_ms)
+        };
+        let output = crate::qq_v8::run_fixed_query_script(&script).ok()?;
+        match crate::qq_query::decode_query_poll(query, scope, &output) {
+            Ok(Some(outcome)) => Some(outcome),
+            Ok(None) => None,
+            Err(_) => Some(caligo_model::capability::QueryOutcome::InvalidResponse),
         }
     }
 }

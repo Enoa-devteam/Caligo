@@ -71,6 +71,8 @@ pub mod obs;
 #[cfg(feature = "research")]
 pub mod qq_entry;
 #[cfg(feature = "research")]
+pub mod qq_query;
+#[cfg(feature = "research")]
 pub mod qq_v8;
 pub mod register;
 pub mod resident;
@@ -171,7 +173,7 @@ fn wide_string_len(ptr: *const u16) -> Option<usize> {
 
 fn collect_host_snapshot() -> (Vec<String>, bool) {
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
+        CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW, TH32CS_SNAPMODULE,
     };
     // SAFETY: Toolhelp 快照为只读枚举;句柄在所有路径上都会被 CloseHandle 释放。
     unsafe {
@@ -651,7 +653,7 @@ pub struct QqEntryCtx {
 #[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) -> u32 {
-    use qq_entry::{bootstrap, EntryConfig, EntryError};
+    use qq_entry::{EntryConfig, EntryError, bootstrap};
     if ctx.is_null() {
         return qq_entry_code::ERR_NULL_CTX;
     }
@@ -799,8 +801,8 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     use daemon_client_code as c;
     use qq_entry::QqOwnerAdapter;
     use resident::{Resident, ResidentLimits};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     if cfg_json_ptr.is_null() {
         return c::ERR_NULL_CFG;
     }
@@ -871,7 +873,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     };
     let stop = handle.daemon_stop_flag();
     let resident = Arc::new(Resident::new(
-        QqOwnerAdapter::new(handle),
+        QqOwnerAdapter::new(handle, account.clone()),
         ResidentLimits::default(),
     ));
     let (tx, rx) = std::sync::mpsc::channel::<resident::ResidentNotice>();
@@ -883,8 +885,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     {
         let r = resident.clone();
         let wrapper_binding = caligo_model::wrapper_message::WrapperBinding {
-            account: account.clone(), session_generation,
-            host_nonce: daemon_client::host_instance_nonce(), wrapper_session: String::new(),
+            account: account.clone(),
+            session_generation,
+            host_nonce: daemon_client::host_instance_nonce(),
+            wrapper_session: String::new(),
         };
         qq_entry::install_drain_hook(Box::new(move || {
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
@@ -911,14 +915,16 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 match crate::qq_v8::poll_listener_json() {
                     Ok(json) if !json.starts_with("NOT_ARMED") => {
                         let mut binding = wrapper_binding.clone();
-                        binding.wrapper_session = crate::qq_v8::listener_session().unwrap_or_default();
+                        binding.wrapper_session =
+                            crate::qq_v8::listener_session().unwrap_or_default();
                         if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
                             // D9:sendResults 回收(fired 的 Promise 结果)。
                             {
                                 let sr = &batch.send_results;
                                 let mut done: Vec<(String, String)> = Vec::new();
                                 let mut rejected: Vec<(String, String)> = Vec::new();
-                                for (mid, st) in sr {
+                                let mut unknown: Vec<(String, String)> = Vec::new();
+                                for (request_id, st) in sr {
                                     let status =
                                         st.get("status").and_then(|x| x.as_str()).unwrap_or("");
                                     if status == "done" {
@@ -927,21 +933,27 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                                             .and_then(|x| x.as_str())
                                             .unwrap_or("")
                                             .to_string();
-                                        done.push((mid.clone(), nid));
+                                        done.push((request_id.clone(), nid));
+                                    } else if status == "unknown" {
+                                        let why = st
+                                            .get("reason")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("send outcome unknown")
+                                            .to_string();
+                                        unknown.push((request_id.clone(), why));
                                     } else if status == "rejected" {
                                         let why = st
                                             .get("error")
                                             .and_then(|x| x.as_str())
                                             .unwrap_or("promise rejected")
                                             .to_string();
-                                        rejected.push((mid.clone(), why));
+                                        rejected.push((request_id.clone(), why));
                                     }
                                 }
-                                if !done.is_empty() || !rejected.is_empty() {
-                                    r.complete_sends(&done, &rejected);
+                                if !done.is_empty() || !rejected.is_empty() || !unknown.is_empty() {
+                                    r.complete_sends(&done, &rejected, &unknown);
                                 }
                             }
-
                         }
                     }
                     Ok(_) => {}
@@ -1056,10 +1068,12 @@ mod tests {
         let json = build_report_json(&report).unwrap();
         let back: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(back["host_pid"], 4242);
-        assert!(back["bridge_build"]
-            .as_str()
-            .unwrap()
-            .starts_with("caligo-bridge"));
+        assert!(
+            back["bridge_build"]
+                .as_str()
+                .unwrap()
+                .starts_with("caligo-bridge")
+        );
         assert_eq!(back["protocol_version"], 1);
         assert_eq!(back["module_snapshot_complete"], true);
         assert_eq!(back["bridge_abi_version"], BRIDGE_ABI_VERSION);

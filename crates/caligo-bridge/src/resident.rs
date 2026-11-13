@@ -17,10 +17,11 @@
 //!   监听器存在,回调不可能到达,双锁持有序仍遵守 adapter→core。
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use crate::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult, NoHostAdapter};
+use caligo_model::capability::{HostQuery, QueryOutcome, QueryScope};
 
 /// 资源限额(计划 §6.4 建议初值;LAB 测试报告固定实际值)。
 #[derive(Debug, Clone, Copy)]
@@ -244,17 +245,31 @@ struct Core<A: HostAdapter> {
 /// 常驻 resident。`Arc<Resident>` 共享;owner 线程语义由内部 Mutex +
 /// adapter 的线程检查共同保证(**Mutex 只串行化数据结构;owner 检查在
 /// 每次 native 前独立进行**,不因持锁而豁免)。
+struct PendingQuery {
+    request_id: String,
+    scope: QueryScope,
+    timeout_ms: u64,
+    query: HostQuery,
+    poll: bool,
+    deadline: std::time::Instant,
+    cancel_only: bool,
+}
+
 pub struct Resident<A: HostAdapter> {
     /// 宿主 adapter(独立锁;锁序 adapter→core)。native 调用期间不持
     /// core 锁,内联回调可重入 core 面板(§7-P4)。
     adapter: Mutex<A>,
     core: Mutex<Core<A>>,
+    queries: Mutex<VecDeque<PendingQuery>>,
+    query_results: Mutex<VecDeque<(String, QueryScope, QueryOutcome)>>,
 }
 
 impl<A: HostAdapter> Resident<A> {
     pub fn new(adapter: A, limits: ResidentLimits) -> Self {
         Self {
             adapter: Mutex::new(adapter),
+            queries: Mutex::new(VecDeque::new()),
+            query_results: Mutex::new(VecDeque::new()),
             core: Mutex::new(Core {
                 _marker: core::marker::PhantomData,
                 state: ResidentState::Idle,
@@ -301,6 +316,68 @@ impl<A: HostAdapter> Resident<A> {
         c.token = token;
         c.state = ResidentState::Ready;
         Ok(token)
+    }
+
+    /// Queue one authenticated fixed query; execution stays on the owner drain.
+    pub fn submit_query(
+        &self,
+        request_id: String,
+        scope: QueryScope,
+        timeout_ms: u64,
+        query: HostQuery,
+    ) -> Result<(), QueryOutcome> {
+        if scope.validate().is_err()
+            || query.validate().is_err()
+            || request_id.is_empty()
+            || request_id.len() > 128
+        {
+            return Err(QueryOutcome::Rejected {
+                code: 400,
+                reason: "invalid query".into(),
+            });
+        }
+        let mut queue = self.queries.lock().unwrap();
+        if queue.len() >= 32 || queue.iter().any(|pending| pending.request_id == request_id) {
+            return Err(QueryOutcome::Rejected {
+                code: 409,
+                reason: "query capacity or duplicate".into(),
+            });
+        }
+        let timeout_ms = timeout_ms.min(caligo_model::capability::MAX_QUERY_TIMEOUT_MS);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        queue.push_back(PendingQuery {
+            request_id,
+            scope,
+            timeout_ms,
+            query,
+            poll: false,
+            deadline,
+            cancel_only: false,
+        });
+        Ok(())
+    }
+
+    pub fn take_query_results(&self) -> Vec<(String, QueryScope, QueryOutcome)> {
+        self.query_results.lock().unwrap().drain(..).collect()
+    }
+
+    pub fn invalidate_queries_except(&self, scope: &QueryScope) {
+        let mut pending = self.queries.lock().unwrap();
+        let mut retained = VecDeque::new();
+        while let Some(mut item) = pending.pop_front() {
+            if &item.scope == scope {
+                retained.push_back(item);
+            } else {
+                self.query_results.lock().unwrap().push_back((
+                    item.request_id.clone(),
+                    item.scope.clone(),
+                    QueryOutcome::Disconnected,
+                ));
+                item.cancel_only = true;
+                retained.push_back(item);
+            }
+        }
+        *pending = retained;
     }
 
     /// 任意线程提交 owned 动作(TSFN 语义:跨线程只入队,不执行)。
@@ -412,7 +489,7 @@ impl<A: HostAdapter> Resident<A> {
                 };
                 (req, op)
             }; // core 锁释放:native 调用期间回调可重入。
-               // ---- invoke(adapter 锁;precheck 仍先于第一个宿主 API)----
+            // ---- invoke(adapter 锁;precheck 仍先于第一个宿主 API)----
             let r = {
                 let mut adapter = self.adapter.lock().unwrap();
                 // 计数器更新需 core 锁:锁序 adapter→core(全局合同)。
@@ -482,12 +559,12 @@ impl<A: HostAdapter> Resident<A> {
                         }
                     }
                     // fired 非终态:mid 挂账,Promise 结果经 poll sendResults 回收。
-                    Ok(HostOpResult::SendFired { mid }) => {
+                    Ok(HostOpResult::SendFired { mid: _ }) => {
                         c.counters.dispatched_total += 1;
                         if let OwnedRequest::SendText { request_id, .. } = &req {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::SendPending;
-                                rec.pending_mid = Some(mid.clone());
+                                rec.pending_mid = Some(request_id.clone());
                             }
                         }
                     }
@@ -542,6 +619,81 @@ impl<A: HostAdapter> Resident<A> {
         Ok(processed)
     }
 
+    /// Run at most one bounded batch of typed queries on the QQ owner thread.
+    pub fn drain_queries(&self) -> usize {
+        let mut processed = 0;
+        let batch = self.core.lock().unwrap().limits.drain_batch;
+        for _ in 0..batch {
+            let mut pending = self.queries.lock().unwrap();
+            let Some(mut item) = pending.pop_front() else {
+                break;
+            };
+            drop(pending);
+            if item.cancel_only {
+                let mut adapter = self.adapter.lock().unwrap();
+                let mut core = self.core.lock().unwrap();
+                if precheck(&mut *adapter, &mut core.counters).is_ok() {
+                    drop(core);
+                    adapter.cancel_query(&item.request_id, &item.scope);
+                }
+                processed += 1;
+                continue;
+            }
+            if std::time::Instant::now() >= item.deadline {
+                self.query_results.lock().unwrap().push_back((
+                    item.request_id.clone(),
+                    item.scope.clone(),
+                    QueryOutcome::Timeout,
+                ));
+                item.cancel_only = true;
+                self.queries.lock().unwrap().push_back(item);
+                processed += 1;
+                continue;
+            }
+            let outcome = {
+                let mut adapter = self.adapter.lock().unwrap();
+                let mut core = self.core.lock().unwrap();
+                match precheck(&mut *adapter, &mut core.counters) {
+                    Ok(()) => {
+                        drop(core);
+                        let remaining =
+                            item.deadline
+                                .saturating_duration_since(std::time::Instant::now())
+                                .as_millis()
+                                .min(item.timeout_ms as u128) as u64;
+                        adapter.query(
+                            &item.request_id,
+                            &item.scope,
+                            &item.query,
+                            remaining,
+                            item.poll,
+                        )
+                    }
+                    Err(
+                        HostError::EnvInvalid
+                        | HostError::NoCurrentContext
+                        | HostError::NotOwnerThread,
+                    ) => Some(QueryOutcome::NotReady),
+                    Err(_) => Some(QueryOutcome::Unsupported),
+                }
+            };
+            match outcome {
+                Some(outcome) => self.query_results.lock().unwrap().push_back((
+                    item.request_id,
+                    item.scope,
+                    outcome,
+                )),
+                None => self
+                    .queries
+                    .lock()
+                    .unwrap()
+                    .push_back(PendingQuery { poll: true, ..item }),
+            }
+            processed += 1;
+        }
+        processed
+    }
+
     /// owner 线程消费出站事件。
     pub fn take_events(&self) -> Vec<OwnedEvent> {
         let mut c = self.core.lock().unwrap();
@@ -554,23 +706,38 @@ impl<A: HostAdapter> Resident<A> {
         c.results_out.drain(..).collect()
     }
 
-    /// V8 Promise 的本地 mid 已由调用路径保留；仅其明确 done/msgId
-    /// 可完成关联。CPB peer+text 候选不得调用此方法。
-    pub fn complete_sends(&self, done: &[(String, String)], rejected: &[(String, String)]) {
+    /// Promise 状态由原始 core request_id 关联；只有精确 wrapper 回读
+    /// 可提供 native_id。CPB peer+text 候选不得调用此方法。
+    pub fn complete_sends(
+        &self,
+        done: &[(String, String)],
+        rejected: &[(String, String)],
+        unknown: &[(String, String)],
+    ) {
         let mut c = self.core.lock().unwrap();
         let mut outcomes = Vec::new();
         let mut updates = Vec::new();
         for (request_id, record) in &c.requests {
             if !matches!(
                 record.state,
-                ReqState::SendPending | ReqState::IdentityPending
+                ReqState::SendPending | ReqState::IdentityPending | ReqState::DeliveryUnknown
             ) {
                 continue;
             }
-            let Some(mid) = record.pending_mid.as_deref() else {
+            if record.state == ReqState::DeliveryUnknown
+                && record
+                    .late_receipt_deadline
+                    .is_none_or(|deadline| std::time::Instant::now() >= deadline)
+            {
+                continue;
+            }
+            let Some(pending_request_id) = record.pending_mid.as_deref() else {
                 continue;
             };
-            if let Some((_, native_id)) = done.iter().find(|(candidate, _)| candidate == mid) {
+            if let Some((_, native_id)) = done
+                .iter()
+                .find(|(candidate, _)| candidate == pending_request_id)
+            {
                 let (state, outcome) = if native_id.is_empty() {
                     (
                         ReqState::IdentityPending,
@@ -589,21 +756,40 @@ impl<A: HostAdapter> Resident<A> {
                 };
                 outcomes.push(ResidentNotice::Outcome(outcome));
                 updates.push((request_id.clone(), state));
-            } else if let Some((_, reason)) =
-                rejected.iter().find(|(candidate, _)| candidate == mid)
+            } else if let Some((_, reason)) = rejected
+                .iter()
+                .find(|(candidate, _)| candidate == request_id)
             {
                 outcomes.push(ResidentNotice::Outcome(SendOutcome::Failure {
                     request_id: request_id.clone(),
                     reason: reason.clone(),
                 }));
                 updates.push((request_id.clone(), ReqState::Done));
+            } else if let Some((_, reason)) = unknown
+                .iter()
+                .find(|(candidate, _)| candidate == request_id)
+            {
+                outcomes.push(ResidentNotice::Outcome(SendOutcome::Unknown {
+                    request_id: request_id.clone(),
+                    reason: Some(reason.clone()),
+                    late_receipt_possible: true,
+                }));
+                updates.push((request_id.clone(), ReqState::DeliveryUnknown));
             }
         }
         for (request_id, state) in updates {
             if let Some(record) = c.requests.get_mut(&request_id) {
+                let newly_unknown =
+                    state == ReqState::DeliveryUnknown && record.state != ReqState::DeliveryUnknown;
                 record.state = state;
+                if newly_unknown {
+                    record.late_receipt_deadline = std::time::Instant::now().checked_add(
+                        std::time::Duration::from_millis(caligo_model::LATE_RECEIPT_GRACE_MS),
+                    );
+                }
                 if state == ReqState::Done {
                     record.pending_mid = None;
+                    record.late_receipt_deadline = None;
                 }
             }
         }
@@ -737,8 +923,14 @@ impl<A: HostAdapter> Resident<A> {
         };
         {
             let mut c = self.core.lock().unwrap();
-            c.counters.wrapper_records_rejected = c.counters.wrapper_records_rejected.saturating_add(batch.stats.rejected);
-            c.counters.wrapper_records_overflow = c.counters.wrapper_records_overflow.saturating_add(batch.stats.overflow);
+            c.counters.wrapper_records_rejected = c
+                .counters
+                .wrapper_records_rejected
+                .saturating_add(batch.stats.rejected);
+            c.counters.wrapper_records_overflow = c
+                .counters
+                .wrapper_records_overflow
+                .saturating_add(batch.stats.overflow);
         }
         for event in &batch.events {
             // Validation was completed by the shared decoder before queue admission.

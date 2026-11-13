@@ -464,6 +464,7 @@ mod tests {
 // bridge 与 core 共用同一协议定义,避免跨 crate 漂移)。
 // ---------------------------------------------------------------------------
 
+pub mod capability;
 pub mod framing;
 pub mod ipc_v2;
 pub mod ipc_v3;

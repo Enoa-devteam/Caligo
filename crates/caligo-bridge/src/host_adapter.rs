@@ -77,6 +77,7 @@ pub enum HostError {
 /// resident 用它与 [`HostAdapter::owner_thread_id`] 比对,先于任何
 /// `native_op`。
 use crate::resident::SendOutcome;
+use caligo_model::capability::{HostQuery, QueryOutcome, QueryScope};
 
 pub trait HostAdapter {
     /// 宿主初始化时确定的 owner 线程(QQ 的 JS/loop 线程)。
@@ -94,6 +95,23 @@ pub trait HostAdapter {
     /// 返回 (request_id, SendOutcome);Resident 负责落 core 结果通道。
     fn drain_send_responses(&mut self) -> Vec<(String, SendOutcome)> {
         Vec::new()
+    }
+    /// Explicit fixed-operation capability provider. Native routes default closed.
+    fn send_capabilities(&self) -> (bool, bool) {
+        (false, false)
+    }
+    /// Cancel a pending wrapper query on the owner thread.
+    fn cancel_query(&mut self, _request_id: &str, _scope: &QueryScope) {}
+    /// Execute one fixed read-only query on the owner thread.
+    fn query(
+        &mut self,
+        _request_id: &str,
+        _scope: &QueryScope,
+        _query: &HostQuery,
+        _timeout_ms: u64,
+        _poll: bool,
+    ) -> Option<QueryOutcome> {
+        Some(QueryOutcome::Unsupported)
     }
 }
 

@@ -21,14 +21,10 @@ const NAME_ISOLATE_ENTERED_CTX: &str =
     "?GetEnteredOrMicrotaskContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ";
 const NAME_ISOLATE_INCUMBENT_CTX: &str =
     "?GetIncumbentContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ";
-const NAME_STRING_NEW_FROM_UTF8: &str =
-    "?NewFromUtf8@String@v8@@SA?AV?$MaybeLocal@VString@v8@@@2@PEAVIsolate@2@PEBDW4NewStringType@2@H@Z";
-const NAME_SCRIPT_COMPILE: &str =
-    "?Compile@Script@v8@@SA?AV?$MaybeLocal@VScript@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VString@v8@@@2@PEAVScriptOrigin@2@@Z";
-const NAME_SCRIPT_RUN: &str =
-    "?Run@Script@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VData@v8@@@2@@Z";
-const NAME_UTF8_CTOR: &str =
-    "??0Utf8Value@String@v8@@QEAA@PEAVIsolate@2@V?$Local@VValue@v8@@@2@@Z";
+const NAME_STRING_NEW_FROM_UTF8: &str = "?NewFromUtf8@String@v8@@SA?AV?$MaybeLocal@VString@v8@@@2@PEAVIsolate@2@PEBDW4NewStringType@2@H@Z";
+const NAME_SCRIPT_COMPILE: &str = "?Compile@Script@v8@@SA?AV?$MaybeLocal@VScript@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VString@v8@@@2@PEAVScriptOrigin@2@@Z";
+const NAME_SCRIPT_RUN: &str = "?Run@Script@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VData@v8@@@2@@Z";
+const NAME_UTF8_CTOR: &str = "??0Utf8Value@String@v8@@QEAA@PEAVIsolate@2@V?$Local@VValue@v8@@@2@@Z";
 const NAME_UTF8_DTOR: &str = "??1Utf8Value@String@v8@@QEAA@XZ";
 const NAME_UTF8_DEREF: &str = "??DUtf8Value@String@v8@@QEAAPEADXZ";
 const NAME_CTX_ENTER: &str = "?Enter@Context@v8@@QEAAXXZ";
@@ -36,18 +32,24 @@ const NAME_CTX_EXIT: &str = "?Exit@Context@v8@@QEAAXXZ";
 const NAME_TRYCATCH_CTOR: &str = "??0TryCatch@v8@@QEAA@PEAVIsolate@1@@Z";
 const NAME_TRYCATCH_DTOR: &str = "??1TryCatch@v8@@QEAA@XZ";
 const NAME_TRYCATCH_CAUGHT: &str = "?HasCaught@TryCatch@v8@@QEBA_NXZ";
-const NAME_TRYCATCH_EXC: &str =
-    "?Exception@TryCatch@v8@@QEBA?AV?$Local@VValue@v8@@@2@XZ";
+const NAME_TRYCATCH_EXC: &str = "?Exception@TryCatch@v8@@QEBA?AV?$Local@VValue@v8@@@2@XZ";
 
 type FnScopeCtor = unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void) -> *mut c_void;
 type FnScopeDtor = unsafe extern "C" fn(this: *mut c_void);
 type FnGetCurrent = unsafe extern "C" fn() -> *mut c_void;
 type FnIsolateCtx = unsafe extern "C" fn(isolate: *mut c_void, sret: *mut usize);
-type FnStringNewFromUtf8 =
-    unsafe extern "C" fn(sret: *mut usize, isolate: *mut c_void, data: *const u8, ty: i32, len: i32);
-type FnScriptCompile = unsafe extern "C" fn(sret: *mut usize, ctx: usize, src: usize, origin: *mut c_void);
+type FnStringNewFromUtf8 = unsafe extern "C" fn(
+    sret: *mut usize,
+    isolate: *mut c_void,
+    data: *const u8,
+    ty: i32,
+    len: i32,
+);
+type FnScriptCompile =
+    unsafe extern "C" fn(sret: *mut usize, ctx: usize, src: usize, origin: *mut c_void);
 type FnScriptRun = unsafe extern "C" fn(this: usize, sret: *mut usize, ctx: usize, data: usize);
-type FnUtf8Ctor = unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void, value: usize) -> *mut c_void;
+type FnUtf8Ctor =
+    unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void, value: usize) -> *mut c_void;
 type FnUtf8Dtor = unsafe extern "C" fn(this: *mut c_void);
 type FnUtf8Deref = unsafe extern "C" fn(this: *mut c_void) -> *const u8;
 type FnCtxEnterExit = unsafe extern "C" fn(this: *mut c_void);
@@ -83,7 +85,12 @@ impl V8Symbols {
             // SAFETY: obs::export_addr 只读导出表。
             let a = unsafe { crate::obs::export_addr(qqnt, name) };
             if a.is_none() {
-                append_stage(report, "v8_resolve", false, &format!("export missing: {name}"));
+                append_stage(
+                    report,
+                    "v8_resolve",
+                    false,
+                    &format!("export missing: {name}"),
+                );
             }
             a
         };
@@ -307,12 +314,22 @@ unsafe fn exec_in_scope(
         // ScriptOrigin(0x28 字节)零构造安全(K2-03 §12.1)。
         let mut origin = [0usize; 5];
         let mut script_local = 0usize;
-        compile(&mut script_local, ctx, src_local, origin.as_mut_ptr().cast());
+        compile(
+            &mut script_local,
+            ctx,
+            src_local,
+            origin.as_mut_ptr().cast(),
+        );
         if script_local == 0 {
             return Err(V8Error::CompileFailed);
         }
         let mut result_local = 0usize;
-        run(script_local, &mut result_local, ctx, 0 /*空 data Local*/);
+        run(
+            script_local,
+            &mut result_local,
+            ctx,
+            0, /*空 data Local*/
+        );
         if result_local == 0 {
             return Err(V8Error::RunEmpty);
         }
@@ -351,7 +368,7 @@ pub const D8_START_JS: &str = r"
 (function () {
   try {
     var G = globalThis;
-    if (G.__caligo_res) return 'ALREADY sid=' + G.__caligo_res.sid;
+    if (G.__caligo_res) { G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid; }
     var q = process._linkedBinding('QQNT');
     var S = q.NodeIQQNTWrapperSession;
     var live = null, sidName = null;
@@ -370,8 +387,19 @@ pub const D8_START_JS: &str = r"
     if (!live) return 'ERR:no live session';
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
-      rejected: 0, overflow: 0, listenerId: null, sendResults: {} };
+      rejected: 0, overflow: 0, listenerId: null, sendResults: {}, sends: {} };
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
+    var settleSendResult = function (R, key, pending) {
+      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
+        R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
+          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+      } else {
+        R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
+      }
+      pending.done = true;
+      if (R.sends[key] === pending) delete R.sends[key];
+    };
     var push = function (src, m) {
       try {
         if (!m || typeof m !== 'object' || !Array.isArray(m.elements) ||
@@ -403,6 +431,7 @@ pub const D8_START_JS: &str = r"
           msgType:m.msgType, subMsgType:m.subMsgType,
           peerUid:m.peerUid, peerUin:m.peerUin, senderUid:m.senderUid, senderUin:m.senderUin,
           sendStatus:m.sendStatus, elements:elements};
+        if (src === 'add_send' || src === 'update') correlateSend(R, m, src);
         var item = {source:src, observed_at_unix_ms:Date.now(), record:record};
         var bytes = utf8Bytes(JSON.stringify(item));
         if (bytes > 65536 || R.recv.length >= 128 || R.recvBytes + bytes > 393216) {
@@ -410,6 +439,51 @@ pub const D8_START_JS: &str = r"
         }
         R.recv.push(item); R.recvBytes += bytes;
       } catch (err) { R.rejected++; }
+    };
+    var correlateSend = function (R, m, src) {
+      var keys = Object.keys(R.sends);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k], send = R.sends[key];
+        if (!send || send.done || send.failed || m.guildId !== send.cookie || m.chatType !== send.chat ||
+            m.peerUid !== send.peer || typeof m.msgId !== 'string' || !m.msgId || m.msgId === '0' ||
+            m.senderUin !== send.selfUin || !Array.isArray(m.elements) || m.elements.length !== 1 ||
+            !m.elements[0].textElement || m.elements[0].textElement.content !== send.text) continue;
+        if (src === 'add_send') {
+          if (send.addId && send.addId !== m.msgId) {
+            send.ambiguous = true;
+            send.readback = {status:'unknown', reason:'multiple_add_send_ids'};
+            R.sendResults[key] = {status:'unknown', reason:'multiple_add_send_ids'};
+            settleSendResult(R, key, send);
+          } else send.addId = m.msgId;
+        }
+        if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted) {
+          send.updateId = m.msgId; send.readbackStarted = true;
+          (function (key, pending, service) {
+            Promise.resolve().then(function () {
+              return service.getMsgsByMsgId({chatType:pending.chat, peerUid:pending.peer,
+                guildId:pending.cookie}, [pending.updateId]);
+            }).then(function (response) {
+              var list = response && response.msgList;
+              if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
+                pending.readback = {status:'unknown', reason:'exact_query_miss'};
+              } else {
+                var record = list[0];
+                var body = record && Array.isArray(record.elements) && record.elements.length === 1 &&
+                  record.elements[0].textElement && record.elements[0].textElement.content;
+                pending.readback = record.msgId === pending.updateId && record.chatType === pending.chat &&
+                  record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
+                  record.sendStatus === 2 && body === pending.text
+                    ? {status:'readback', msgId:record.msgId}
+                    : {status:'unknown', reason:'exact_query_identity_mismatch'};
+              }
+              settleSendResult(R, key, pending);
+            }, function () {
+              pending.readback = {status:'unknown', reason:'exact_query_rejected'};
+              settleSendResult(R, key, pending);
+            });
+          })(key, send, R.ms);
+        }
+      }
     };
     var pushList = function (src, a) {
       if (!Array.isArray(a)) { R.rejected++; return; }
@@ -422,6 +496,7 @@ pub const D8_START_JS: &str = r"
     };
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
+    G.__caligo_d8 = R;
     return 'ARMED sid=' + sidName + ' lidRet=' + String(R.listenerId).slice(0, 40);
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -434,6 +509,15 @@ pub const D8_POLL_JS: &str = r"
     var G = globalThis;
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
+    var keys = Object.keys(R.sends || {});
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k], send = R.sends[key];
+      if (send && !send.done && !send.timedOut && Date.now() >= send.deadline) {
+        send.timedOut = true;
+        R.sendResults[key] = {status:'unknown', reason:'timeout'};
+      }
+      if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
+    }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
       sendResults:R.sendResults || {}};
     var json = JSON.stringify(out);
@@ -450,6 +534,10 @@ pub const D8_POLL_JS: &str = r"
       json = JSON.stringify(out);
     }
     R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0;
+    var resultKeys = Object.keys(R.sendResults || {});
+    for (var i = 0; i < resultKeys.length; i++) {
+      if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+    }
     return json;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -527,8 +615,13 @@ pub fn start_listener() -> Result<String, V8Error> {
     };
     // SAFETY: 同上。
     let result = unsafe { exec_script(&syms, isolate_addr(), D8_START_JS) }?;
-    if let Some(session) = result.strip_prefix("ARMED sid=").and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s)) {
-        if let Ok(mut bound) = D8_SESSION.lock() { *bound = Some(session.to_owned()); }
+    if let Some(session) = result
+        .strip_prefix("ARMED sid=")
+        .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))
+    {
+        if let Ok(mut bound) = D8_SESSION.lock() {
+            *bound = Some(session.to_owned());
+        }
     }
     Ok(result)
 }
@@ -998,7 +1091,7 @@ pub fn cancel_uid_map_probe() -> Result<String, V8Error> {
 
 #[cfg(test)]
 mod exec_script_lab_tests {
-    use super::{exec_script, V8Error, V8Symbols};
+    use super::{V8Error, V8Symbols, exec_script};
     use core::ffi::c_void;
     use std::cell::{Cell, RefCell};
 
@@ -1194,10 +1287,10 @@ mod exec_script_lab_tests {
 #[cfg(test)]
 mod uid_map_script_tests {
     use super::{
-        build_profile_uid_map_query_js, build_uid_map_methods_js, UID_MAP_BINDING_JS,
-        UID_MAP_GROUP_JS, UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS, UID_MAP_QUERY_JS,
-        UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS, UID_MAP_SURFACE_DONE_JS,
-        UID_MAP_WRAPPERS_JS,
+        UID_MAP_BINDING_JS, UID_MAP_GROUP_JS, UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS,
+        UID_MAP_QUERY_JS, UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS,
+        UID_MAP_SURFACE_DONE_JS, UID_MAP_WRAPPERS_JS, build_profile_uid_map_query_js,
+        build_uid_map_methods_js,
     };
 
     #[test]
@@ -1372,12 +1465,30 @@ for (const name of ['getUidByUin', 'getUinByUid']) {
     }
 }
 
-/// D9 发送模板:占位 {chat}(数字)、{peer}/{text}(JSON 字符串)。
-/// fired 后 Promise 结果写入 R.sendResults[mid](done 带结果 / rejected 带错误),
-/// 由轮询回收 —— §6.6:fired 非终态,mid 为 receipt 第一分类(候选 ID)。
-pub fn build_send_js(chat_type: u32, peer_uid: &str, text: &str) -> String {
+/// D9 fixed wrapper send. Correlation stays local; a native ID is returned
+/// only after exact event identity and getMsgsByMsgId readback agree.
+pub fn build_send_js(
+    chat_type: u32,
+    peer_uid: &str,
+    text: &str,
+    account: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+) -> String {
     let peer_json = serde_json::to_string(peer_uid).unwrap_or_default();
     let text_json = serde_json::to_string(text).unwrap_or_default();
+    let request_json = serde_json::to_string(request_id).unwrap_or_default();
+    let account_json = serde_json::to_string(account).unwrap_or_default();
+    let settle = r#"function(R,key,pending){
+      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
+        R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
+          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+      } else { R.sendResults[key] = {status:'done', msgId:pending.readback.msgId}; }
+      pending.done = true;
+      if (R.sends[key] === pending) delete R.sends[key];
+    }"#;
     let mut js = String::with_capacity(2048);
     js.push_str("(function () {\n");
     js.push_str("  try {\n");
@@ -1391,41 +1502,80 @@ pub fn build_send_js(chat_type: u32, peer_uid: &str, text: &str) -> String {
     js.push_str("    var peerUid = ");
     js.push_str(&peer_json);
     js.push_str(";\n");
-    js.push_str("    var sv = 0;\n");
-    js.push_str("    try { sv = R.session.getMSFService().getServerTime(); } catch (e) {}\n");
-    js.push_str("    var mid = String(R.ms.generateMsgUniqueId(chat, sv));\n");
-    js.push_str("    var peer = { chatType: chat, guildId: mid, peerUid: peerUid };\n");
+    js.push_str("    var sv; try { sv = R.session.getMSFService().getServerTime(); } catch (e) { return JSON.stringify({err:'server_time_unavailable'}); }\n");
+    js.push_str("    if (typeof sv !== 'string' || !sv || sv === '0') return JSON.stringify({err:'server_time_unavailable'});\n");
+    js.push_str("    var cookie = R.ms.generateMsgUniqueId(chat, sv);\n");
+    js.push_str(
+        "    if (typeof cookie !== 'string' || !cookie || cookie === '0') return JSON.stringify({err:'invalid_cookie'});\n",
+    );
+    js.push_str("    var selfUin = ");
+    js.push_str(&account_json);
+    js.push_str(";\n");
+    js.push_str("    var targetUin = peerUid;\n");
+    js.push_str("    if (chat === 1) {\n");
+    js.push_str("      if (!/^[1-9][0-9]{0,19}$/.test(targetUin)) return JSON.stringify({err:'private_target_uin_invalid'});\n");
+    js.push_str("      var profile = R.session.getProfileService();\n");
+    js.push_str("      if (!profile || typeof profile.getUidByUin !== 'function') return JSON.stringify({err:'private_uid_mapping_unavailable'});\n");
+    js.push_str("      var mapped = profile.getUidByUin('FriendsServiceImpl', [targetUin]);\n");
+    js.push_str("      if (!(mapped instanceof Map) || !Map.prototype.has.call(mapped, targetUin)) return JSON.stringify({err:'private_uid_mapping_missing'});\n");
+    js.push_str("      peerUid = Map.prototype.get.call(mapped, targetUin);\n");
+    js.push_str("      if (typeof peerUid !== 'string' || !/^u_[A-Za-z0-9_-]{1,128}$/.test(peerUid)) return JSON.stringify({err:'private_uid_mapping_invalid'});\n");
+    js.push_str("    }\n");
+    js.push_str("    var peer = { chatType: chat, guildId: cookie, peerUid: peerUid };\n");
     js.push_str("    var elems = [{ elementType: 1, textElement: { content: ");
     js.push_str(&text_json);
     js.push_str(" } }];\n");
-    js.push_str("    var pr = R.ms.sendMsg('0', peer, elems, new Map());\n");
-    js.push_str("    R.sendResults[mid] = { status: 'pending', ts: Date.now() };\n");
-    js.push_str("    if (pr && typeof pr.then === 'function') {\n");
-    js.push_str("      pr.then(function (res) {\n");
-    js.push_str("        try {\n");
-    js.push_str("          var rec = JSON.parse(JSON.stringify(res));\n");
-    js.push_str("          var nid = '';\n");
-    js.push_str("          try { nid = String(rec.msgId || (rec.msgList && rec.msgList[0] && rec.msgList[0].msgId) || ''); } catch (e) {}\n");
-    js.push_str("          R.sendResults[mid] = { status: 'done', msgId: nid, result: JSON.stringify(rec).slice(0, 2000) };\n");
-    js.push_str("        } catch (e) { R.sendResults[mid] = { status: 'done-raw' }; }\n");
-    js.push_str("      }, function (err) {\n");
-        js.push_str("        R.sendResults[mid] = { status: 'rejected', error: String(err).slice(0, 300) };\n");
-    js.push_str("      });\n");
-    js.push_str("    } else {\n");
-    js.push_str("      R.sendResults[mid] = { status: 'done-raw' };\n");
-    js.push_str("    }\n");
-    js.push_str("    return JSON.stringify({ fired: true, mid: mid });\n");
+    js.push_str("    var settleSendResult = ");
+    js.push_str(settle);
+    js.push_str(";\n");
+    js.push_str("    var key = ");
+    js.push_str(&request_json);
+    js.push_str(";\n");
+    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.keys(R.sends).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    js.push_str("    var pending = {cookie:cookie, chat:chat, peer:peerUid, text:");
+    js.push_str(&text_json);
+    js.push_str(", selfUin:selfUin, wireSeq:");
+    js.push_str(&wire_seq.to_string());
+    js.push_str(", deadline:Date.now()+");
+    js.push_str(&timeout_ms.to_string());
+    js.push_str(", addId:null, updateId:null, done:false};\n");
+    js.push_str("    R.sends[key] = pending; R.sendResults[key] = {status:'pending'};\n");
+    js.push_str("    var pr; try { pr = R.ms.sendMsg('0', peer, elems, new Map()); } catch (e) { delete R.sends[key]; delete R.sendResults[key]; throw e; }\n");
+    js.push_str("    Promise.resolve(pr).then(function (res) {\n");
+    js.push_str("      pending.promiseDone = true;\n");
+    js.push_str("      if (res && res.result === 0) { pending.promiseStatus = 'accepted'; R.sendResults[key] = {status:'accepted'}; }\n");
+    js.push_str("      else { pending.promiseStatus = 'rejected'; pending.failed = true; R.sendResults[key] = {status:'rejected', error:'send result=' + String(res && res.result)}; }\n");
+    js.push_str("      settleSendResult(R, key, pending);\n");
+    js.push_str("    }, function (err) { pending.promiseDone=true; pending.promiseStatus='rejected'; pending.failed=true; R.sendResults[key] = {status:'rejected', error:String(err).slice(0,300)}; settleSendResult(R,key,pending); });\n");
+    js.push_str("    return JSON.stringify({fired:true, mid:key});\n");
     js.push_str("  } catch (e) { return JSON.stringify({ err: String(e).slice(0, 300) }); }\n");
     js.push_str("})()\n");
     js
 }
 
-/// D9 发送:返回原始输出(fired JSON / NOT_ARMED JSON / ERR JSON)。
-pub fn send_text(chat_type: u32, peer_uid: &str, text: &str) -> Result<String, V8Error> {
+pub fn run_fixed_query_script(js: &str) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
-    let js = build_send_js(chat_type, peer_uid, text);
+    unsafe { exec_script(&syms, isolate_addr(), js) }
+}
+
+/// D9 发送:返回原始输出(fired JSON / NOT_ARMED JSON / ERR JSON)。
+pub fn send_text(
+    chat_type: u32,
+    peer_uid: &str,
+    text: &str,
+    account: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+) -> Result<String, V8Error> {
+    let Some(syms) = symbols() else {
+        return Err(V8Error::NoCurrentContext);
+    };
+    let js = build_send_js(
+        chat_type, peer_uid, text, account, request_id, wire_seq, timeout_ms,
+    );
     // SAFETY: 阶梯自管全部检查;调用方保证 owner 线程。
     unsafe { exec_script(&syms, isolate_addr(), &js) }
 }

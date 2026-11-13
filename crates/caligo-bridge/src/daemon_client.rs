@@ -16,13 +16,14 @@ use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use caligo_model::framing::{encode_frame, FrameDecoder, FrameError};
+use caligo_model::capability::QueryOutcome;
+use caligo_model::framing::{FrameDecoder, FrameError, encode_frame};
 use caligo_model::ipc_v3::{
-    BridgeMsg, CoreToBridgeMsg, EventPayload, OutcomePayload, Role, BUSINESS_PROTOCOL_REVISION,
-    PROTOCOL_VERSION_V3,
+    BUSINESS_PROTOCOL_REVISION, BridgeMsg, CAPABILITY_QUERY_REVISION, CoreToBridgeMsg,
+    EventPayload, OutcomePayload, PROTOCOL_VERSION_V3, Role,
 };
 
 use crate::resident::{Resident, ResidentNotice, SendOutcome};
@@ -785,46 +786,51 @@ pub fn event_payload(
         if wrapper.binding.account != cfg.account
             || wrapper.binding.session_generation != cfg.session_generation
             || wrapper.binding.host_nonce != cfg.host_nonce
-        { return Err("wrapper_binding_mismatch"); }
+        {
+            return Err("wrapper_binding_mismatch");
+        }
     }
     Ok(EventPayload {
-                event_seq: wire_seq, // wire 身份 = worker 本地 seq(EventAck 回显键)
-                session_generation: cfg.session_generation,
-                session: serde_json::json!({
-                    "account": cfg.account,
-                    // kind 零猜测:2=群、1=私聊、其他(含 native 路线的
-                    // unknown=0)如实上送,core 按"缺必需真实字段"处理。
-                    "kind": match ev.chat_type {
-                        2 => "group",
-                        1 => "private",
-                        _ => "unknown",
-                    },
-                    "peer": if ev.wrapper_message.is_some() { &ev.peer_uin } else { &ev.peer_uid },
-                }),
-                // 自发判别:account(uin)或 self_uid(uid)双域比对;
-                // 两者都未提供/不匹配 = incoming(不猜映射)。
-                direction: if (!cfg.account.is_empty() && ev.sender_uin == cfg.account)
-                    || (!cfg.self_uid.is_empty() && ev.sender_uin == cfg.self_uid)
-                {
-                    "self_sent"
-                } else {
-                    "incoming"
-                }
-                .into(),
-                sender: ev.sender_uin.clone(),
-                native_id: ev.native_id.clone(),
-                text: ev.text.clone(),
-                platform_time: ev.msg_time,
-                wrapper_message: ev.wrapper_message.clone(),
-                // Native receive fields do not currently provide a proven
-                // OneBot real_id/time/peer projection.
-                onebot_projection: None,
-                observed_at_unix_ms: ev.wrapper_message.as_ref().map_or(0, |e| e.observed_at_unix_ms),
-                source: match ev.source {
-                    crate::resident::EventSourceKind::Recv => "recv",
-                    crate::resident::EventSourceKind::Update => "update",
-                }
-                .into(),
+        event_seq: wire_seq, // wire 身份 = worker 本地 seq(EventAck 回显键)
+        session_generation: cfg.session_generation,
+        session: serde_json::json!({
+            "account": cfg.account,
+            // kind 零猜测:2=群、1=私聊、其他(含 native 路线的
+            // unknown=0)如实上送,core 按"缺必需真实字段"处理。
+            "kind": match ev.chat_type {
+                2 => "group",
+                1 => "private",
+                _ => "unknown",
+            },
+            "peer": if ev.wrapper_message.is_some() { &ev.peer_uin } else { &ev.peer_uid },
+        }),
+        // 自发判别:account(uin)或 self_uid(uid)双域比对;
+        // 两者都未提供/不匹配 = incoming(不猜映射)。
+        direction: if (!cfg.account.is_empty() && ev.sender_uin == cfg.account)
+            || (!cfg.self_uid.is_empty() && ev.sender_uin == cfg.self_uid)
+        {
+            "self_sent"
+        } else {
+            "incoming"
+        }
+        .into(),
+        sender: ev.sender_uin.clone(),
+        native_id: ev.native_id.clone(),
+        text: ev.text.clone(),
+        platform_time: ev.msg_time,
+        wrapper_message: ev.wrapper_message.clone(),
+        // Native receive fields do not currently provide a proven
+        // OneBot real_id/time/peer projection.
+        onebot_projection: None,
+        observed_at_unix_ms: ev
+            .wrapper_message
+            .as_ref()
+            .map_or(0, |e| e.observed_at_unix_ms),
+        source: match ev.source {
+            crate::resident::EventSourceKind::Recv => "recv",
+            crate::resident::EventSourceKind::Update => "update",
+        }
+        .into(),
     })
 }
 
@@ -832,7 +838,10 @@ fn event_wire_bytes(event: &EventPayload) -> usize {
     serde_json::to_vec(event).map_or(usize::MAX, |bytes| bytes.len())
 }
 
-fn pop_event_window(window: &mut VecDeque<(u64, EventPayload)>, bytes: &mut usize) -> Option<EventPayload> {
+fn pop_event_window(
+    window: &mut VecDeque<(u64, EventPayload)>,
+    bytes: &mut usize,
+) -> Option<EventPayload> {
     let (_, event) = window.pop_front()?;
     *bytes = bytes.saturating_sub(event_wire_bytes(&event));
     Some(event)
@@ -898,13 +907,32 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             Err(_) => return SessionEnd::Broken,
         }
     };
+    let query_scope = caligo_model::capability::QueryScope {
+        account: cfg.account.clone(),
+        host_nonce: cfg.host_nonce,
+        session_generation: cfg.session_generation,
+        connection_epoch,
+    };
+    if send_json(
+        conn,
+        &BridgeMsg::QueryCapabilities {
+            revision: CAPABILITY_QUERY_REVISION,
+            scope: query_scope.clone(),
+            capabilities: crate::qq_query::supported_capabilities().to_vec(),
+        },
+    )
+    .is_err()
+    {
+        return SessionEnd::Broken;
+    }
+    resident.invalidate_queries_except(&query_scope);
 
     loop {
         if stop.load(Ordering::Relaxed) {
             return SessionEnd::LocalStop;
         }
         c.publish(); // 实时计数(导出侧快照取证)
-                     // 0) 待提交补交(resident 就绪后)。
+        // 0) 待提交补交(resident 就绪后)。
         let plen = pending.len();
         for _ in 0..plen {
             let (id, wire_seq, timeout_ms, chat, peer, text) =
@@ -926,6 +954,27 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
         }
         // 1) 收入有界 outbox。其上限与 Resident 的默认预留结果槽对齐;
         // 已满则不再消费源队列,结果仍由 Resident 保留。
+        for (request_id, scope, outcome) in resident.take_query_results() {
+            if scope.connection_epoch != connection_epoch
+                || scope.account != cfg.account
+                || scope.host_nonce != cfg.host_nonce
+                || scope.session_generation != cfg.session_generation
+            {
+                continue;
+            }
+            if send_json(
+                conn,
+                &BridgeMsg::QueryResult {
+                    request_id,
+                    scope,
+                    outcome,
+                },
+            )
+            .is_err()
+            {
+                return SessionEnd::Broken;
+            }
+        }
         while result_outbox.len() < RESULT_OUTBOX_MAX_ITEMS {
             match result_rx.try_recv() {
                 Ok(notice) => result_outbox.push_back(PendingNotice {
@@ -955,17 +1004,25 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             *next_local_seq += 1;
             let payload = match event_payload(cfg, &ev, wire_seq) {
                 Ok(payload) => payload,
-                Err(_) => { c.protocol_errors += 1; continue; }
+                Err(_) => {
+                    c.protocol_errors += 1;
+                    continue;
+                }
             };
             let seq = wire_seq;
             let bytes = event_wire_bytes(&payload);
-            if bytes > EVENT_WINDOW_MAX_BYTES { c.events_gap_dropped += 1; continue; }
+            if bytes > EVENT_WINDOW_MAX_BYTES {
+                c.events_gap_dropped += 1;
+                continue;
+            }
             while unacked.len() + 1 > EVENT_WINDOW_MAX_ITEMS
                 || unacked_bytes.saturating_add(bytes) > EVENT_WINDOW_MAX_BYTES
             {
                 if pop_event_window(unacked, unacked_bytes).is_some() {
                     c.events_gap_dropped += 1;
-                } else { break; }
+                } else {
+                    break;
+                }
             }
             unacked.push_back((seq, payload.clone()));
             *unacked_bytes += bytes;
@@ -1012,6 +1069,54 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
         }
         // 4) 阻塞收(tick 周期返回)。
         match recv_json(conn, pipe, tick) {
+            Ok(CoreToBridgeMsg::Query {
+                request_id,
+                scope,
+                timeout_ms,
+                query,
+            }) => {
+                let expected = caligo_model::capability::QueryScope {
+                    account: cfg.account.clone(),
+                    host_nonce: cfg.host_nonce,
+                    session_generation: cfg.session_generation,
+                    connection_epoch,
+                };
+                if scope != expected || query.validate().is_err() || scope.validate().is_err() {
+                    if send_json(
+                        conn,
+                        &BridgeMsg::QueryResult {
+                            request_id,
+                            scope,
+                            outcome: QueryOutcome::Rejected {
+                                code: 409,
+                                reason: "query scope or shape mismatch".into(),
+                            },
+                        },
+                    )
+                    .is_err()
+                    {
+                        return SessionEnd::Broken;
+                    }
+                } else if let Err(outcome) =
+                    resident.submit_query(request_id.clone(), scope.clone(), timeout_ms, query)
+                {
+                    if send_json(
+                        conn,
+                        &BridgeMsg::QueryResult {
+                            request_id,
+                            scope,
+                            outcome,
+                        },
+                    )
+                    .is_err()
+                    {
+                        return SessionEnd::Broken;
+                    }
+                } else {
+                    wake();
+                }
+                heartbeat_misses = 0;
+            }
             Ok(CoreToBridgeMsg::Dispatch {
                 request_id,
                 wire_seq,
@@ -1125,22 +1230,37 @@ mod tests {
     #[test]
     fn event_window_releases_the_popped_record_with_different_sizes() {
         let event = EventPayload {
-            event_seq: 1, session_generation: 1,
+            event_seq: 1,
+            session_generation: 1,
             session: serde_json::json!({"account":"10001","kind":"private","peer":"20002"}),
-            direction: "incoming".into(), sender: "20002".into(), native_id: "1".into(),
-            text: "x".repeat(10000), platform_time: None, wrapper_message: None,
-            onebot_projection: None, observed_at_unix_ms: 1, source: "recv".into(),
+            direction: "incoming".into(),
+            sender: "20002".into(),
+            native_id: "1".into(),
+            text: "x".repeat(10000),
+            platform_time: None,
+            wrapper_message: None,
+            onebot_projection: None,
+            observed_at_unix_ms: 1,
+            source: "recv".into(),
         };
         let first_bytes = event_wire_bytes(&event);
-        let mut second = event.clone(); second.event_seq=2; second.text="tiny".into();
-        let second_bytes=event_wire_bytes(&second);
-        let mut window=VecDeque::from([(1,event),(2,second)]);
-        let mut bytes=first_bytes+second_bytes;
-        assert_eq!(pop_event_window(&mut window,&mut bytes).unwrap().event_seq,1);
-        assert_eq!(bytes,second_bytes);
-        assert_eq!(pop_event_window(&mut window,&mut bytes).unwrap().event_seq,2);
-        assert_eq!(bytes,0);
-        assert!(pop_event_window(&mut window,&mut bytes).is_none());
+        let mut second = event.clone();
+        second.event_seq = 2;
+        second.text = "tiny".into();
+        let second_bytes = event_wire_bytes(&second);
+        let mut window = VecDeque::from([(1, event), (2, second)]);
+        let mut bytes = first_bytes + second_bytes;
+        assert_eq!(
+            pop_event_window(&mut window, &mut bytes).unwrap().event_seq,
+            1
+        );
+        assert_eq!(bytes, second_bytes);
+        assert_eq!(
+            pop_event_window(&mut window, &mut bytes).unwrap().event_seq,
+            2
+        );
+        assert_eq!(bytes, 0);
+        assert!(pop_event_window(&mut window, &mut bytes).is_none());
     }
 
     fn framed(msg: &CoreToBridgeMsg) -> Vec<u8> {

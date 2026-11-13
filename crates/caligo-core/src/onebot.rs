@@ -1,12 +1,14 @@
 //! OneBot V11 action layer. All transports share this action registry and
 //! dispatch exactly once through `SendSink`.
 
+use caligo_model::capability::{positive_decimal, GroupInfo, HostQuery, QueryData, QueryOutcome};
 use caligo_model::onebot_traits::{
     extract_text, SendDisposition, SendPayload, SendSink, SendTarget,
 };
 pub use caligo_model::onebot_traits::{StoreReader, StoredMessageView};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ActionResponse {
@@ -53,6 +55,21 @@ impl ActionResponse {
 }
 
 pub const RET_UNSUPPORTED: i32 = 1404;
+pub const RET_PERMISSION_DENIED: i32 = 1403;
+pub const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Fixed read-only operations shared by every public transport.
+/// Implementations enforce account, connection and session scope before success.
+pub trait QueryBackend {
+    fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome;
+}
+
+struct UnsupportedQueries;
+impl QueryBackend for UnsupportedQueries {
+    fn query_host(&self, _: HostQuery, _: Duration) -> QueryOutcome {
+        QueryOutcome::Unsupported
+    }
+}
 pub const RET_BAD_PARAMS: i32 = 1400;
 pub const RET_BAD_REQUEST: i32 = 1440;
 pub const RET_NOT_CONFIRMED: i32 = 1501;
@@ -84,6 +101,9 @@ pub enum ActionHandlerKind {
     },
     GetMessage,
     GetLoginInfo,
+    GetFriendList,
+    GetGroupList,
+    GetGroupInfo,
     GetStatus,
     GetVersionInfo,
 }
@@ -97,6 +117,7 @@ pub enum ActionInputSchema {
     PrivateMessage,
     Message,
     MessageId,
+    GroupInfo,
 }
 
 impl ActionInputSchema {
@@ -140,6 +161,16 @@ impl ActionInputSchema {
                     {"required":["group_id"], "properties":{"message_type":{"const":"group"}}},
                     {"required":["user_id"], "properties":{"message_type":{"const":"private"}}}
                 ]);
+            }
+            Self::GroupInfo => {
+                schema["properties"]["group_id"] = serde_json::json!({
+                    "type":"integer", "minimum":1, "maximum":u64::MAX
+                });
+                schema["properties"]["no_cache"] = serde_json::json!({
+                    "type":"boolean", "default":false,
+                    "description":"Queries always read the host; no fabricated cache is used"
+                });
+                schema["required"] = serde_json::json!(["group_id"]);
             }
             Self::MessageId => {
                 schema["properties"]["message_id"] = serde_json::json!({
@@ -245,6 +276,27 @@ pub static ACTION_REGISTRY: &[ActionDefinition] = &[
         permission: ActionPermission::Read,
         handler: ActionHandlerKind::GetLoginInfo,
         input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_friend_list",
+        canonical: "get_friend_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetFriendList,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_group_list",
+        canonical: "get_group_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupList,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_group_info",
+        canonical: "get_group_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupInfo,
+        input_schema: ActionInputSchema::GroupInfo,
     },
     ActionDefinition {
         name: "get_status",
@@ -408,25 +460,57 @@ pub fn is_supported_action(action: &str) -> bool {
     resolve_action(action).is_some()
 }
 
-/// Validate only the known directory request shape; this does not register a
-/// capability. Learned peers are an internal index, not a directory backend.
-fn unsupported_directory_validation(action: &str, params: &Value) -> Option<ActionResponse> {
-    if action == "get_group_info"
-        && !params
-            .get("group_id")
-            .and_then(Value::as_u64)
-            .is_some_and(|id| id > 0)
-    {
-        return Some(ActionResponse::failed(
-            RET_BAD_PARAMS,
-            "group_id 必须是正整数",
-            Value::Null,
-        ));
-    }
-    None
+fn public_id(id: &str) -> Option<u64> {
+    positive_decimal(id)
+        .then(|| id.parse::<u64>().ok())
+        .flatten()
 }
 
-/// Process one action through the shared action registry.
+fn group_data(info: GroupInfo) -> Option<Value> {
+    if info.member_count > info.max_member_count {
+        return None;
+    }
+    Some(serde_json::json!({
+        "group_id":public_id(&info.group_id)?, "group_name":info.group_name,
+        "member_count":info.member_count, "max_member_count":info.max_member_count
+    }))
+}
+
+fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    let invalid =
+        || ActionResponse::failed(RET_BAD_REQUEST, "宿主查询响应不符合合同", echo.clone());
+    let outcome = backend.query_host(query.clone(), QUERY_TIMEOUT);
+    let data = match outcome {
+        QueryOutcome::Success(data) => match (query, data) {
+            (HostQuery::LoginInfo, QueryData::LoginInfo(info)) => public_id(&info.user_id)
+                .map(|user_id| serde_json::json!({"user_id":user_id, "nickname":info.nickname})),
+            (HostQuery::FriendList, QueryData::FriendList(list)) => list.into_iter()
+                .map(|info| Some(serde_json::json!({
+                    "user_id":public_id(&info.user_id)?, "nickname":info.nickname, "remark":info.remark
+                })))
+                .collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
+                .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
+            _ => None,
+        },
+        QueryOutcome::Unsupported => return ActionResponse::failed(RET_UNSUPPORTED, "宿主未支持此查询", echo),
+        QueryOutcome::NotReady => return ActionResponse::failed(RET_NOT_READY, "宿主查询尚未就绪", echo),
+        QueryOutcome::PermissionDenied => return ActionResponse::failed(RET_PERMISSION_DENIED, "宿主拒绝查询权限", echo),
+        QueryOutcome::Rejected { code, reason } => return ActionResponse::failed(
+            RET_BAD_REQUEST, &format!("宿主查询拒绝 (code={code}): {reason}"), echo),
+        QueryOutcome::Timeout => return ActionResponse::failed(RET_NOT_CONFIRMED, "宿主查询超时", echo),
+        QueryOutcome::Disconnected => return ActionResponse::failed(RET_NOT_CONFIRMED, "宿主查询连接已断开", echo),
+        QueryOutcome::InvalidResponse => return invalid(),
+    };
+    match data {
+        Some(data) => ActionResponse::ok(data, echo),
+        None => invalid(),
+    }
+}
+
+/// Compatibility entry for callers without a host query backend. Directory
+/// actions remain explicitly unsupported; legacy login readers retain their data.
 pub fn handle_action(
     action: &str,
     params: &Value,
@@ -434,10 +518,27 @@ pub fn handle_action(
     sink: &mut dyn SendSink,
     store: &dyn StoreReader,
 ) -> ActionResponse {
-    if let Some(mut response) = unsupported_directory_validation(action, params) {
-        response.echo = echo;
-        return response;
+    if action == "get_login_info" {
+        return match store.login_info() {
+            Some((user_id, nickname)) => ActionResponse::ok(
+                serde_json::json!({"user_id":user_id, "nickname":nickname}),
+                echo,
+            ),
+            None => ActionResponse::failed(RET_NOT_READY, "账号身份尚未就绪", echo),
+        };
     }
+    handle_action_with_queries(action, params, echo, sink, store, &UnsupportedQueries)
+}
+
+/// Process one action through the shared registry and actual host query backend.
+pub fn handle_action_with_queries(
+    action: &str,
+    params: &Value,
+    echo: Value,
+    sink: &mut dyn SendSink,
+    store: &dyn StoreReader,
+    queries: &dyn QueryBackend,
+) -> ActionResponse {
     let Some(definition) = resolve_action(action) else {
         return ActionResponse::failed(RET_UNSUPPORTED, "未支持动作", echo);
     };
@@ -469,13 +570,31 @@ pub fn handle_action(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
-        ActionHandlerKind::GetLoginInfo => match store.login_info() {
-            Some((user_id, nickname)) => ActionResponse::ok(
-                serde_json::json!({"user_id": user_id, "nickname": nickname}),
+        ActionHandlerKind::GetLoginInfo => query_response(HostQuery::LoginInfo, queries, echo),
+        ActionHandlerKind::GetFriendList => query_response(HostQuery::FriendList, queries, echo),
+        ActionHandlerKind::GetGroupList => query_response(HostQuery::GroupList, queries, echo),
+        ActionHandlerKind::GetGroupInfo => {
+            let Some(group_id) = params
+                .get("group_id")
+                .and_then(Value::as_u64)
+                .filter(|id| *id > 0)
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "group_id 必须是正整数", echo);
+            };
+            if params
+                .get("no_cache")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return ActionResponse::failed(RET_BAD_PARAMS, "no_cache 必须是布尔值", echo);
+            }
+            query_response(
+                HostQuery::GroupInfo {
+                    group_id: group_id.to_string(),
+                },
+                queries,
                 echo,
-            ),
-            None => ActionResponse::failed(RET_NOT_READY, "账号身份尚未就绪", echo),
-        },
+            )
+        }
         ActionHandlerKind::GetVersionInfo => ActionResponse::ok(
             serde_json::json!({
                 "app_name": "Caligo",
@@ -566,6 +685,9 @@ mod tests {
                 "send_msg_async",
                 "get_msg",
                 "get_login_info",
+                "get_friend_list",
+                "get_group_list",
+                "get_group_info",
                 "get_status",
                 "get_version_info",
             ])
@@ -601,6 +723,28 @@ mod tests {
         }
     }
 
+    struct FakeQueries;
+    impl QueryBackend for FakeQueries {
+        fn query_host(&self, query: HostQuery, _: Duration) -> QueryOutcome {
+            QueryOutcome::Success(match query {
+                HostQuery::LoginInfo => QueryData::LoginInfo(caligo_model::capability::LoginInfo {
+                    user_id: "1694717255".into(),
+                    nickname: "caligo".into(),
+                    online: true,
+                }),
+                HostQuery::FriendList => QueryData::FriendList(vec![]),
+                HostQuery::GroupList => QueryData::GroupList(vec![]),
+                HostQuery::GroupInfo { group_id } => QueryData::GroupInfo(GroupInfo {
+                    group_id,
+                    group_name: "Lab group".into(),
+                    member_count: 3,
+                    max_member_count: 50,
+                }),
+                _ => panic!("unexpected public query"),
+            })
+        }
+    }
+
     #[test]
     fn every_registered_action_reaches_its_normal_handler() {
         for entry in ACTION_REGISTRY {
@@ -613,10 +757,18 @@ mod tests {
                     serde_json::json!({"user_id":8,"message":"hello"})
                 }
                 ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
+                ActionInputSchema::GroupInfo => serde_json::json!({"group_id":7,"no_cache":true}),
                 ActionInputSchema::Empty => serde_json::json!({}),
             };
             let echo = serde_json::json!([entry.name, {"seq":1}]);
-            let response = handle_action(entry.name, &params, echo.clone(), &mut sink, &FakeStore);
+            let response = handle_action_with_queries(
+                entry.name,
+                &params,
+                echo.clone(),
+                &mut sink,
+                &FakeStore,
+                &FakeQueries,
+            );
             assert_eq!(response.status, "ok", "{}: {response:?}", entry.name);
             assert_eq!(response.retcode, 0, "{}", entry.name);
             assert_eq!(response.echo, echo);
@@ -644,6 +796,15 @@ mod tests {
                 ActionHandlerKind::GetLoginInfo => assert_eq!(
                     response.data,
                     serde_json::json!({"user_id":1694717255u64,"nickname":"caligo"})
+                ),
+                ActionHandlerKind::GetFriendList | ActionHandlerKind::GetGroupList => {
+                    assert_eq!(response.data, serde_json::json!([]))
+                }
+                ActionHandlerKind::GetGroupInfo => assert_eq!(
+                    response.data,
+                    serde_json::json!({
+                        "group_id":7,"group_name":"Lab group","member_count":3,"max_member_count":50
+                    })
                 ),
                 ActionHandlerKind::GetStatus => assert_eq!(
                     response.data,
@@ -802,6 +963,12 @@ mod tests {
                         assert_eq!(schema["properties"]["message_id"]["minimum"], i32::MIN);
                         assert_eq!(schema["properties"]["message_id"]["maximum"], i32::MAX);
                         ActionInputSchema::MessageId
+                    } else if handler == ActionHandlerKind::GetGroupInfo {
+                        assert_eq!(schema["required"], serde_json::json!(["group_id"]));
+                        assert_eq!(schema["properties"]["group_id"]["minimum"], 1);
+                        assert_eq!(schema["properties"]["group_id"]["maximum"], u64::MAX);
+                        assert_eq!(schema["properties"]["no_cache"]["type"], "boolean");
+                        ActionInputSchema::GroupInfo
                     } else {
                         assert_eq!(schema["properties"], serde_json::json!({}));
                         ActionInputSchema::Empty
@@ -1005,8 +1172,8 @@ mod tests {
                 ("get_group_info", serde_json::json!({"group_id":999u64})),
                 ("get_friend_list", Value::Null),
             ] {
-                assert!(!is_supported_action(action));
-                assert!(resolve_action(action).is_none());
+                assert!(is_supported_action(action));
+                assert!(resolve_action(action).is_some());
                 let echo = serde_json::json!({"action":action, "request":[1, false]});
                 let mut sink = ConfirmedSink::default();
                 let response = handle_action(action, &params, echo.clone(), &mut sink, store);

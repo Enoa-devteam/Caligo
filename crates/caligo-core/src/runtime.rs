@@ -192,6 +192,48 @@ fn session_to_dto_value(key: &SessionKey) -> serde_json::Value {
     .unwrap_or(serde_json::Value::Null)
 }
 
+fn event_identity_from_event(event: &MsgEvent) -> String {
+    serde_json::to_string(&(
+        &event.session.account.0,
+        event.session.kind.to_string(),
+        &event.session.peer.0,
+        &event.native_id.0,
+    ))
+    .unwrap_or_default()
+}
+
+fn event_identity_from_record(event: &crate::journal::EventRecord) -> String {
+    let account = event.session.get("account").and_then(|value| value.as_str()).unwrap_or_default();
+    let kind = event.session.get("kind").and_then(|value| value.as_str()).unwrap_or_default();
+    let peer = event.session.get("peer").and_then(|value| value.as_str()).unwrap_or_default();
+    format!("{account}|{kind}|{peer}|{}", event.native_id)
+}
+
+fn event_revision_fingerprint_from_event(event: &MsgEvent) -> String {
+    let raw = event.wrapper_message.as_ref().map(|envelope| &envelope.record);
+    serde_json::to_string(&serde_json::json!({
+        "text": &event.text,
+        "sender": &event.sender,
+        "native_id": &event.native_id.0,
+        "platform_time": event.platform_time,
+        "wrapper_record": raw,
+        "projection": &event.onebot_projection,
+    }))
+    .unwrap_or_default()
+}
+
+fn event_revision_fingerprint(event: &crate::journal::EventRecord) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "text": &event.text,
+        "sender": &event.sender,
+        "native_id": &event.native_id,
+        "platform_time": event.platform_time,
+        "wrapper_record": event.wrapper_message.as_ref().map(|envelope| &envelope.record),
+        "projection": &event.onebot_projection,
+    }))
+    .unwrap_or_default()
+}
+
 fn event_from_record(e: &crate::journal::EventRecord) -> Result<MsgEvent, String> {
     let dto: SessionKeyDto = serde_json::from_value(e.session.clone())
         .map_err(|err| format!("stored event session is invalid: {err}"))?;
@@ -256,8 +298,8 @@ pub struct AccountActor {
     next_wire_seq: u64,
     delivered_cursor: u64,
     seen_native: HashSet<String>,
-    seen_updates: HashSet<String>,
-    dedup_fifo: VecDeque<(bool, String)>, // (is_update, native_id),FIFO 驱逐
+    seen_updates: HashSet<(String, String)>,
+    dedup_fifo: VecDeque<(bool, String, String)>, // (is_update, identity, revision fingerprint)
     dedup_capacity: usize,
     receipt_audits: VecDeque<ReceiptAuditEntry>,
     gaps: VecDeque<GapRecord>,
@@ -333,7 +375,7 @@ impl AccountActor {
                 }
                 JournalRecord::Event(e) => {
                     report.recovered_events += 1;
-                    if e.onebot_projection.is_some() {
+                    if e.onebot_projection.is_some() || e.wrapper_message.is_some() {
                         if let Some(store) = actor.message_store.as_mut() {
                             let event = event_from_record(&e).map_err(OpenError::MessageStore)?;
                             store
@@ -430,10 +472,12 @@ impl AccountActor {
     fn fold_event(&mut self, e: crate::journal::EventRecord) {
         self.seen_native.insert(e.native_id.clone());
         if e.source == "update" {
-            self.seen_updates.insert(e.native_id.clone());
-            self.dedup_fifo.push_back((true, e.native_id.clone()));
+            let identity = event_identity_from_record(&e);
+            let fingerprint = event_revision_fingerprint(&e);
+            self.seen_updates.insert((identity.clone(), fingerprint.clone()));
+            self.dedup_fifo.push_back((true, identity, fingerprint));
         } else {
-            self.dedup_fifo.push_back((false, e.native_id.clone()));
+            self.dedup_fifo.push_back((false, e.native_id.clone(), String::new()));
         }
         self.event_seq_next = self.event_seq_next.max(e.event_seq + 1);
         self.evict_dedup_if_needed();
@@ -848,11 +892,9 @@ impl AccountActor {
                 }
             }
             EventSource::Update => {
-                if self.seen_updates.contains(&ev.native_id.0) {
-                    true
-                } else {
-                    false
-                }
+                let identity = event_identity_from_event(&ev);
+                let fingerprint = event_revision_fingerprint_from_event(&ev);
+                self.seen_updates.contains(&(identity, fingerprint))
             }
         };
         if duplicate {
@@ -893,13 +935,18 @@ impl AccountActor {
         // instead of writing another journal row.
         self.seen_native.insert(ev.native_id.0.clone());
         let is_update = ev.source == EventSource::Update;
-        if is_update {
-            self.seen_updates.insert(ev.native_id.0.clone());
-        }
+        let (dedup_key, fingerprint) = if is_update {
+            let identity = event_identity_from_event(&ev);
+            let fingerprint = event_revision_fingerprint_from_event(&ev);
+            self.seen_updates.insert((identity.clone(), fingerprint.clone()));
+            (identity, fingerprint)
+        } else {
+            (ev.native_id.0.clone(), String::new())
+        };
         self.dedup_fifo
-            .push_back((is_update, ev.native_id.0.clone()));
+            .push_back((is_update, dedup_key, fingerprint));
         self.evict_dedup_if_needed();
-        if ev.onebot_projection.is_some() && ev.source != EventSource::Update {
+        if ev.onebot_projection.is_some() || ev.wrapper_message.is_some() {
             self.pending_message_store
                 .insert(ev.native_id.0.clone(), ev.clone());
             self.persist_message_projection(&ev)?;
@@ -986,9 +1033,9 @@ impl AccountActor {
 
     fn evict_dedup_if_needed(&mut self) {
         while self.dedup_fifo.len() > self.dedup_capacity {
-            if let Some((is_update, id)) = self.dedup_fifo.pop_front() {
+            if let Some((is_update, id, fingerprint)) = self.dedup_fifo.pop_front() {
                 if is_update {
-                    self.seen_updates.remove(&id);
+                    self.seen_updates.remove(&(id, fingerprint));
                 } else {
                     self.seen_native.remove(&id);
                 }

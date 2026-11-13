@@ -242,6 +242,9 @@ fn spawn_bridge_agent(
                         }
                     }
                 }
+                Ok(CoreToBridgeMsg::Query { .. }) => {
+                    panic!("unexpected read-only Query in send-only daemon_chain agent")
+                }
                 Ok(
                     CoreToBridgeMsg::HealthAck {}
                     | CoreToBridgeMsg::Stopped {}

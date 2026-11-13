@@ -14,6 +14,11 @@ crate-type = ["cdylib", "rlib"]
 default = []
 research = []
 
+[[test]]
+name = "wrapper_send"
+path = "tests/wrapper_send.rs"
+required-features = ["research"]
+
 [dependencies]
 caligo-model = { workspace = true }
 serde = { workspace = true }

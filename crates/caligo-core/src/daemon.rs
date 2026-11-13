@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability_broker::CapabilityBroker;
 use crate::ipc::{
     encode_frame, validate_auth, validate_bridge_hello_v3, validate_hello_v3, BridgeMsg,
     ControlMsg, CoreToBridgeMsg, CoreToControlMsg, EventPayload, FrameDecoder, OutcomePayload,
@@ -26,6 +27,7 @@ use crate::runtime::{host_identity, AccountActor, NativeResult, RuntimeConfig};
 use crate::transport::{
     connect_client, generate_token, token_hex, PipeConnection, PipeServer, TransportError,
 };
+use caligo_model::capability::{HostQuery, QueryOutcome, QueryScope};
 use caligo_model::{
     Direction, EventSource, MsgEvent, NativeMessageId, SendTextRequest, SessionIdentity,
 };
@@ -156,6 +158,21 @@ pub struct Daemon {
     /// (read 以 100ms 粒度轮询该标志)。
     pub(crate) bridge_wake: Arc<AtomicBool>,
     api_request_seq: AtomicU64,
+    query_broker: CapabilityBroker,
+}
+
+/// Every return path (including wire errors) releases ephemeral query waiters.
+struct BridgeQuerySession<'a> {
+    daemon: &'a Daemon,
+    epoch: u64,
+    open: Arc<AtomicBool>,
+}
+
+impl Drop for BridgeQuerySession<'_> {
+    fn drop(&mut self) {
+        self.open.store(false, Ordering::Relaxed);
+        self.daemon.query_broker.disconnect(self.epoch);
+    }
 }
 
 impl Daemon {
@@ -199,6 +216,7 @@ impl Daemon {
             test_result_fault_armed: AtomicBool::new(false),
             bridge_wake: Arc::new(AtomicBool::new(false)),
             api_request_seq: AtomicU64::new(1),
+            query_broker: CapabilityBroker::default(),
             config,
         }))
     }
@@ -236,6 +254,94 @@ impl Daemon {
     /// 当前连接代次(观测/LAB;每条新 bridge 连接递增)。
     pub fn connection_epoch(&self) -> u64 {
         self.epoch.load(Ordering::Relaxed)
+    }
+
+    /// Execute one fixed read-only query. This does not persist or retry it.
+    pub fn query_host(&self, query: HostQuery, timeout: std::time::Duration) -> QueryOutcome {
+        self.query_host_cancellable(query, timeout, &AtomicBool::new(false))
+    }
+
+    pub fn query_host_cancellable(
+        &self,
+        query: HostQuery,
+        timeout: std::time::Duration,
+        cancel: &AtomicBool,
+    ) -> QueryOutcome {
+        if self.stop.load(Ordering::Relaxed) {
+            return QueryOutcome::Disconnected;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return QueryOutcome::Rejected {
+                code: -2,
+                reason: "query cancelled".into(),
+            };
+        }
+        if query.validate().is_err() {
+            return QueryOutcome::Rejected {
+                code: -1,
+                reason: "invalid read-only query".into(),
+            };
+        }
+        let Ok(sequence) =
+            self.api_request_seq
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+        else {
+            return QueryOutcome::NotReady;
+        };
+        let request_id = format!("query-{:016x}-{sequence}", self.core_nonce);
+        let ticket = {
+            let actor = self.actor.lock().unwrap();
+            if actor.phase() != caligo_model::Phase::Active {
+                return QueryOutcome::NotReady;
+            }
+            let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+                return QueryOutcome::NotReady;
+            };
+            let scope = QueryScope {
+                account: session.account.0.clone(),
+                host_nonce: session.host.host_nonce,
+                session_generation: session.session_generation,
+                connection_epoch: connection.connection_epoch,
+            };
+            self.query_broker
+                .begin(request_id, scope, query, timeout, &self.dispatch_out)
+        };
+        let ticket = match ticket {
+            Ok(ticket) => ticket,
+            Err(outcome) => return outcome,
+        };
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        // No actor, broker or dispatch mutex is held during the wait.
+        ticket.wait(&self.stop, cancel)
+    }
+
+    pub fn pending_query_count(&self) -> usize {
+        self.query_broker.pending_count()
+    }
+    pub fn stale_query_result_count(&self) -> u64 {
+        self.query_broker.stale_result_count()
+    }
+
+    /// Whether the currently active, exactly bound bridge advertised private text send.
+    pub fn supports_private_text(&self) -> bool {
+        let Ok(actor) = self.actor.lock() else {
+            return false;
+        };
+        if actor.phase() != caligo_model::Phase::Active {
+            return false;
+        }
+        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+            return false;
+        };
+        let scope = QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        };
+        self.query_broker.supports_private_text(&scope)
     }
 
     /// Submit one OneBot action through the same durable actor→bridge path as
@@ -484,6 +590,13 @@ impl Daemon {
         // 连接代次:每条新 bridge 连接分配新 epoch(C1);旧连接不得以
         // 相同/更小 epoch 触发重连恢复。
         let epoch = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        self.query_broker.reset(epoch);
+        let session_open = Arc::new(AtomicBool::new(true));
+        let _query_session = BridgeQuerySession {
+            daemon: self,
+            epoch,
+            open: session_open.clone(),
+        };
         // 握手:版本 → 认证 → 角色 → 基线/账号/代次。
         let hello: BridgeMsg = stream.recv_json(&conn, &self.stop)?;
         let BridgeMsg::Hello {
@@ -576,6 +689,12 @@ impl Daemon {
                 return Ok(());
             }
         }
+        self.query_broker.bind(QueryScope {
+            account: account.clone(),
+            host_nonce,
+            session_generation,
+            connection_epoch: epoch,
+        });
         send_json(
             &conn,
             &Self::hello_ack(true, None, &self.config.core_build, epoch),
@@ -598,7 +717,6 @@ impl Daemon {
 
         // 组合唤醒观察者:stop 或 dispatch 到达都会打断 bridge 会话的阻塞读
         // (read 以 50ms 粒度轮询 recv_wake)。观察者随会话结束退出。
-        let session_open = Arc::new(AtomicBool::new(true));
         let recv_wake = Arc::new(AtomicBool::new(false));
         {
             let s_open = session_open.clone();
@@ -628,11 +746,63 @@ impl Daemon {
             recv_wake.store(false, Ordering::Relaxed);
             let pending: Vec<CoreToBridgeMsg> =
                 std::mem::take(&mut *self.dispatch_out.lock().unwrap());
-            for m in pending {
+            for mut m in pending {
+                if let CoreToBridgeMsg::Query {
+                    request_id,
+                    scope,
+                    timeout_ms,
+                    ..
+                } = &mut m
+                {
+                    let Some(remaining) =
+                        self.query_broker.dispatch_timeout(epoch, request_id, scope)
+                    else {
+                        continue;
+                    };
+                    *timeout_ms = remaining;
+                }
                 send_json(&conn, &m)?;
             }
             match stream.recv_json::<BridgeMsg>(&conn, &recv_wake) {
                 Ok(msg) => match msg {
+                    BridgeMsg::QueryCapabilities {
+                        revision,
+                        scope,
+                        capabilities,
+                    } => {
+                        if !self
+                            .query_broker
+                            .advertise(epoch, revision, &scope, capabilities)
+                        {
+                            send_json(
+                                &conn,
+                                &CoreToBridgeMsg::Reject {
+                                    reason: "invalid query capability advertisement".into(),
+                                },
+                            )?;
+                        }
+                    }
+                    BridgeMsg::SendCapabilities {
+                        scope,
+                        private_text,
+                        group_text,
+                    } => {
+                        // A wrong-scope advertisement is ignored and cannot grant authority.
+                        let _ = self.query_broker.advertise_send(
+                            epoch,
+                            &scope,
+                            private_text,
+                            group_text,
+                        );
+                    }
+                    BridgeMsg::QueryResult {
+                        request_id,
+                        scope,
+                        outcome,
+                    } => {
+                        self.query_broker
+                            .complete(epoch, &request_id, &scope, outcome);
+                    }
                     BridgeMsg::NativeStarted { request_id } => {
                         let mut actor = self.actor.lock().unwrap();
                         let applied = actor.bridge_started(&request_id).is_ok();
@@ -951,6 +1121,7 @@ impl Daemon {
                     }
                     ControlMsg::Stop {} => {
                         self.stop.store(true, Ordering::Relaxed);
+                        self.query_broker.disconnect(self.connection_epoch());
                         send_json(&conn, &CoreToControlMsg::Stopped {})?;
                         return Ok(());
                     }

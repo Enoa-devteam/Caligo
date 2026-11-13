@@ -111,7 +111,7 @@ impl MessageStore {
                     format!("message journal line {}: {e}", line_no + 1),
                 )
             })?;
-            if entry.version != 1
+            if (entry.version != 1 && entry.version != 2)
                 || entry.message.identity.account_id != account_id
                 || entry.message.message_id <= 0
             {
@@ -123,13 +123,21 @@ impl MessageStore {
                     ),
                 ));
             }
-            if store.by_id.contains_key(&entry.message.message_id)
-                || store.by_identity.contains_key(&entry.message.identity)
+            let prior_id = store.by_identity.get(&entry.message.identity).copied();
+            let prior_message = store.by_id.get(&entry.message.message_id);
+            let is_revision = entry.version == 2
+                && prior_id == Some(entry.message.message_id)
+                && prior_message.is_some();
+            if (entry.version != 1 && entry.version != 2)
+                || (entry.version == 1
+                    && (store.by_id.contains_key(&entry.message.message_id)
+                        || prior_id.is_some()))
+                || (entry.version == 2 && !is_revision)
             {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
-                        "message journal line {} duplicates an ID or identity",
+                        "message journal line {} duplicates or conflicts with an ID or identity",
                         line_no + 1
                     ),
                 ));
@@ -213,12 +221,11 @@ impl MessageStore {
         Ok(id)
     }
 
-    /// Persist an incoming event only when the bridge supplied a complete,
-    /// separately verified OneBot projection. Opaque native fields never fill
-    /// numeric OneBot IDs or timestamps.
+    /// Persist a projected message, preserving its ID when an update revises it.
+    /// Opaque native fields never fill numeric OneBot IDs or timestamps.
     pub fn insert_event(&mut self, event: &MsgEvent) -> Result<Option<i32>, String> {
-        if event.source == EventSource::Update {
-            return Ok(None);
+        if event.onebot_projection.is_none() && event.wrapper_message.is_some() {
+            return self.insert_wrapper_event(event);
         }
         let Some(projection) = event.onebot_projection.as_ref() else {
             return Ok(None);
@@ -254,15 +261,136 @@ impl MessageStore {
         if let Some(nickname) = projection.sender_nickname.as_ref() {
             sender.insert("nickname".into(), Value::String(nickname.clone()));
         }
-        self.insert_confirmed(
-            identity,
-            projection.real_id,
-            Value::Object(sender),
-            Value::String(event.text.clone()),
-            projection.time,
-            None,
-        )
-        .map(Some)
+        if event.source != EventSource::Update {
+            return self
+                .insert_confirmed(
+                    identity,
+                    projection.real_id,
+                    Value::Object(sender),
+                    Value::String(event.text.clone()),
+                    projection.time,
+                    None,
+                )
+                .map(Some);
+        }
+        let Some(id) = self.by_identity.get(&identity).copied() else {
+            return Ok(None);
+        };
+        let mut message = self
+            .by_id
+            .get(&id)
+            .cloned()
+            .ok_or("message identity index is inconsistent")?;
+        message.real_id = projection.real_id;
+        message.sender = Value::Object(sender);
+        message.message = Value::String(event.text.clone());
+        message.time = projection.time;
+        message.native_seq = None;
+
+        message.message_id = id;
+        if self.by_id.get(&id) != Some(&message) {
+            self.append_entry(2, &message)?;
+            self.by_id.insert(id, message);
+        }
+        Ok(Some(id))
+    }
+
+    fn insert_wrapper_event(&mut self, event: &MsgEvent) -> Result<Option<i32>, String> {
+        let envelope = event.wrapper_message.as_ref().ok_or("wrapper record is missing")?;
+        envelope.validate().map_err(|_| "wrapper record is invalid")?;
+        let record = &envelope.record;
+        let account_id = event
+            .session
+            .account
+            .0
+            .parse::<u64>()
+            .map_err(|_| "wrapper account is not numeric")?;
+        let bound_account = envelope.binding.account.parse::<u64>()
+            .map_err(|_| "wrapper binding account is not numeric")?;
+        let peer_id = record
+            .peer_uin
+            .parse::<u64>()
+            .map_err(|_| "wrapper peer UIN is not numeric")?;
+        let sender_id = record
+            .sender_uin
+            .parse::<u64>()
+            .map_err(|_| "wrapper sender UIN is not numeric")?;
+        let platform_time = record
+            .msg_time
+            .parse::<u64>()
+            .map_err(|_| "wrapper message time is invalid")?;
+        let expected_kind = match event.session.kind {
+            SessionKind::Private if record.chat_type == 1 => ChatType::Private,
+            SessionKind::Group if record.chat_type == 2 => ChatType::Group,
+            _ => return Err("wrapper chat type does not match session".into()),
+        };
+        let text = envelope.text().map_err(|_| "wrapper text is invalid")?;
+        if account_id == 0
+            || account_id != self.account_id
+            || account_id != bound_account
+            || event.session_generation != envelope.binding.session_generation
+            || event.session.peer.0 != record.peer_uin
+            || peer_id == 0
+            || sender_id == 0
+            || event.sender != record.sender_uin
+            || event.native_id.0 != record.msg_id
+            || event.text != text
+            || event.platform_time != Some(platform_time)
+            || event.direction == caligo_model::Direction::SelfSent
+                && record.sender_uin != envelope.binding.account
+        {
+            return Err("wrapper record does not match normalized event".into());
+        }
+        let identity = MessageIdentity {
+            account_id,
+            chat_type: expected_kind,
+            peer_id: peer_id.to_string(),
+            native_id: record.msg_id.clone(),
+        };
+        let mut sender = serde_json::Map::new();
+        sender.insert("user_id".into(), Value::from(sender_id));
+        let body = Value::String(text);
+        let time = i32::try_from(platform_time).map_err(|_| "OneBot message time exceeds int32")?;
+
+        if event.source == EventSource::Update {
+            let Some(id) = self.by_identity.get(&identity).copied() else {
+                return Ok(None);
+            };
+            let mut revised = self
+                .by_id
+                .get(&id)
+                .cloned()
+                .ok_or("message identity index is inconsistent")?;
+            revised.real_id = id;
+            revised.sender = Value::Object(sender);
+            revised.message = body;
+            revised.time = time;
+            if self.by_id.get(&id) != Some(&revised) {
+                self.append_entry(2, &revised)?;
+                self.by_id.insert(id, revised);
+            }
+            return Ok(Some(id));
+        }
+
+        let id = self.next_id;
+        self.insert_confirmed(identity, id, Value::Object(sender), body, time, None)
+            .map(Some)
+    }
+
+    fn append_entry(&self, version: u32, message: &StoredMessage) -> Result<(), String> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        let entry = JournalEntry { version, message: message.clone() };
+        let mut bytes = serde_json::to_vec(&entry).map_err(|e| e.to_string())?;
+        bytes.push(b'\n');
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("open message journal: {e}"))?;
+        file.write_all(&bytes).map_err(|e| format!("append message journal: {e}"))?;
+        file.sync_all().map_err(|e| format!("flush message journal: {e}"))
     }
 
     pub fn get(&self, message_id: i32) -> Option<&StoredMessage> {
@@ -273,6 +401,50 @@ impl MessageStore {
     /// complete native message projection.
     pub fn message_id_for_identity(&self, identity: &MessageIdentity) -> Option<i32> {
         self.by_identity.get(identity).copied()
+    }
+
+    /// Build compatibility fields from a durable wrapper-backed local message ID.
+    /// The font value is a OneBot compatibility default, not a native observation;
+    /// subtype remains absent until an authoritative source is available.
+    pub fn projection_for_event(&self, event: &MsgEvent) -> Option<caligo_model::OneBotMessageProjection> {
+        let envelope = event.wrapper_message.as_ref()?;
+        envelope.validate().ok()?;
+        let account_id = event.session.account.0.parse::<u64>().ok()?;
+        let peer_id = envelope.record.peer_uin.parse::<u64>().ok()?;
+        let sender_user_id = envelope.record.sender_uin.parse::<u64>().ok()?;
+        let chat_type = match event.session.kind {
+            SessionKind::Private if envelope.record.chat_type == 1 => ChatType::Private,
+            SessionKind::Group if envelope.record.chat_type == 2 => ChatType::Group,
+            _ => return None,
+        };
+        let identity = MessageIdentity {
+            account_id,
+            chat_type,
+            peer_id: peer_id.to_string(),
+            native_id: envelope.record.msg_id.clone(),
+        };
+        if account_id != self.account_id
+            || envelope.binding.account.parse::<u64>().ok()? != account_id
+            || event.session_generation != envelope.binding.session_generation
+            || event.session.peer.0 != envelope.record.peer_uin
+            || event.sender != envelope.record.sender_uin
+            || event.native_id.0 != envelope.record.msg_id
+            || event.text != envelope.text().ok()?
+            || event.platform_time != Some(envelope.record.msg_time.parse::<u64>().ok()?)
+        {
+            return None;
+        }
+        let message_id = self.by_identity.get(&identity).copied()?;
+        let stored = self.by_id.get(&message_id)?;
+        Some(caligo_model::OneBotMessageProjection {
+            peer_id,
+            sender_user_id: stored.sender.get("user_id")?.as_u64()?,
+            real_id: message_id,
+            time: stored.time,
+            sender_nickname: stored.sender.get("nickname").and_then(Value::as_str).map(str::to_owned),
+            sub_type: None,
+            font: Some(14),
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -390,6 +562,117 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next, id + 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn update_appends_revision_and_keeps_the_allocated_id_after_reopen() {
+        let path = journal_path();
+        let mut store = MessageStore::open(&path, 100, None).unwrap();
+        let mut initial = MsgEvent {
+            event_seq: 1,
+            session_generation: 1,
+            session: caligo_model::SessionKey::new("100", SessionKind::Group, "g1"),
+            direction: caligo_model::Direction::Incoming,
+            sender: "1001".into(),
+            native_id: caligo_model::NativeMessageId("native-A".into()),
+            text: "sending".into(),
+            platform_time: Some(10),
+            wrapper_message: None,
+            onebot_projection: Some(caligo_model::OneBotMessageProjection {
+                peer_id: 200,
+                sender_user_id: 1001,
+                real_id: 0,
+                time: 10,
+                sender_nickname: None,
+                sub_type: Some("normal".into()),
+                font: Some(14),
+            }),
+            observed_at_unix_ms: 1,
+            source: EventSource::Recv,
+        };
+        let id = store.insert_event(&initial).unwrap().unwrap();
+        initial.source = EventSource::Update;
+        initial.event_seq = 2;
+        initial.text = "sent".into();
+        initial.onebot_projection.as_mut().unwrap().real_id = id;
+        initial.onebot_projection.as_mut().unwrap().time = 11;
+        assert_eq!(store.insert_event(&initial).unwrap(), Some(id));
+        assert_eq!(store.get(id).unwrap().message, Value::String("sent".into()));
+        drop(store);
+
+        let reopened = MessageStore::open(&path, 100, None).unwrap();
+        let message = reopened.get(id).unwrap();
+        assert_eq!(message.real_id, id);
+        assert_eq!(message.message, Value::String("sent".into()));
+        assert_eq!(message.time, 11);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn typed_wrapper_message_gets_durable_local_id_and_updates_in_place() {
+        let path = journal_path();
+        let mut store = MessageStore::open(&path, 10001, None).unwrap();
+        let make_event = |source, text: &str, status| {
+            let element = caligo_model::wrapper_message::WrapperElement {
+                element_type: 1,
+                text_element: Some(caligo_model::wrapper_message::WrapperText {
+                    content: text.into(), at_type: 0, at_uid: String::new(),
+                    at_nt_uid: String::new(), at_tiny_id: String::new(),
+                }),
+            };
+            let mut event = MsgEvent {
+                event_seq: 0,
+                session_generation: 1,
+                session: caligo_model::SessionKey::new("10001", SessionKind::Private, "20002"),
+                direction: caligo_model::Direction::Incoming,
+                sender: "20002".into(),
+                native_id: caligo_model::NativeMessageId("90071992547409931234".into()),
+                text: text.into(),
+                platform_time: Some(1_794_567_890),
+                wrapper_message: None,
+                onebot_projection: None,
+                observed_at_unix_ms: 10,
+                source,
+            };
+            event.wrapper_message = Some(caligo_model::wrapper_message::WrapperMessageEnvelope {
+                binding: caligo_model::wrapper_message::WrapperBinding {
+                    account: "10001".into(), session_generation: 1, host_nonce: 9,
+                    wrapper_session: "nt_fixture".into(),
+                },
+                wrapper_session: "nt_fixture".into(),
+                source: if source == EventSource::Update {
+                    caligo_model::wrapper_message::WrapperSource::Update
+                } else {
+                    caligo_model::wrapper_message::WrapperSource::Recv
+                },
+                observed_at_unix_ms: 10,
+                record: caligo_model::wrapper_message::WrapperMessage {
+                    msg_id: "90071992547409931234".into(), msg_seq: "1".into(),
+                    msg_random: "2".into(), msg_time: "1794567890".into(),
+                    client_seq: None, guild_id: String::new(), chat_type: 1, msg_type: 2,
+                    sub_msg_type: 0, peer_uid: "u_friend".into(), peer_uin: "20002".into(),
+                    sender_uid: "u_friend".into(), sender_uin: "20002".into(),
+                    send_status: status, elements: vec![element],
+                },
+            });
+            event
+        };
+
+        let first = make_event(EventSource::Recv, "sending", Some(1));
+        let id = store.insert_event(&first).unwrap().unwrap();
+        let before = store.projection_for_event(&first).unwrap();
+        assert_eq!(before.real_id, id);
+        assert_eq!(before.font, Some(14));
+        assert_eq!(before.sub_type, None);
+
+        let update = make_event(EventSource::Update, "sent", Some(2));
+        assert_eq!(store.insert_event(&update).unwrap(), Some(id));
+        assert_eq!(store.get(id).unwrap().message, Value::String("sent".into()));
+        drop(store);
+        let reopened = MessageStore::open(&path, 10001, None).unwrap();
+        assert_eq!(reopened.get(id).unwrap().message, Value::String("sent".into()));
+        assert_eq!(reopened.projection_for_event(&update).unwrap().real_id, id);
         let _ = std::fs::remove_file(path);
     }
 
