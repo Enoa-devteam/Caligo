@@ -25,6 +25,14 @@
 
 `SNOWCAT_REFERENCE=E:/stella/Snowcat/Napcat-Snowluma-research node --test scripts/extract-snowcat-capabilities.test.mjs`：6/6 PASS，含全部引用哈希/行号和逐字节再生。未设置该环境变量时为 5 PASS / 1 SKIP，不能把跳过的固定参考检查计为通过。独立完整输出在 ignored `local-evidence/snowcat-inventory-pinned-tests-20261113.log`。
 
+## A0：Caligo 实现映射
+
+[逐项映射](../contracts/caligo-snowcat-capability-map.json) 与固定参考 inventory 分离；共 5,711 条 reference ID、16 类。每条通过共用 assessment 解析实现位置、正常入口、权限、backend 依赖、版本和验收层级，支持人工复核，不以名称相近映射实现。
+
+[覆盖检查器](../../scripts/check-snowcat-coverage.mjs) 实际运行 [Rust registry 导出](../../crates/caligo-core/examples/dump_onebot_registry.rs)，核对名称、alias、schema、语义哈希和全分母。基础 206 项中 199 missing、3 partial（群/inferred 文本与未绑定的登录资料）、1 私聊 backend blocked、3 wired offline（本地 get_msg、actor status、version）。412 个参考 alias 中 409 missing、2 partial、1 blocked。wired offline 仍不表示 native 查询或真实 QQ 通过，尤其 get_msg 的 native 投影未闭合。
+
+`node scripts/check-snowcat-coverage.mjs` 与 `COVERAGE_RUN_RUST=1 node --test scripts/check-snowcat-coverage.test.mjs`：当前源码 Rust 导出及 12/12 测试 PASS，无跳过；含漏项、重复、分母/registry 漂移与虚假能力提升拒绝。registry 为 7 基础名/3 async alias，语义 SHA-256 `514bfbbb74f41ce2c5638bd583c1183854cc177f2d0b3d8f65db4c53f04cac02`。参考 inventory SHA-256 维持 `89de4711e2577f5531ba38b282bc47dea38c5a4ed0da4d416867c320fc45bc25`。全清单 native/field 已验收均为 0。
+
 ## 共享入口与主线整合
 
 - `ef238e1`：保存计划、ProfileService research 基线及异常/持有修复。
