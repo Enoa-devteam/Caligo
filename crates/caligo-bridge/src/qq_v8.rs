@@ -420,7 +420,7 @@ pub const D8_START_JS: &str = r"
             (m.sendStatus !== undefined && !Number.isInteger(m.sendStatus))) { R.rejected++; return; }
         // The unverified self-sent callback only feeds D9 correlation.
         if (!verifiedVoice && (src === 'add_send' || src === 'update') && voiceAccount &&
-            m.chatType === 1 && m.senderUin === voiceAccount &&
+            m.senderUin === voiceAccount &&
             m.elements.length === 1 && m.elements[0] && m.elements[0].elementType === 4) {
           correlateSend(R, m, src);
           return;
@@ -1540,9 +1540,10 @@ for (const name of ['getUidByUin', 'getUinByUid']) {
     }
 }
 
-/// D9 private voice submission consumes owned bytes. Its caller must use the exact
+/// D9 voice submission consumes owned bytes. Its caller must use the exact
 /// profile gate when arming the listener and the durable send path for dispatch.
 pub fn build_voice_send_js(
+    chat_type: u32,
     account: &str,
     peer_uin: &str,
     request_id: &str,
@@ -1559,7 +1560,7 @@ pub fn build_voice_send_js(
         write!(hex, "{byte:02x}").expect("writing to String is infallible");
     }
     let args = serde_json::json!({
-        "account": account, "peerUin": peer_uin, "requestId": request_id,
+        "chatType": chat_type, "account": account, "peerUin": peer_uin, "requestId": request_id,
         "wireSeq": wire_seq, "timeoutMs": timeout_ms, "silk": hex
     });
     Some(format!("({})({args})", include_str!("qq_voice_send.js")))

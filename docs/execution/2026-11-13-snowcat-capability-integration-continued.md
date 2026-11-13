@@ -131,3 +131,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 固定参考 `7cf025f` 的 `packages/snowcat-core/apis/file.ts` 将会话类型、peer、消息 ID 和元素 ID 传给同一 `downloadRichMedia` 方法。Caligo 在同一精确模块 profile 接入群语音入账与 OneBot 群消息事件，并由 `ExactVoiceDownload` 读取群入站和已发送私聊语音。新请求从持久记录获取发送者 UIN 与会话类型，宿主回读须匹配发送者、会话、消息和元素。已发送语音须处于成功状态。完成回调仍绑定独立文件路径和会话类型，保留大小与 MD5 校验。已有私聊入站语音继续使用原 IPC 类型。
 
 固定参考现场矩阵覆盖的是群文本和私聊语音。群语音和已发送语音的新下载路径使用合成宿主与真实命名管道验证，实际 QQ 回调和资源寿命待 B2 核对。
+
+## A2 OneBot 群语音发送
+
+固定参考 `7cf025f` 的 `action/msg/SendMsg.ts` 将 `group_id` 映射为普通群会话，`api/file.ts` 构造 PTT 元素，`snowcat-core/apis/msg.ts` 用同一 `sendMsg` 提交并关联终态更新。Caligo 沿用私聊语音的内容指纹、宿主缓存校验、持久请求和精确回读。群语音独立声明能力，使用 `DispatchGroupVoice`，目标为十进制群号，跳过私聊 UID 查询。群发送成功需同群的终态记录入库；已发送群语音沿用精确下载。
+
+离线夹具覆盖群与私聊能力独立、跨会话同 native ID、错误会话回调、精确投影及旧文本路径。串行 `init.ps1 -Mode all` 通过，命名管道动作回归 4/4，wrapper 发送和查询回归 7/7，真实 Rust registry 覆盖检查 12/12。实际群语音投递、下载和宿主缓存寿命仍待 QQ 现场验收。

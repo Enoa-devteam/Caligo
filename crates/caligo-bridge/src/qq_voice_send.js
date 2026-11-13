@@ -4,7 +4,9 @@ function (args) {
   const R = globalThis.__caligo_res;
   if (!R || R.stopped || !/^[1-9][0-9]{0,19}$/.test(args.account) || R.voiceAccount !== args.account)
     return failure('voice_profile_unavailable');
-  if (!/^[1-9][0-9]{0,19}$/.test(args.peerUin) || args.peerUin === args.account ||
+  const chatType = args.chatType;
+  if ((chatType !== 1 && chatType !== 2) ||
+      !/^[1-9][0-9]{0,19}$/.test(args.peerUin) || (chatType === 1 && args.peerUin === args.account) ||
       !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(args.requestId) ||
       !Number.isInteger(args.wireSeq) || args.wireSeq <= 0 ||
       !Number.isInteger(args.timeoutMs) || args.timeoutMs <= 0)
@@ -19,15 +21,18 @@ function (args) {
     const fs = process.getBuiltinModule('node:fs');
     const path = process.getBuiltinModule('node:path');
     const crypto = process.getBuiltinModule('node:crypto');
-    const profile = R.session.getProfileService();
-    const mapped = profile.getUidByUin('FriendsServiceImpl', [args.peerUin]);
-    peerUid = mapped instanceof Map && Map.prototype.get.call(mapped, args.peerUin);
-    if (typeof peerUid !== 'string' || !/^u_[A-Za-z0-9_-]{1,128}$/.test(peerUid))
-      return failure('private_uid_mapping_unavailable');
+    peerUid = args.peerUin;
+    if (chatType === 1) {
+      const profile = R.session.getProfileService();
+      const mapped = profile.getUidByUin('FriendsServiceImpl', [args.peerUin]);
+      peerUid = mapped instanceof Map && Map.prototype.get.call(mapped, args.peerUin);
+      if (typeof peerUid !== 'string' || !/^u_[A-Za-z0-9_-]{1,128}$/.test(peerUid))
+        return failure('private_uid_mapping_unavailable');
+    }
     const serverTime = R.session.getMSFService().getServerTime();
     if (typeof serverTime !== 'string' || !serverTime || serverTime === '0')
       return failure('server_time_unavailable');
-    cookie = R.ms.generateMsgUniqueId(1, serverTime);
+    cookie = R.ms.generateMsgUniqueId(chatType, serverTime);
     if (typeof cookie !== 'string' || !cookie || cookie === '0' ||
         Object.values(R.sends).some(send => send.cookie === cookie))
       return failure('invalid_cookie');
@@ -90,7 +95,7 @@ function (args) {
   if (R.stopped || Date.now() >= deadline) return failure('voice_preparation_expired');
 
   const key = args.requestId;
-  const pending = {cookie, chat:1, peer:peerUid, peerUin:args.peerUin, voice, selfUin:args.account,
+  const pending = {cookie, chat:chatType, peer:peerUid, peerUin:args.peerUin, voice, selfUin:args.account,
     wireSeq:args.wireSeq, deadline, addId:null, updateId:null, done:false};
   R.sends[key] = pending;
   R.sendResults[key] = {status:'pending'};
@@ -107,7 +112,7 @@ function (args) {
   }
   const unknown = () => result('unknown', {status:'unknown', reason:'voice_submit_unknown'});
   try {
-    const promise = R.ms.sendMsg('0', {chatType:1, peerUid, guildId:cookie}, [element], new Map());
+    const promise = R.ms.sendMsg('0', {chatType, peerUid, guildId:cookie}, [element], new Map());
     Promise.resolve(promise).then(value => {
       if (value && value.result === 0) {
         result('accepted', {status:'accepted'});

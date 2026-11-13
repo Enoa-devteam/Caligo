@@ -92,6 +92,7 @@ fn advertise(bridge: &mut BridgeClient, scope: QueryScope, private_voice: bool) 
             private_text: true,
             group_text: true,
             private_voice,
+            group_voice: false,
         })
         .unwrap();
     bridge
@@ -400,4 +401,75 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
         assert_eq!(response.retcode, 0);
         assert_eq!(response.data["base64"], STANDARD.encode(silk));
     }
+}
+
+#[test]
+fn group_record_requires_group_capability_and_exact_group_projection() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.connect();
+    let handler = action_handler(lab.daemon.clone());
+    let silk = b"\x02#!SILK_V3\x01\x00\x42";
+    let message = json!([{"type":"record","data":{"file":format!("base64://{}",STANDARD.encode(silk))}}]);
+    let params = json!({"group_id":30003, "message":message});
+    advertise(&mut bridge, scope.clone(), true);
+    assert_eq!(handler("send_group_msg", &params, Value::Null).retcode, RET_UNSUPPORTED);
+    bridge.send(&BridgeMsg::SendCapabilities {
+        scope: scope.clone(), private_text: false, group_text: false, private_voice: false, group_voice: true,
+    }).unwrap();
+    bridge.send(&BridgeMsg::Health { ingress_pending: 0, native_ops_total: 0 }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}));
+    assert_eq!(handler("send_private_msg", &json!({"user_id":30003,"message":message}), Value::Null).retcode, RET_UNSUPPORTED);
+
+    let call = handler.clone();
+    let task = std::thread::spawn(move || call("send_group_msg", &params, json!("group")));
+    let CoreToBridgeMsg::DispatchGroupVoice { request_id, scope: actual, group_id, silk: audio, .. } =
+        bridge.recv().unwrap() else { panic!("expected group voice dispatch") };
+    assert_eq!(actual, scope);
+    assert_eq!(group_id, "30003");
+    assert_eq!(audio, silk);
+    let native_id = "90071992547409931234";
+    bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
+    bridge.send(&BridgeMsg::SendResult {
+        request_id, outcome: OutcomePayload::Success { native_id: native_id.into() },
+    }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { terminal: true, .. }));
+
+    let mut readback = event(native_id);
+    readback.text.clear();
+    let wrapper = readback.wrapper_message.as_mut().unwrap();
+    wrapper.record.elements = vec![WrapperElement {
+        element_type: 4, text_element: None, voice: Some(WrapperVoice {
+            element_id: "90071992547409931235".into(), size: silk.len() as u32,
+            md5: "0123456789abcdef0123456789abcdef".into(),
+        }),
+    }];
+    bridge.send(&BridgeMsg::Event { event: readback.clone() }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
+    assert!(!task.is_finished(), "the same native ID in a private conversation cannot satisfy a group send");
+
+    readback.event_seq = 2;
+    readback.session = json!({"account":"10001","kind":"group","peer":"30003"});
+    let wrapper = readback.wrapper_message.as_mut().unwrap();
+    wrapper.record.chat_type = 2;
+    wrapper.record.peer_uid = "30003".into();
+    wrapper.record.peer_uin = "30003".into();
+    bridge.send(&BridgeMsg::Event { event: readback }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
+    let result = task.join().unwrap();
+    assert_eq!(result.retcode, 0);
+    assert_eq!(result.echo, "group");
+    let read = handler("get_msg", &json!({"message_id":result.data["message_id"]}), Value::Null);
+    assert_eq!(read.data["message_type"], "group");
+    assert_eq!(read.data["message"][0]["type"], "record");
+    let file = read.data["message"][0]["data"]["file"].as_str().unwrap();
+    let (_, query) = lab.daemon.voice_record(file).unwrap();
+    assert_eq!(query, HostQuery::ExactVoiceDownload {
+        chat_type: 2,
+        peer_uid: "30003".into(),
+        sender_uin: "10001".into(),
+        message_id: native_id.into(),
+        element_id: "90071992547409931235".into(),
+    });
 }

@@ -145,8 +145,8 @@ impl ActionInputSchema {
                 }}
             ]
         });
-        if matches!(self, Self::PrivateMessage | Self::Message) {
-            message["description"] = Value::from("Literal text, text segments, or one private record segment containing Tencent SILK v3 Base64");
+        if matches!(self, Self::GroupMessage | Self::PrivateMessage | Self::Message) {
+            message["description"] = Value::from("Literal text, text segments, or one record segment containing Tencent SILK v3 Base64");
             message["anyOf"].as_array_mut().unwrap().push(serde_json::json!({
                 "type":"array", "minItems":1, "maxItems":1, "items":{
                     "type":"object", "required":["type","data"],
@@ -468,9 +468,6 @@ fn send_payload(
     };
     if let Some([item]) = params.get("message").and_then(Value::as_array).map(Vec::as_slice) {
         if item.get("type").and_then(Value::as_str) == Some("record") {
-            let SendTarget::Private { user_id } = target else {
-                return ActionResponse::failed(RET_UNSUPPORTED, "当前语音发送仅支持私聊", echo);
-            };
             let Some(silk) = item.get("data").and_then(|data| data.get("file"))
                 .and_then(Value::as_str).and_then(|file| file.strip_prefix("base64://"))
                 .filter(|encoded| encoded.len() <= 4 * caligo_model::voice::MAX_SEND_BYTES.div_ceil(3))
@@ -479,10 +476,12 @@ fn send_payload(
             else {
                 return ActionResponse::failed(RET_BAD_PARAMS, "语音 file 须为有界的腾讯 SILK v3 Base64", echo);
             };
-            if user_id == 0 {
-                return ActionResponse::failed(RET_BAD_PARAMS, "语音 user_id 须为正整数", echo);
-            }
-            return dispatch_send(echo, sink.send_private_voice(user_id, silk), allow_async);
+            let outcome = match target {
+                SendTarget::Private { user_id } if user_id > 0 => sink.send_private_voice(user_id, silk),
+                SendTarget::Group { group_id } if group_id > 0 => sink.send_group_voice(group_id, silk),
+                _ => return ActionResponse::failed(RET_BAD_PARAMS, "语音目标须为正整数", echo),
+            };
+            return dispatch_send(echo, outcome, allow_async);
         }
     }
     let text = match get_message_text(params) {

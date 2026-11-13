@@ -34,7 +34,8 @@ fn private_voice_queue_rechecks_scope_deadline_and_deduplicates_before_owner_cal
             match op {
                 HostOp::ListenerAdd => Ok(HostOpResult::ListenerAdded { token: 1 }),
                 HostOp::ListenerRemove { .. } => Ok(HostOpResult::ListenerRemoved),
-                HostOp::SendPrivateVoice { request_id, wire_seq, peer_uin, timeout_ms, silk } => {
+                HostOp::SendVoice { request_id, wire_seq, peer_uin, chat_type, timeout_ms, silk } => {
+                    assert_eq!(chat_type, 1);
                     assert_eq!(wire_seq, 7);
                     assert_eq!(peer_uin, "20002");
                     assert!((1..=5000).contains(&timeout_ms));
@@ -52,9 +53,9 @@ fn private_voice_queue_rechecks_scope_deadline_and_deduplicates_before_owner_cal
     let scope = QueryScope {
         account: "10001".into(), host_nonce: 1, session_generation: 1, connection_epoch: 2,
     };
-    let request = |id: &str, deadline| OwnedRequest::SendPrivateVoice {
+    let request = |id: &str, deadline| OwnedRequest::SendVoice {
         request_id: id.into(), wire_seq: 7, deadline, scope: scope.clone(),
-        peer_uin: "20002".into(), silk: b"\x02#!SILK_V3\x01\x00\x42".to_vec(),
+        peer_uin: "20002".into(), chat_type: 1, silk: b"\x02#!SILK_V3\x01\x00\x42".to_vec(),
     };
     let deadline = Instant::now() + Duration::from_secs(5);
     resident.set_bridge_scope(Some(scope.clone()));
@@ -289,7 +290,7 @@ impl HostAdapter for SharedMockHost {
                 inner.listener = None;
                 Ok(HostOpResult::ListenerRemoved)
             }
-            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
+            HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => Ok(HostOpResult::ProbeDone),
             HostOp::SendText { text, .. } if text == "accepted-without-id" => {
                 Ok(HostOpResult::Sent { native_id: None })
@@ -330,7 +331,7 @@ impl HostAdapter for CorrelationHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
-            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
+            HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { request_id, .. } => {
                 *self.pending.lock().unwrap() = Some(request_id);
@@ -382,7 +383,7 @@ impl HostAdapter for LateReceiptHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
-            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
+            HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { .. } => HostOpResult::SendFired {
                 mid: "MID-late".into(),
@@ -1130,7 +1131,7 @@ impl HostAdapter for ReentrantHost {
         use caligo_bridge::host_adapter::HostError;
         let r = self.resident.get().expect("resident slot set");
         match op {
-            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
+            HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
             HostOp::SendText { .. } => {
                 // 重入点 1:token()(core 锁);重入点 2:deliver_callback(core 锁)。
                 let tok = r.token();
@@ -1265,7 +1266,7 @@ fn send_pending_classified_unknown_on_close() {
             Ok(match op {
                 HostOp::ListenerAdd => HostOpResult::ListenerAdded { token: 1 },
                 HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
-                HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
+                HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
                 HostOp::Probe => HostOpResult::ProbeDone,
                 HostOp::SendText { .. } => HostOpResult::SendFired {
                     mid: "MID-1".into(),

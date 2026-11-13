@@ -26,6 +26,7 @@ struct State {
     send_private_text: bool,
     send_group_text: bool,
     send_private_voice: bool,
+    send_group_voice: bool,
     pending: HashMap<String, Pending>,
     stale_results: u64,
 }
@@ -52,6 +53,7 @@ impl CapabilityBroker {
         state.send_private_text = false;
         state.send_group_text = false;
         state.send_private_voice = false;
+        state.send_group_voice = false;
     }
 
     pub(crate) fn bind(&self, scope: QueryScope) {
@@ -62,6 +64,7 @@ impl CapabilityBroker {
             state.send_private_text = false;
             state.send_group_text = false;
             state.send_private_voice = false;
+            state.send_group_voice = false;
         }
     }
 
@@ -72,6 +75,7 @@ impl CapabilityBroker {
         private_text: bool,
         group_text: bool,
         private_voice: bool,
+        group_voice: bool,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
         if epoch != state.epoch || state.scope.as_ref() != Some(scope) || scope.validate().is_err()
@@ -81,6 +85,7 @@ impl CapabilityBroker {
         state.send_private_text = private_text;
         state.send_group_text = group_text;
         state.send_private_voice = private_voice;
+        state.send_group_voice = group_voice;
         true
     }
 
@@ -92,6 +97,11 @@ impl CapabilityBroker {
     pub(crate) fn supports_private_voice(&self, scope: &QueryScope) -> bool {
         let state = self.state.lock().unwrap();
         state.scope.as_ref() == Some(scope) && state.send_private_voice
+    }
+
+    pub(crate) fn supports_group_voice(&self, scope: &QueryScope) -> bool {
+        let state = self.state.lock().unwrap();
+        state.scope.as_ref() == Some(scope) && state.send_group_voice
     }
 
     pub(crate) fn advertise(
@@ -242,6 +252,7 @@ impl CapabilityBroker {
             state.send_private_text = false;
             state.send_group_text = false;
             state.send_private_voice = false;
+            state.send_group_voice = false;
             Self::drain(&mut state);
         }
     }

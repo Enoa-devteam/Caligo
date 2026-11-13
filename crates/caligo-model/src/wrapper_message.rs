@@ -203,10 +203,13 @@ impl WrapperMessageEnvelope {
                         2 => self.record.peer_uid == self.record.peer_uin,
                         _ => false,
                     },
-                WrapperSource::AddSend => self.record.chat_type == 1
-                    && self.record.sender_uin == self.binding.account
-                    && self.record.peer_uin != self.binding.account
-                    && self.record.send_status == Some(2),
+                WrapperSource::AddSend => self.record.sender_uin == self.binding.account
+                    && self.record.send_status == Some(2)
+                    && match self.record.chat_type {
+                        1 => self.record.peer_uin != self.binding.account,
+                        2 => self.record.peer_uid == self.record.peer_uin,
+                        _ => false,
+                    },
                 WrapperSource::Update => false,
             }
             && voice.is_valid())

@@ -152,6 +152,18 @@ impl SendSink for DaemonSendSink {
         let request_id = self.daemon.submit_private_voice(&peer, silk, SEND_DEADLINE_MS)?;
         self.wait_for_receipt(&request_id, &target)
     }
+
+    fn send_group_voice(&mut self, group_id: u64, silk: Vec<u8>) -> Result<SendDisposition, String> {
+        if !self.daemon.supports_group_voice() {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的群语音发送能力".into(),
+            });
+        }
+        let peer = group_id.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, SessionKind::Group, &peer);
+        let request_id = self.daemon.submit_voice(SessionKind::Group, &peer, silk, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
+    }
 }
 
 /// Blocking normal-build listener. The bind address is chosen and validated

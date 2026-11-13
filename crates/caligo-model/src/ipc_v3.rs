@@ -61,6 +61,14 @@ pub enum CoreToBridgeMsg {
         peer_uin: String,
         silk: Vec<u8>,
     },
+    DispatchGroupVoice {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        group_id: String,
+        silk: Vec<u8>,
+    },
     Query {
         request_id: String,
         scope: QueryScope,
@@ -131,6 +139,8 @@ pub enum BridgeMsg {
         group_text: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         private_voice: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        group_voice: bool,
     },
     QueryResult {
         request_id: String,
@@ -244,12 +254,22 @@ mod tests {
             private_text: true,
             group_text: false,
             private_voice: false,
+            group_voice: false,
         };
         assert_eq!(
             serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&send_capabilities).unwrap())
                 .unwrap(),
             send_capabilities
         );
+        let legacy = serde_json::to_value(&send_capabilities).unwrap();
+        assert!(legacy["d"].get("group_voice").is_none());
+        assert!(legacy["d"].get("private_voice").is_none());
+        let mut group = legacy;
+        group["d"]["group_voice"] = serde_json::json!(true);
+        assert!(matches!(
+            serde_json::from_value::<BridgeMsg>(group).unwrap(),
+            BridgeMsg::SendCapabilities { group_voice: true, private_voice: false, .. }
+        ));
         let result = BridgeMsg::QueryResult {
             request_id: "query-lab".into(),
             scope,

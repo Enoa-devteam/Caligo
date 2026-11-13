@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-13 A2 语音读取：群入站语音已接入持久 ID 与共享事件。群入站及已发送私聊语音的 `get_record` 使用独立声明的精确下载能力，已验证发送者、群和回调类型不匹配的拒绝路径。真实 QQ 验收待 B2。[群语音接收与已发送语音读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群语音接收与已发送语音读取)
+2026-11-13 A2 群语音：`746f654` 接通群入站和已发送私聊语音读取。群语音发送已接入独立 scoped 能力、持久派发与精确群消息回读，读写均有离线合同。真实 QQ 验收待 B2。[OneBot 群语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-群语音发送)
 
 2026-11-13 A2 语音发送：`79a53bd` 完成合成宿主合同，`60d703c` 接通 scoped IPC、持久请求和 owner 调度。共享 OneBot 接受单段私聊腾讯 SILK v3 Base64，精确回读入库后返回可供 `get_msg` 查询的 ID。真实 QQ、宿主缓存寿命和已发送语音下载待验证。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
 

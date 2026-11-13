@@ -39,6 +39,11 @@ pub trait SendSink {
             reason: "当前宿主未支持私聊语音发送".into(),
         })
     }
+    fn send_group_voice(&mut self, _group_id: u64, _silk: Vec<u8>) -> Result<SendDisposition, String> {
+        Ok(SendDisposition::Unsupported {
+            reason: "当前宿主未支持群语音发送".into(),
+        })
+    }
 }
 
 /// Complete message fields required by OneBot get_msg.

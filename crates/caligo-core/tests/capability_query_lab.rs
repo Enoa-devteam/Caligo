@@ -162,6 +162,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             private_text: true,
             group_text: true,
             private_voice: false,
+            group_voice: false,
         })
         .unwrap();
     bridge
@@ -182,6 +183,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             private_text: true,
             group_text: false,
             private_voice: false,
+            group_voice: false,
         })
         .unwrap();
     bridge
@@ -212,7 +214,7 @@ fn private_voice_dispatch_requires_current_advertisement_and_is_never_replayed()
     assert!(submit().is_err());
     let advertise_voice = |bridge: &mut BridgeClient, scope: QueryScope| {
         bridge.send(&BridgeMsg::SendCapabilities {
-            scope, private_text: false, group_text: false, private_voice: true,
+            scope, private_text: false, group_text: false, private_voice: true, group_voice: false,
         }).unwrap();
         bridge.send(&BridgeMsg::Health { ingress_pending: 0, native_ops_total: 0 }).unwrap();
         assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}));

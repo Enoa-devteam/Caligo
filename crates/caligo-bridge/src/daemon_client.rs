@@ -863,6 +863,7 @@ fn capability_messages<A: crate::host_adapter::HostAdapter>(
             private_text,
             group_text,
             private_voice: resident.supports_private_voice(),
+            group_voice: resident.supports_group_voice(),
         },
     ]
 }
@@ -1138,23 +1139,28 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                 }
                 heartbeat_misses = 0;
             }
-            Ok(CoreToBridgeMsg::DispatchPrivateVoice {
-                scope, request_id, wire_seq, timeout_ms, peer_uin, silk,
-            }) => {
+            Ok(message @ (CoreToBridgeMsg::DispatchPrivateVoice { .. } | CoreToBridgeMsg::DispatchGroupVoice { .. })) => {
                 c.dispatches += 1;
+                let (chat_type, scope, request_id, wire_seq, timeout_ms, peer_uin, silk, supported) = match message {
+                    CoreToBridgeMsg::DispatchPrivateVoice { scope, request_id, wire_seq, timeout_ms, peer_uin, silk } =>
+                        (1, scope, request_id, wire_seq, timeout_ms, peer_uin, silk, resident.supports_private_voice()),
+                    CoreToBridgeMsg::DispatchGroupVoice { scope, request_id, wire_seq, timeout_ms, group_id, silk } =>
+                        (2, scope, request_id, wire_seq, timeout_ms, group_id, silk, resident.supports_group_voice()),
+                    _ => unreachable!(),
+                };
                 let valid = scope == query_scope && wire_seq > 0 && (1..=30_000).contains(&timeout_ms)
                     && caligo_model::capability::positive_decimal(&peer_uin)
-                    && peer_uin != cfg.account
+                    && (chat_type == 2 || peer_uin != cfg.account)
                     && caligo_model::voice::validate_short_tencent_silk(&silk)
-                    && resident.supports_private_voice();
-                if valid && resident.submit(crate::resident::OwnedRequest::SendPrivateVoice {
-                    request_id: request_id.clone(), wire_seq, scope, peer_uin, silk,
+                    && supported;
+                if valid && resident.submit(crate::resident::OwnedRequest::SendVoice {
+                    request_id: request_id.clone(), wire_seq, scope, peer_uin, chat_type, silk,
                     deadline: Instant::now() + Duration::from_millis(timeout_ms),
                 }) == crate::resident::SubmitVerdict::Accepted {
                     wake();
                 } else if send_json(conn, &BridgeMsg::SendResult {
                     request_id,
-                    outcome: OutcomePayload::Failure { reason: "private voice dispatch rejected before submission".into() },
+                    outcome: OutcomePayload::Failure { reason: "voice dispatch rejected before submission".into() },
                 }).is_err() {
                     return SessionEnd::Broken;
                 }
@@ -1424,7 +1430,7 @@ mod tests {
             );
             let [
                 BridgeMsg::QueryCapabilities { revision, scope: query_scope, capabilities },
-                BridgeMsg::SendCapabilities { scope: send_scope, private_text, group_text, private_voice: false },
+                BridgeMsg::SendCapabilities { scope: send_scope, private_text, group_text, private_voice: false, group_voice: false },
             ] = capability_messages(&resident, &expected_scope) else {
                 panic!("query and send capability announcements missing");
             };

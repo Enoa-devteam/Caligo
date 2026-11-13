@@ -33,11 +33,12 @@ pub enum HostOp {
         peer_uid: String,
         text: String,
     },
-    SendPrivateVoice {
+    SendVoice {
         request_id: String,
         wire_seq: u32,
         timeout_ms: u64,
         peer_uin: String,
+        chat_type: u32,
         silk: Vec<u8>,
     },
 }
@@ -113,6 +114,9 @@ pub trait HostAdapter {
         (false, false)
     }
     fn supports_private_voice(&self) -> bool {
+        false
+    }
+    fn supports_group_voice(&self) -> bool {
         false
     }
     /// Cancel a pending wrapper query on the owner thread.

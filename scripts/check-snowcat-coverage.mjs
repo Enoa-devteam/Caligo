@@ -156,21 +156,21 @@ export function initialProfiles() {
     [{ name: 'Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds', state: 'partial_offline', evidence: [src(MEDIA, 'pub fn verify_tools('), src(MEDIA, 'impl MediaProcessRunner for OsProcessRunner')] }],
     [src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS'), src('crates/caligo-core/tests/media_tool_lab.rs', '#[test]')],
     'No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented.');
-  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private and incoming group Silk through a scoped daemon host query.',
+  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private and group Silk through a scoped daemon host query.',
     [src(QUERY, 'function startVoiceDownload('), src('crates/caligo-bridge/src/qq_v8.rs', 'onRichMediaDownloadComplete:')],
     [src(DAEMON, 'pub fn query_host('), src(RESIDENT, 'pub fn drain_queries(&self)')],
     { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
     [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startVoiceDownload(')] }],
     [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()')],
-    'Private and incoming group Silk only. Caligo QQ field acceptance remains open.');
+    'Private and group Silk only. Caligo QQ field acceptance remains open.');
   voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
-  const record = scoped('partial_offline', 'Private record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
+  const record = scoped('partial_offline', 'Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
     [src(ONEBOT, 'fn get_record('), src(ONEBOT, 'fn send_payload('), src(EVENTS, 'voice_file_token('), src('crates/caligo-core/src/media_tool.rs', 'pub fn silk_to_container(')], sharedEntry, actionPermission,
     [...clone(voiceDownload.backend_dependencies),
       { name: 'WAV and OGG conversion through explicitly configured local tools', state: 'offline_only', evidence: [src(SERVER, 'fn voice_media(')] },
-      { name: 'Scoped private voice dispatch and verified native readback', state: 'offline_only', evidence: [src(DAEMON, 'pub fn submit_private_voice('), src('crates/caligo-bridge/src/qq_v8.rs', 'pub fn build_voice_send_js(')] }],
-    [src(LEDGER, 'A2 OneBot 语音读取'), src(LEDGER, 'A2 独立 SILK 转码'), src(LEDGER, 'A2 OneBot 私聊语音发送'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn private_record_waits_for_exact_readback_to_be_persisted()')],
-    'Only short private Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. Group voice send and QQ field acceptance remain open.');
+      { name: 'Scoped private and group voice dispatch and verified native readback', state: 'offline_only', evidence: [src(DAEMON, 'pub fn submit_voice('), src('crates/caligo-bridge/src/qq_v8.rs', 'pub fn build_voice_send_js(')] }],
+    [src(LEDGER, 'A2 OneBot 语音读取'), src(LEDGER, 'A2 独立 SILK 转码'), src(LEDGER, 'A2 OneBot 私聊语音发送'), src(LEDGER, 'A2 OneBot 群语音发送'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn private_record_waits_for_exact_readback_to_be_persisted()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn group_record_requires_group_capability_and_exact_group_projection()')],
+    'Only short Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. QQ field acceptance remains open.');
   record.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };

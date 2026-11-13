@@ -5,7 +5,8 @@ fn wrapper_voice_send_requires_bound_account_and_exact_receipts() {
     use std::io::Write;
     let silk = b"\x02#!SILK_V3\x03\x00\x44\x55\x66";
     let quote = |text: &str| serde_json::to_string(text).unwrap();
-    let send = build_voice_send_js("10001", "20002", "voice-7", 42, 5000, silk).unwrap();
+    let send = build_voice_send_js(1, "10001", "20002", "voice-7", 42, 5000, silk).unwrap();
+    let send_group = build_voice_send_js(2, "10001", "30003", "voice-7", 42, 5000, silk).unwrap();
     for malformed in [
         b"#!SILK_V3\x01\x00\x11".as_slice(),
         b"\x02#!SILK_V3".as_slice(),
@@ -13,14 +14,14 @@ fn wrapper_voice_send_requires_bound_account_and_exact_receipts() {
         b"\x02#!SILK_V3\x02\x00\x11".as_slice(),
         b"\x02#!SILK_V3\xff\xff".as_slice(),
     ] {
-        assert!(build_voice_send_js("10001", "20002", "voice-7", 42, 5000, malformed).is_none());
+        assert!(build_voice_send_js(1, "10001", "20002", "voice-7", 42, 5000, malformed).is_none());
     }
     let mut long = b"\x02#!SILK_V3".to_vec();
     long.extend_from_slice(&[1, 0, 0x11].repeat(51));
-    assert!(build_voice_send_js("10001", "20002", "voice-7", 42, 5000, &long).is_none());
+    assert!(build_voice_send_js(1, "10001", "20002", "voice-7", 42, 5000, &long).is_none());
     let script = format!(
-        "const start={}, poll={}, stop={}, send={};\n",
-        quote(D8_START_JS), quote(D8_POLL_JS), quote(D8_STOP_JS), quote(&send),
+        "const start={}, poll={}, stop={}, send={}, sendGroup={};\n",
+        quote(D8_START_JS), quote(D8_POLL_JS), quote(D8_STOP_JS), quote(&send), quote(&send_group),
     ) + r#"
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -33,18 +34,19 @@ const md5 = crypto.createHash('md5').update(bytes).digest('hex');
 const msgId = '90071992547409931237', elementId = '90071992547409931238';
 const caligoVoiceAccount = '10001';
 let listener, submits, reads, storageCalls, settle, mode, dest, now = 1000;
+let chatType=1, peerUid='u_peer', peerUin='20002';
 Date.now = () => now;
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 function record(status, guildId='voice-cookie', fingerprint=md5, id=elementId) {
-  return {msgId,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId,chatType:1,msgType:2,
-    subMsgType:0,peerUid:'u_peer',peerUin:'20002',senderUid:'u_self',senderUin:'10001',
+  return {msgId,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId,chatType,msgType:2,
+    subMsgType:0,peerUid,peerUin,senderUid:'u_self',senderUin:'10001',
     sendStatus:status,elements:[{elementType:4,elementId:id,
       pttElement:{fileSize:String(bytes.length),md5HexStr:fingerprint,filePath:dest}}]};
 }
 const service = {
   addKernelMsgListener(value) { listener=value; return 8; },
   removeKernelMsgListener() { return true; },
-  generateMsgUniqueId(chat,time) { assert.equal(chat,1); assert.equal(time,'qq-time'); return 'voice-cookie'; },
+  generateMsgUniqueId(chat,time) { assert.equal(chat,chatType); assert.equal(time,'qq-time'); return 'voice-cookie'; },
   getRichMediaFilePathForGuild(args) {
     storageCalls++;
     assert.deepEqual(args,{md5HexStr:md5,fileName:md5+'.silk',elementType:4,elementSubType:0,
@@ -55,7 +57,7 @@ const service = {
     submits++;
     assert.equal(globalThis.__caligo_res.sends['voice-7'].wireSeq,42);
     assert.equal(id,'0'); assert.equal(options.size,0);
-    assert.deepEqual(peer,{chatType:1,peerUid:'u_peer',guildId:'voice-cookie'});
+    assert.deepEqual(peer,{chatType,peerUid,guildId:'voice-cookie'});
     assert.equal(element.elementType,4);
     assert.equal(element.pttElement.md5HexStr,md5);
     assert.equal(element.pttElement.fileSize,String(bytes.length));
@@ -74,6 +76,7 @@ const service = {
 const session = {getSessionId:()=>1,getMsgService:()=>service,
   getMSFService:()=>({getServerTime:()=> 'qq-time'}),
   getProfileService:()=>({getUidByUin(source,ids) {
+    assert.equal(chatType,1);
     assert.equal(source,'FriendsServiceImpl'); assert.deepEqual(ids,['20002']);
     return new Map([['20002','u_peer']]);
   }})};
@@ -129,6 +132,18 @@ function notify() {
   assert.deepEqual(outcome(true),{status:'done',msgId});
   assert.equal(submits,1); assert.equal(reads,1);
   assert.deepEqual(fs.readFileSync(dest),bytes);
+
+  setup('group');
+  chatType=2; peerUid=peerUin='30003';
+  assert.equal(JSON.parse(eval(sendGroup)).fired,true);
+  listener.onAddSendMsg({...record(1),chatType:1});
+  listener.onMsgInfoListUpdate([record(2)]);
+  await flush();
+  assert.equal(reads,0);
+  notify(); settle({result:0}); await flush();
+  assert.deepEqual(outcome(true),{status:'done',msgId});
+  assert.equal(submits,1); assert.equal(reads,1);
+  chatType=1; peerUid='u_peer'; peerUin='20002';
 
   setup('bad_readback');
   assert.equal(run().fired,true);

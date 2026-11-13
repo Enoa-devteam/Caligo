@@ -63,12 +63,13 @@ pub enum OwnedRequest {
         peer_uid: String,
         text: String,
     },
-    SendPrivateVoice {
+    SendVoice {
         request_id: String,
         wire_seq: u32,
         deadline: std::time::Instant,
         scope: QueryScope,
         peer_uin: String,
+        chat_type: u32,
         silk: Vec<u8>,
     },
 }
@@ -76,7 +77,7 @@ pub enum OwnedRequest {
 impl OwnedRequest {
     fn send_id(&self) -> Option<&String> {
         match self {
-            Self::SendText { request_id, .. } | Self::SendPrivateVoice { request_id, .. } => {
+            Self::SendText { request_id, .. } | Self::SendVoice { request_id, .. } => {
                 Some(request_id)
             }
             Self::Probe { .. } => None,
@@ -353,6 +354,10 @@ impl<A: HostAdapter> Resident<A> {
         self.adapter.lock().unwrap().supports_private_voice()
     }
 
+    pub fn supports_group_voice(&self) -> bool {
+        self.adapter.lock().unwrap().supports_group_voice()
+    }
+
     pub fn set_bridge_scope(&self, scope: Option<QueryScope>) {
         let _adapter = self.adapter.lock().unwrap();
         self.core.lock().unwrap().bridge_scope = scope;
@@ -526,12 +531,13 @@ impl<A: HostAdapter> Resident<A> {
                         peer_uid: peer_uid.clone(),
                         text: text.clone(),
                     },
-                    OwnedRequest::SendPrivateVoice { request_id, wire_seq, deadline, peer_uin, silk, .. } => {
-                        HostOp::SendPrivateVoice {
+                    OwnedRequest::SendVoice { request_id, wire_seq, deadline, peer_uin, chat_type, silk, .. } => {
+                        HostOp::SendVoice {
                             request_id: request_id.clone(),
                             wire_seq: *wire_seq,
                             timeout_ms: deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u64,
                             peer_uin: peer_uin.clone(),
+                            chat_type: *chat_type,
                             silk: silk.clone(),
                         }
                     }
@@ -558,11 +564,16 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     break;
                 }
-                if let OwnedRequest::SendPrivateVoice { deadline, scope, .. } = &req {
+                if let OwnedRequest::SendVoice { deadline, scope, chat_type, .. } = &req {
                     let core = self.core.lock().unwrap();
                     let current = core.state == ResidentState::Ready && core.bridge_scope.as_ref() == Some(scope);
                     drop(core);
-                    if !current || *deadline <= std::time::Instant::now() || !adapter.supports_private_voice() {
+                    let supported = match chat_type {
+                        1 => adapter.supports_private_voice(),
+                        2 => adapter.supports_group_voice(),
+                        _ => false,
+                    };
+                    if !current || *deadline <= std::time::Instant::now() || !supported {
                         Err(HostError::Native { code: 3 })
                     } else {
                         adapter.native_op(op)

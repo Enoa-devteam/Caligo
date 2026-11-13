@@ -49,9 +49,9 @@ caligo-media --config <absolute-json> silk-ogg --input <absolute-silk> --output-
 
 单账号 `caligod --media-config <absolute-json>` 可加载同一配置。`work_root` 必须是当前用户专用目录，其父目录须已存在。多账号 `caligo-manager` 从各账号私有目录读取可选的 `voice-media.json`，把工作目录固定到该账号的 `media-jobs`。工具配置由本机文件提供。
 
-OneBot `get_record` 接受私聊收发语音和群入站语音的账号限定文件标识。`out_format` 省略时返回原始 Silk，配置 `silk_decoder` 后可选 `wav` 或 `ogg`。下载上限 128 KiB，转码的中间 PCM 与输出各最多 4 MiB，并受更低的本机配置限制。响应给出 Base64、实际字节数和固定文件名。缺配置或不支持的格式返回 1404，工具失败返回 1502，转码超时或停止返回 1501。
+OneBot `get_record` 接受私聊及群聊收发语音的账号限定文件标识。`out_format` 省略时返回原始 Silk，配置 `silk_decoder` 后可选 `wav` 或 `ogg`。下载上限 128 KiB，转码的中间 PCM 与输出各最多 4 MiB，并受更低的本机配置限制。响应给出 Base64、实际字节数和固定文件名。缺配置或不支持的格式返回 1404，工具失败返回 1502，转码超时或停止返回 1501。
 
-绑定会话声明私聊语音发送能力后，`send_private_msg` 或私聊 `send_msg` 可接受单个 `record` 段。将腾讯前缀 SILK v3 编码为 `base64://<数据>` 放入 `data.file`，上限为 128 KiB 和 50 个封装包。成功响应的 `message_id` 可供 `get_msg` 回读。发送未知返回 1501，并保留原请求。群发语音及路径或 URL 输入仍未支持。
+绑定会话声明对应语音发送能力后，`send_private_msg`、`send_group_msg` 或 `send_msg` 可接受单个 `record` 段。将腾讯前缀 SILK v3 编码为 `base64://<数据>` 放入 `data.file`，上限为 128 KiB 和 50 个封装包。成功响应的 `message_id` 可供 `get_msg` 回读。发送未知返回 1501，并保留原请求。路径或 URL 输入仍未支持。
 
 ## 验收边界
 
