@@ -38,6 +38,8 @@ pub struct WrapperElement {
     pub text_element: Option<WrapperText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<WrapperVoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::capability::ImageInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,7 +151,7 @@ impl WrapperMessageEnvelope {
         if self.source == WrapperSource::AddSend && r.sender_uin != self.binding.account {
             return Err("add_send_identity");
         }
-        if self.voice().is_none() {
+        if self.voice().is_none() && self.image().is_none() {
             self.text()?;
         }
         if serde_json::to_vec(r).map_err(|_| "record_encoding")?.len() > MAX_RECORD_BYTES {
@@ -169,6 +171,7 @@ impl WrapperMessageEnvelope {
             };
             if element.element_type != 1
                 || element.voice.is_some()
+                || element.image.is_some()
                 || t.at_type != 0
                 || !t.at_uid.is_empty()
                 || !t.at_nt_uid.is_empty()
@@ -195,6 +198,7 @@ impl WrapperMessageEnvelope {
         let voice = element.voice.as_ref()?;
         (element.element_type == 4
             && element.text_element.is_none()
+            && element.image.is_none()
             && match self.source {
                 WrapperSource::Recv => self.record.sender_uin != self.binding.account
                     && match self.record.chat_type {
@@ -214,6 +218,26 @@ impl WrapperMessageEnvelope {
             }
             && voice.is_valid())
         .then_some(voice)
+    }
+
+    /// Ordinary single PNG from the current incoming D8 conversation.
+    pub fn image(&self) -> Option<&crate::capability::ImageInfo> {
+        use crate::capability::{HostQuery, QueryData, QueryScope};
+        let [element] = self.record.elements.as_slice() else { return None; };
+        let info = element.image.as_ref()?;
+        if element.element_type != 2 || element.text_element.is_some() || element.voice.is_some()
+            || self.source != WrapperSource::Recv || self.record.sender_uin == self.binding.account
+            || (self.record.chat_type == 1 && (self.record.sender_uid != self.record.peer_uid
+                || self.record.sender_uin != self.record.peer_uin)) { return None; }
+        let query = HostQuery::ImageInfo {
+            chat_type:self.record.chat_type, peer_uid:self.record.peer_uid.clone(),
+            sender_uin:self.record.sender_uin.clone(), message_id:self.record.msg_id.clone(),
+            element_id:info.element_id.clone(),
+        };
+        let scope = QueryScope { account:self.binding.account.clone(), host_nonce:self.binding.host_nonce,
+            session_generation:self.binding.session_generation, connection_epoch:1 };
+        QueryData::ImageInfo(info.clone()).validate_for(&query, &scope).ok()?;
+        Some(info)
     }
 
     pub fn platform_time_seconds(&self) -> Option<u64> {

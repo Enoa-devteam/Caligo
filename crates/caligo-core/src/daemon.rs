@@ -1323,6 +1323,10 @@ impl Daemon {
 }
 
 impl StoreReader for Daemon {
+    fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+        self.actor.lock().ok()?.image_info(file)
+    }
+
     fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
         self.actor.lock().ok()?.voice_info(file)
     }

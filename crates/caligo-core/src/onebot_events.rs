@@ -98,6 +98,9 @@ pub fn message_event_json(self_id: u64, message_id: i32, event: &MsgEvent) -> Op
     let (message, raw_message) = if event.wrapper_message.as_ref().and_then(|record| record.voice()).is_some() {
         let token = caligo_model::onebot_traits::voice_file_token(self_id, message_id);
         (json!([{"type":"record", "data":{"file":token}}]), format!("[CQ:record,file={token}]"))
+    } else if event.wrapper_message.as_ref().and_then(|record| record.image()).is_some() {
+        let token = caligo_model::onebot_traits::image_file_token(self_id, message_id);
+        (json!([{"type":"image", "data":{"file":token}}]), format!("[CQ:image,file={token}]"))
     } else if event.text.is_empty() {
         return None;
     } else {

@@ -162,7 +162,7 @@ export function initialProfiles() {
     { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
     [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startMediaDownload(')] }],
     [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()'), src('crates/caligo-bridge/tests/wrapper_image_contract.rs', 'fn image_download_binds_callback_file_scope_integrity_and_lifetime()')],
-    'Private and group Silk; ordinary PNG images only through Rust host-query API. OneBot image segments, upload, other image formats, and Caligo QQ field acceptance remain open.');
+    'Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming PNG also uses shared get_image. Upload, other image formats, and Caligo QQ field acceptance remain open.');
   voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
   const record = scoped('partial_offline', 'Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
     [src(ONEBOT, 'fn get_record('), src(ONEBOT, 'fn send_payload('), src(EVENTS, 'voice_file_token('), src('crates/caligo-core/src/media_tool.rs', 'pub fn silk_to_container(')], sharedEntry, actionPermission,
@@ -172,12 +172,18 @@ export function initialProfiles() {
     [src(LEDGER, 'A2 OneBot 语音读取'), src(LEDGER, 'A2 独立 SILK 转码'), src(LEDGER, 'A2 OneBot 私聊语音发送'), src(LEDGER, 'A2 OneBot 群语音发送'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn private_record_waits_for_exact_readback_to_be_persisted()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn group_record_requires_group_capability_and_exact_group_projection()')],
     'Only short Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. QQ field acceptance remains open.');
   record.supported_versions = clone(voiceDownload.supported_versions);
+  const image = scoped('partial_offline', 'Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.',
+    [src(ONEBOT, 'fn get_image('), src('crates/caligo-model/src/wrapper_message.rs', 'pub fn image('), src('crates/caligo-core/src/message_store.rs', 'fn image_info(')], sharedEntry, actionPermission,
+    clone(voiceDownload.backend_dependencies),
+    [src(LEDGER, 'A2 OneBot PNG 图片读取'), src('crates/caligo-core/tests/wrapper_image_chain.rs', 'fn png_identity_events_get_image_and_restart_share_the_same_account_token()')],
+    'Only incoming ordinary PNG is admitted. get_image returns bounded Base64, file_size and file_name, without local paths or media credentials. Upload, self-sent images, other formats, mixed segments and QQ field acceptance remain open.');
+  image.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
   const login = { ...clone(query), status: 'partial_offline',
     reason: 'Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.',
     acceptance: { ...clone(query.acceptance), limits: 'Offline fake-store login response only; actual normal-path nickname/account result is not established.' } };
-  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload };
+  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload, image };
   for (const [id, symbol, file, flag, dep] of [
     ['http', 'pub fn serve_http(', SERVER, '--onebot-http-bind', 'DaemonSendSink and shared registry'],
     ['http_post', 'pub fn run_http_post_ready(', TRANSPORT, '--onebot-http-post-url', 'Daemon ordered HTTP POST event bus and quick operations'],
@@ -228,6 +234,7 @@ export function chooseAssessment(entry, registry) {
     if (r.handler.kind === 'get_login_info') return 'login_partial';
     if (r.handler.kind === 'get_message') return 'query';
     if (r.handler.kind === 'get_record') return 'record';
+    if (r.handler.kind === 'get_image') return 'image';
     if (['get_status', 'get_version_info'].includes(entry.name)) return 'query';
     return 'action_missing';
   }
@@ -235,6 +242,7 @@ export function chooseAssessment(entry, registry) {
     'OB11WebSocketServerAdapter': 'ws_server', 'OB11WebSocketClientAdapter': 'ws_client', 'OB11HttpSSEServerAdapter': 'sse', 'OB11McpServerAdapter': 'mcp' })[entry.name] ?? 'missing';
   if (entry.id === 'message_segment.text') return 'text_segment';
   if (entry.id === 'message_segment.record') return 'record';
+  if (entry.id === 'message_segment.image') return 'image';
   if (['event.OB11BaseMessageEvent', 'event_schema.OB11MessageSchema'].includes(entry.id)) return 'message_event';
   if (entry.category === 'wrapper_interfaces') {
     if (entry.name === 'downloadRichMedia' && entry.reference.interface === 'NodeIKernelMsgService') return 'voice_download';

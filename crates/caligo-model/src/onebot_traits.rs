@@ -74,6 +74,7 @@ pub trait StoreReader {
         };
         Some((info, query))
     }
+    fn image_info(&self, _file: &str) -> Option<crate::capability::ImageInfo> { None }
     /// Login identity is absent until the host provides both account and nickname.
     fn login_info(&self) -> Option<(u64, String)>;
     /// Actual daemon/session state, absent until wired to the live actor.
@@ -87,6 +88,10 @@ pub trait StoreReader {
 
 pub fn voice_file_token(account_id: u64, message_id: i32) -> String {
     format!("caligo-voice:{account_id}:{message_id}")
+}
+
+pub fn image_file_token(account_id: u64, message_id: i32) -> String {
+    format!("caligo-image:{account_id}:{message_id}")
 }
 
 /// 解析 message 段:字符串或标准数组,提取纯文本;未支持段显式失败。

@@ -1391,6 +1391,10 @@ fn transition_valid(from: &ActionState, to: &ActionState) -> bool {
 }
 
 impl StoreReader for AccountActor {
+    fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+        self.message_store.as_ref()?.image_info(file)
+    }
+
     fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
         self.message_store.as_ref()?.voice_info(file)
     }

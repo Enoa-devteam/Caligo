@@ -107,6 +107,7 @@ pub enum ActionHandlerKind {
     },
     GetMessage,
     GetRecord,
+    GetImage,
     GetLoginInfo,
     GetFriendList,
     GetGroupList,
@@ -125,6 +126,7 @@ pub enum ActionInputSchema {
     Message,
     MessageId,
     Record,
+    Image,
     GroupInfo,
 }
 
@@ -205,6 +207,13 @@ impl ActionInputSchema {
                     "file_id":{"type":"string", "maxLength":64, "description":"Alternate Caligo record file token"},
                     "out_format":{"type":"string", "enum":["silk","wav","ogg"], "default":"silk",
                         "description":"WAV and OGG require a configured SILK decoder"}
+                });
+                schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
+            }
+            Self::Image => {
+                schema["properties"] = serde_json::json!({
+                    "file":{"type":"string","maxLength":64,"description":"Caligo image file token"},
+                    "file_id":{"type":"string","maxLength":64,"description":"Alternate Caligo image file token"}
                 });
                 schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
             }
@@ -313,6 +322,10 @@ pub static ACTION_REGISTRY: &[ActionDefinition] = &[
         permission: ActionPermission::Read,
         handler: ActionHandlerKind::GetRecord,
         input_schema: ActionInputSchema::Record,
+    },
+    ActionDefinition {
+        name: "get_image", canonical: "get_image", permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetImage, input_schema: ActionInputSchema::Image,
     },
     ActionDefinition {
         name: "get_friend_list",
@@ -516,7 +529,7 @@ fn group_data(info: GroupInfo) -> Option<Value> {
 }
 
 fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> ActionResponse {
-    query_response_with_voice(query, backend, echo, None)
+    query_response_with_voice(query, backend, echo, None, None)
 }
 
 fn query_response_with_voice(
@@ -524,6 +537,7 @@ fn query_response_with_voice(
     backend: &dyn QueryBackend,
     echo: Value,
     record: Option<(&VoiceInfo, RecordFormat<'_>)>,
+    image: Option<&caligo_model::capability::ImageInfo>,
 ) -> ActionResponse {
     let invalid =
         || ActionResponse::failed(RET_BAD_REQUEST, "宿主查询响应不符合合同", echo.clone());
@@ -544,6 +558,16 @@ fn query_response_with_voice(
                 if let Some((expected, format)) = record {
                     if let Some(bytes) = voice_bytes(expected, download) {
                         return record_response(bytes, format, echo);
+                    }
+                }
+                None
+            }
+            (HostQuery::ImageDownload { .. }, QueryData::ImageDownload(download)) => {
+                if let Some(expected) = image {
+                    if let Some(bytes) = image_bytes(expected, download) {
+                        return ActionResponse::ok(serde_json::json!({
+                            "file_size":bytes.len().to_string(), "file_name":"image.png", "base64":STANDARD.encode(bytes)
+                        }), echo);
                     }
                 }
                 None
@@ -653,7 +677,36 @@ fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBacken
     if info.size > MAX_VOICE_DOWNLOAD_BYTES {
         return ActionResponse::failed(RET_UNSUPPORTED, "语音超过当前下载上限", echo);
     }
-    query_response_with_voice(query, queries, echo, Some((&info, format)))
+    query_response_with_voice(query, queries, echo, Some((&info, format)), None)
+}
+
+fn image_bytes(expected: &caligo_model::capability::ImageInfo, download: caligo_model::capability::ImageDownload) -> Option<Vec<u8>> {
+    if &download.info != expected || expected.size > caligo_model::capability::MAX_IMAGE_DOWNLOAD_BYTES
+        || download.png_hex.len() != expected.size as usize * 2 || !download.png_hex.is_ascii() { return None; }
+    let bytes = (0..download.png_hex.len()).step_by(2)
+        .map(|i| u8::from_str_radix(&download.png_hex[i..i+2],16).ok()).collect::<Option<Vec<_>>>()?;
+    if bytes.len() < 33 || &bytes[..16] != b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
+        || u32::from_be_bytes(bytes[16..20].try_into().ok()?) != expected.width
+        || u32::from_be_bytes(bytes[20..24].try_into().ok()?) != expected.height { return None; }
+    Some(bytes)
+}
+
+fn get_image(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    let file = match (params.get("file"),params.get("file_id")) {
+        (Some(v),None) | (None,Some(v)) => v.as_str(), _ => None,
+    };
+    let Some(file) = file.filter(|v| !v.is_empty() && v.len() <= 64) else {
+        return ActionResponse::failed(RET_BAD_PARAMS,"必须提供一个图片文件标识",echo);
+    };
+    let Some(info) = store.image_info(file) else {
+        return ActionResponse::failed(RET_BAD_REQUEST,"图片文件标识不存在",echo);
+    };
+    if info.size > caligo_model::capability::MAX_IMAGE_DOWNLOAD_BYTES {
+        return ActionResponse::failed(RET_UNSUPPORTED,"图片超过当前下载上限",echo);
+    }
+    let query = HostQuery::ImageDownload { chat_type:info.chat_type, peer_uid:info.peer_uid.clone(),
+        sender_uin:info.sender_uin.clone(), message_id:info.message_id.clone(), element_id:info.element_id.clone() };
+    query_response_with_voice(query,queries,echo,None,Some(&info))
 }
 
 /// Compatibility entry for callers without a host query backend. Directory
@@ -719,6 +772,7 @@ pub fn handle_action_with_queries(
         }
         ActionHandlerKind::GetLoginInfo => query_response(HostQuery::LoginInfo, queries, echo),
         ActionHandlerKind::GetRecord => get_record(params, store, queries, echo),
+        ActionHandlerKind::GetImage => get_image(params, store, queries, echo),
         ActionHandlerKind::GetFriendList => query_response(HostQuery::FriendList, queries, echo),
         ActionHandlerKind::GetGroupList => query_response(HostQuery::GroupList, queries, echo),
         ActionHandlerKind::GetGroupInfo => {
@@ -799,6 +853,12 @@ mod tests {
     }
     struct FakeStore;
     impl StoreReader for FakeStore {
+        fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+            (file == "caligo-image:10001:42").then(|| caligo_model::capability::ImageInfo {
+                chat_type:1, peer_uid:"u_friend".into(),sender_uin:"20002".into(),message_id:"100".into(),
+                element_id:"200".into(),size:70,md5:"e605ef58c3bb5f33463782ab90d58295".into(),width:1,height:1,pic_type:1001,
+            })
+        }
         fn voice_info(&self, file: &str) -> Option<VoiceInfo> {
             (file == "caligo-voice:10001:42").then(|| VoiceInfo {
                 peer_uid: "u_friend".into(),
@@ -842,6 +902,7 @@ mod tests {
                 "send_msg_async",
                 "get_msg",
                 "get_record",
+                "get_image",
                 "get_login_info",
                 "get_friend_list",
                 "get_group_list",
@@ -905,6 +966,10 @@ mod tests {
                     })
                 }
                 HostQuery::ExactVoiceDownload { .. } => return QueryOutcome::Unsupported,
+                HostQuery::ImageDownload { .. } => QueryData::ImageDownload(caligo_model::capability::ImageDownload {
+                    info:FakeStore.image_info("caligo-image:10001:42").unwrap(),
+                    png_hex:"89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63105432fe0f000214016604e0de7f0000000049454e44ae426082".into(),
+                }),
                 _ => panic!("unexpected public query"),
             })
         }
@@ -923,6 +988,7 @@ mod tests {
                 }
                 ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
                 ActionInputSchema::Record => serde_json::json!({"file":"caligo-voice:10001:42"}),
+                ActionInputSchema::Image => serde_json::json!({"file":"caligo-image:10001:42"}),
                 ActionInputSchema::GroupInfo => serde_json::json!({"group_id":7,"no_cache":true}),
                 ActionInputSchema::Empty => serde_json::json!({}),
             };
@@ -959,6 +1025,7 @@ mod tests {
                     assert_eq!(response.data["message_id"], 42);
                     assert_eq!(response.data["real_id"], 398263);
                 }
+                ActionHandlerKind::GetImage => { assert_eq!(response.data["file_name"],"image.png"); },
                 ActionHandlerKind::GetRecord => {
                     assert_eq!(response.data["base64"], "AiMhU0lMS19WMw==");
                 }
@@ -1146,6 +1213,9 @@ mod tests {
                         assert_eq!(schema["properties"]["message_id"]["minimum"], i32::MIN);
                         assert_eq!(schema["properties"]["message_id"]["maximum"], i32::MAX);
                         ActionInputSchema::MessageId
+                    } else if handler == ActionHandlerKind::GetImage {
+                        assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
+                        ActionInputSchema::Image
                     } else if handler == ActionHandlerKind::GetRecord {
                         assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
                         assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk", "wav", "ogg"]));

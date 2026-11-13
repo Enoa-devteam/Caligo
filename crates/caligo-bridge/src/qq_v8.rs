@@ -428,6 +428,24 @@ pub const D8_START_JS: &str = r"
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
+          if (e && e.elementType === 2 && voiceAccount && m.elements.length === 1 &&
+              src === 'recv' && m.senderUin !== voiceAccount &&
+              ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||
+               (m.chatType === 2 && m.peerUid === m.peerUin))) {
+            var pic = e.picElement, size = pic && pic.fileSize;
+            if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
+            if (t || !pic || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
+                !/[1-9]/.test(e.elementId) || pic.picType !== 1001 || pic.picSubType !== 0 ||
+                !Number.isInteger(size) || size < 33 || size > 16777216 ||
+                !Number.isInteger(pic.picWidth) || pic.picWidth < 1 || pic.picWidth > 32768 ||
+                !Number.isInteger(pic.picHeight) || pic.picHeight < 1 || pic.picHeight > 32768 ||
+                pic.picWidth * pic.picHeight > 100000000 || typeof pic.md5HexStr !== 'string' ||
+                !/^[0-9a-fA-F]{32}$/.test(pic.md5HexStr)) { R.rejected++; return; }
+            elements.push({elementType:2,image:{chat_type:m.chatType,peer_uid:m.peerUid,
+              sender_uin:m.senderUin,message_id:m.msgId,element_id:e.elementId,size:size,
+              md5:pic.md5HexStr.toLowerCase(),width:pic.picWidth,height:pic.picHeight,pic_type:1001}});
+            continue;
+          }
           if (e && e.elementType === 4 && voiceAccount && m.elements.length === 1 &&
               (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
                 ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||

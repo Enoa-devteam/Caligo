@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-13 A2 OneBot 图片：固定 profile 的普通入站 PNG 已接 D8、持久消息、共享私聊/群聊事件和 `get_image`。事件/get_msg/下载使用同一账号限定文件标识，重启保留 ID 与元数据。上传、自发图片、其他格式、其余任务及统一 QQ 验收仍未完成。[OneBot PNG 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)
+
 2026-11-13 A2 单图片：普通 PNG 的精确元数据回读与有界下载已接入固定 profile 的 scoped Rust 宿主查询。校验会话、发送者、消息/元素、大小、MD5 和 PNG 头部尺寸，超时保留在途目标至匹配回调。OneBot 图片持久化/事件/get_image、上传、其他格式及 QQ 现场待后续。[图片宿主查询](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)
 
 2026-11-13 A2 群语音：`746f654` 接通群入站和已发送私聊语音读取。群语音发送已接入独立 scoped 能力、持久派发与精确群消息回读，读写均有离线合同。真实 QQ 验收待 B2。[OneBot 群语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-群语音发送)

@@ -321,7 +321,7 @@ fn group_params_validate_before_backend_and_no_cache_is_always_a_host_read() {
 
 #[test]
 fn metadata_and_legacy_wrapper_keep_backend_availability_explicit() {
-    assert_eq!(ACTION_REGISTRY.len(), 14);
+    assert_eq!(ACTION_REGISTRY.len(), 15);
     for name in ["get_friend_list", "get_group_list", "get_group_info"] {
         assert_eq!(
             resolve_action(name).unwrap().permission,

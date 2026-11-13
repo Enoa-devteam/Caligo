@@ -1580,7 +1580,7 @@
             "symbol": "fn image_download_binds_callback_file_scope_integrity_and_lifetime()"
           }
         ],
-        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. OneBot image segments, upload, other image formats, and Caligo QQ field acceptance remain open."
+        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming PNG also uses shared get_image. Upload, other image formats, and Caligo QQ field acceptance remain open."
       }
     },
     "record": {
@@ -1714,6 +1714,91 @@
           }
         ],
         "limits": "Only short Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. QQ field acceptance remains open."
+      }
+    },
+    "image": {
+      "status": "partial_offline",
+      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn get_image("
+        },
+        {
+          "path": "crates/caligo-model/src/wrapper_message.rs",
+          "symbol": "pub fn image("
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "fn image_info("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startMediaDownload("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot PNG 图片读取"
+          },
+          {
+            "path": "crates/caligo-core/tests/wrapper_image_chain.rs",
+            "symbol": "fn png_identity_events_get_image_and_restart_share_the_same_account_token()"
+          }
+        ],
+        "limits": "Only incoming ordinary PNG is admitted. get_image returns bounded Base64, file_size and file_name, without local paths or media credentials. Upload, self-sent images, other formats, mixed segments and QQ field acceptance remain open."
       }
     }
   },
@@ -2407,9 +2492,9 @@
     {
       "reference_id": "onebot.action.get_image",
       "category": "actions",
-      "status": "missing",
-      "reason": "Absent from executable ACTION_REGISTRY; the shared action handler returns unsupported for this name.",
-      "assessment": "action_missing"
+      "status": "partial_offline",
+      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "assessment": "image"
     },
     {
       "reference_id": "onebot.action.get_login_info",
@@ -6355,9 +6440,9 @@
     {
       "reference_id": "message_segment.image",
       "category": "message_segments",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "assessment": "image"
     },
     {
       "reference_id": "message_segment.music",
@@ -41723,7 +41808,7 @@
     }
   ],
   "registry": {
-    "semantic_sha256": "26849518f82992591c3c2c98abc289c7867f8a56b536d05c4b15128a83664b83",
+    "semantic_sha256": "92aa723d2d469ad51a86850d968970c85eea32b85d4dd15b7ac125e9264a97ec",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {
@@ -41892,6 +41977,22 @@
         }
       },
       {
+        "name": "get_image",
+        "canonical": "get_image",
+        "permission": "read",
+        "handler": {
+          "kind": "get_image"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_image"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
         "name": "get_friend_list",
         "canonical": "get_friend_list",
         "permission": "read",
@@ -41974,17 +42075,17 @@
     ]
   },
   "counts": {
-    "registry_declared_keys": 14,
-    "registry_base_keys": 11,
+    "registry_declared_keys": 15,
+    "registry_base_keys": 12,
     "registry_alias_keys": 3,
     "mapped_reference_items": 5711,
     "by_category": {
       "actions": {
         "denominator": 206,
         "statuses": {
-          "missing": 195,
+          "missing": 194,
           "unknown": 0,
-          "partial_offline": 5,
+          "partial_offline": 6,
           "registered_backend_blocked": 0,
           "wired_offline": 3,
           "implemented_pending_validation": 3,
@@ -42052,9 +42153,9 @@
       "message_segments": {
         "denominator": 23,
         "statuses": {
-          "missing": 21,
+          "missing": 20,
           "unknown": 0,
-          "partial_offline": 2,
+          "partial_offline": 3,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,

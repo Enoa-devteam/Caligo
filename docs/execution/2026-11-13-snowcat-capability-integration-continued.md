@@ -159,3 +159,18 @@ GitNexus 1.6.12 绑定 Windows checkout `E:/stella/Caligo` / `ca07bd9`，初始�
 - GitNexus 变更检查报告 CRITICAL；初次 all 为 9 files / 40 symbols / 265 flows，混入 Markdown section 对多条流程的关联，未据此降低风险。提交前另外对包含新测试的 staged/all 执行结构化完整检查，原始报告保留本机 `snowcat-image-detect-*.json`。索引另报告部分 PDG 控制依赖跳过和执行流召回限制，图中无路径不代表无调用。
 
 OneBot 图片身份持久化、image 事件/get_image、上传、其他图片格式、视频/文件/SSO 和 B2 QQ 验收仍未完成。feat-008 保持 in-progress；完整候选未冻结，产品 NOT READY。
+
+
+## A2 OneBot PNG 图片读取
+
+承接 `c6c8792`，继续先完成整合、候选就绪后再集中验收。固定参考 `7cf025f` 的 `action/file/GetImage.ts` 继承 `GetFileBase`，`GetFile.ts` 给出 file/file_id 输入和可选 file/url/file_size/file_name/base64 输出合同。Caligo 的普通入站单 PNG 已由固定 profile 的 D8 进入 typed wrapper、resident、journal 和 MessageStore，使用账号限定的 `caligo-image:<account>:<OneBot ID>` 文件标识。共享私聊/群聊事件与 get_msg 使用同一持久 ID 和 image 段。图片身份包含 sender/chat/peer/native message/element/MD5/尺寸，图片与文本、语音互斥；旧日志缺少 image 字段时仍可恢复。
+
+`get_image` 在共用动作 registry 注册 Read 权限，通过正常 handler → Daemon scope broker → ImageDownload 查询读取。下载结果必须与持久元数据完全一致，PNG 头部与尺寸再次校验；返回不超过当前 128 KiB 上限的 Base64、file_size 和 image.png 文件名。本机路径与媒体凭据不暴露。保留 file_id 别名，双参数、坏类型、其他账号标识明确失败。图片上传、自发图片、其他格式和混合段仍未支持，不将读取贯通计为完整 image 段等价。
+
+GitNexus 初次增量索引出现异常 target UID 与同名合并，按 UNKNOWN 处理后用 Windows `analyze --force --index-only --skip-fts --pdg` 重建并复查。精确 wrapper validate 为 HIGH、共享动作 handler 为 CRITICAL；持久化插入/投影和 resident 规范化为 LOW。固定脚本字面量及 trait 动态调用按源码补证。当前是离线实现与回归，不是 B1/B2 正式验收。
+
+本块实际检查：`onebot::` 定向 unit 12/12，research `wrapper_image_chain` 与原 `wrapper_message_chain` 各 1/1；PNG 场景经真实命名管道覆盖私聊/群聊、两个事件订阅者、跨会话同 native ID、重复抑制、错账号 token、未声明能力、元数据指纹不符、Base64 下载和 actor/store 重启恢复。固定参考覆盖检查含真实 exporter 12/12，registry 为 15 keys（12 base + 3 aliases），分母 5,711 不变。
+
+中间编译发现新增枚举未同步两个穷尽匹配，以及测试 WrapperElement 重复 image 初始化；修正测试后 unit 通过。首轮 all 在 `onebot_query_lab` 的旧 registry 数量 14 断言失败（5 PASS / 1 FAIL），显式更新为实际的 15 后，最终串行 `$env:RUST_TEST_THREADS='1'; .\init.ps1 -Mode all` 和默认并发 research 全仓均退出 0。失败/最终结果分别保存在 ignored `local-evidence/snowcat-image-onebot-compile.log`、`snowcat-image-onebot-all.log`、`snowcat-image-onebot-all-final.log`、`snowcat-image-onebot-parallel.log`，未用重跑覆盖原报告。
+
+文档检查 PASS（15 live docs / 260 local links / 35 historical entries / 10 features），Windows `git diff --check` 通过。本块提交前对 staged/all 分别执行完整结构化变更图检查，保留 CRITICAL 风险与索引召回限制。没有启动 QQ；完整候选与剩余任务继续未完成，feat-008 保持 in-progress，产品 NOT READY。

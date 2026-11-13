@@ -123,6 +123,7 @@ fn event(native_id: &str) -> EventPayload {
         sender_uin: "10001".into(),
         send_status: Some(2),
         elements: vec![WrapperElement {
+            image: None,
             voice: None,
             element_type: 1,
             text_element: Some(WrapperText {
@@ -328,6 +329,7 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
     let mut readback = event(native_id);
     readback.text.clear();
     readback.wrapper_message.as_mut().unwrap().record.elements = vec![WrapperElement {
+            image: None,
         element_type: 4,
         text_element: None,
         voice: Some(WrapperVoice {
@@ -440,6 +442,7 @@ fn group_record_requires_group_capability_and_exact_group_projection() {
     readback.text.clear();
     let wrapper = readback.wrapper_message.as_mut().unwrap();
     wrapper.record.elements = vec![WrapperElement {
+            image: None,
         element_type: 4, text_element: None, voice: Some(WrapperVoice {
             element_id: "90071992547409931235".into(), size: silk.len() as u32,
             md5: "0123456789abcdef0123456789abcdef".into(),

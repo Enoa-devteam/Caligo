@@ -5,7 +5,7 @@
 //! The append is flushed before the int32 OneBot ID is returned to a caller.
 
 use crate::onebot::StoreReader;
-use caligo_model::{capability::{HostQuery, VoiceInfo}, onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
+use caligo_model::{capability::{HostQuery, VoiceInfo, ImageInfo}, onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -40,6 +40,8 @@ pub struct StoredMessage {
     pub native_seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<VoiceInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -184,6 +186,7 @@ impl MessageStore {
             time,
             native_seq,
             voice: None,
+            image: None,
         })
     }
 
@@ -272,7 +275,7 @@ impl MessageStore {
             .get(&id)
             .cloned()
             .ok_or("message identity index is inconsistent")?;
-        if message.voice.is_some() {
+        if message.voice.is_some() || message.image.is_some() {
             return Ok(Some(id));
         }
         message.real_id = projection.real_id;
@@ -319,7 +322,8 @@ impl MessageStore {
             _ => return Err("wrapper chat type does not match session".into()),
         };
         let voice = envelope.voice();
-        let text = if voice.is_some() {
+        let image = envelope.image();
+        let text = if voice.is_some() || image.is_some() {
             String::new()
         } else {
             envelope.text().map_err(|_| "wrapper text is invalid")?
@@ -335,7 +339,7 @@ impl MessageStore {
             || event.native_id.0 != record.msg_id
             || event.text != text
             || event.platform_time != Some(platform_time)
-            || voice.is_some() && (event.source != EventSource::Recv
+            || (voice.is_some() || image.is_some()) && (event.source != EventSource::Recv
                 || match envelope.source {
                     caligo_model::wrapper_message::WrapperSource::Recv =>
                         event.direction != caligo_model::Direction::Incoming,
@@ -368,7 +372,7 @@ impl MessageStore {
                 .get(&id)
                 .cloned()
                 .ok_or("message identity index is inconsistent")?;
-            if revised.voice.is_some() {
+            if revised.voice.is_some() || revised.image.is_some() {
                 return Ok(Some(id));
             }
             revised.real_id = id;
@@ -393,6 +397,7 @@ impl MessageStore {
                 message: serde_json::json!([{"type":"record","data":{"file":token}}]),
                 time,
                 native_seq: None,
+                image: None,
                 voice: Some(VoiceInfo {
                     peer_uid: record.peer_uid.clone(),
                     message_id: record.msg_id.clone(),
@@ -400,6 +405,14 @@ impl MessageStore {
                     size: voice.size,
                     md5: voice.md5.clone(),
                 }),
+            }).map(Some);
+        }
+        if let Some(image) = image {
+            let token = caligo_model::onebot_traits::image_file_token(account_id, id);
+            return self.insert_message(StoredMessage {
+                message_id:id, identity, real_id:id, sender:Value::Object(sender),
+                message:serde_json::json!([{"type":"image","data":{"file":token}}]),
+                time, native_seq:None, voice:None, image:Some(image.clone()),
             }).map(Some);
         }
         self.insert_confirmed(identity, id, Value::Object(sender), body, time, None)
@@ -438,6 +451,7 @@ impl MessageStore {
         let envelope = event.wrapper_message.as_ref()?;
         envelope.validate().ok()?;
         let voice = envelope.voice();
+        let image = envelope.image();
         let account_id = event.session.account.0.parse::<u64>().ok()?;
         let peer_id = envelope.record.peer_uin.parse::<u64>().ok()?;
         let sender_user_id = envelope.record.sender_uin.parse::<u64>().ok()?;
@@ -458,10 +472,8 @@ impl MessageStore {
             || event.session.peer.0 != envelope.record.peer_uin
             || event.sender != envelope.record.sender_uin
             || event.native_id.0 != envelope.record.msg_id
-            || match voice {
-                Some(_) => !event.text.is_empty(),
-                None => event.text != envelope.text().ok()?,
-            }
+            || if voice.is_some() || image.is_some() { !event.text.is_empty() }
+                else { event.text != envelope.text().ok()? }
             || event.platform_time != Some(envelope.record.msg_time.parse::<u64>().ok()?)
         {
             return None;
@@ -481,6 +493,7 @@ impl MessageStore {
                     && info.md5 == element.md5 => {}
             _ => return None,
         }
+        if image != stored.image.as_ref() { return None; }
         Some(caligo_model::OneBotMessageProjection {
             peer_id,
             sender_user_id,
@@ -535,6 +548,18 @@ impl StoreReader for MessageStore {
         };
         query.validate().ok()?;
         Some((voice.clone(), query))
+    }
+
+    fn image_info(&self, file: &str) -> Option<ImageInfo> {
+        let (account, id) = file.strip_prefix("caligo-image:")?.split_once(':')?;
+        let message = self.get(id.parse().ok()?)?;
+        let info = message.image.as_ref()?;
+        if account != self.account_id.to_string() || id != message.message_id.to_string()
+            || message.identity.native_id != info.message_id
+            || message.sender.get("user_id")?.as_u64()?.to_string() != info.sender_uin
+            || info.chat_type != match message.identity.chat_type { ChatType::Private=>1, ChatType::Group=>2 }
+            || (info.chat_type == 2 && message.identity.peer_id != info.peer_uid) { return None; }
+        Some(info.clone())
     }
 
     fn group_peers(&self) -> Vec<String> {
@@ -698,6 +723,7 @@ mod tests {
             let element = caligo_model::wrapper_message::WrapperElement {
                 element_type: 1,
                 voice: None,
+                image: None,
                 text_element: Some(caligo_model::wrapper_message::WrapperText {
                     content: text.into(), at_type: 0, at_uid: String::new(),
                     at_nt_uid: String::new(), at_tiny_id: String::new(),

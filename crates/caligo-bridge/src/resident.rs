@@ -126,7 +126,7 @@ impl OwnedEvent {
             peer_uin: envelope.record.peer_uin.clone(),
             sender_uin: envelope.record.sender_uin.clone(),
             native_id: envelope.record.msg_id.clone(),
-            text: if envelope.voice().is_some() {
+            text: if envelope.voice().is_some() || envelope.image().is_some() {
                 String::new()
             } else {
                 envelope.text()?
