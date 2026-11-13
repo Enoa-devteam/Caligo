@@ -10,7 +10,7 @@
 
 语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。下一步为持久化语音元素身份、OneBot `get_record` 与独立转换合同，随后推进上传和其他媒体。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
 
-语音持久化检查点已接入当前 profile 的单个私聊入站元素。下一步用账号限定的文件标识接 OneBot 查询，保留转换和 QQ 现场边界。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-语音元素身份持久化)
+语音持久化检查点 `e1b4420` 已接当前 profile 的单个私聊入站元素。共享事件和 `get_record` 使用同一账号限定文件标识，当前仅支持原始 Silk。下一步核对独立 Silk 解码依赖和脱敏 golden 样本，再接 WAV/OGG 转码；随后推进上传和其他媒体。现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

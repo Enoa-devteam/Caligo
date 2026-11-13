@@ -1192,6 +1192,10 @@ impl Daemon {
 }
 
 impl StoreReader for Daemon {
+    fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
+        self.actor.lock().ok()?.voice_info(file)
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<StoredMessageView> {
         self.actor.lock().ok()?.get_msg(message_id)
     }

@@ -873,7 +873,7 @@
             "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
           }
         ],
-        "limits": "Coverage is limited to ordinary private and group incoming text. Self-sent notifications, temporary chat, additional fields and real QQ acceptance remain open."
+        "limits": "Coverage includes ordinary private/group incoming text and single private incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open."
       }
     },
     "profile_service": {
@@ -1577,6 +1577,87 @@
           }
         ],
         "limits": "Private incoming Silk only. Group/media variants, public OneBot retrieval, and Caligo QQ field acceptance remain open."
+      }
+    },
+    "record": {
+      "status": "partial_offline",
+      "reason": "Incoming private voice publishes a durable record token and get_record retrieves bounded original Silk.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn get_record("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_events.rs",
+          "symbol": "voice_file_token("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startVoiceDownload("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot 语音读取"
+          },
+          {
+            "path": "crates/caligo-core/tests/wrapper_message_chain.rs",
+            "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
+          }
+        ],
+        "limits": "Only account-scoped local file tokens and original Silk are supported. Conversion, outgoing voice, group voice and QQ field acceptance remain open."
       }
     }
   },
@@ -2410,9 +2491,9 @@
     {
       "reference_id": "onebot.action.get_record",
       "category": "actions",
-      "status": "missing",
-      "reason": "Absent from executable ACTION_REGISTRY; the shared action handler returns unsupported for this name.",
-      "assessment": "action_missing"
+      "status": "partial_offline",
+      "reason": "Incoming private voice publishes a durable record token and get_record retrieves bounded original Silk.",
+      "assessment": "record"
     },
     {
       "reference_id": "onebot.action.get_rkey",
@@ -6239,9 +6320,9 @@
     {
       "reference_id": "message_segment.record",
       "category": "message_segments",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Incoming private voice publishes a durable record token and get_record retrieves bounded original Silk.",
+      "assessment": "record"
     },
     {
       "reference_id": "message_segment.file",
@@ -41586,7 +41667,7 @@
     }
   ],
   "registry": {
-    "semantic_sha256": "714933c37696b1815452c551362ac4dc0f2137c4dbf875dea17d4bf226a24233",
+    "semantic_sha256": "2e59404fe01a74126f63746f031512ad932ce4773d00c4d780c9846d2713880b",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {
@@ -41739,6 +41820,22 @@
         }
       },
       {
+        "name": "get_record",
+        "canonical": "get_record",
+        "permission": "read",
+        "handler": {
+          "kind": "get_record"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_record"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
         "name": "get_friend_list",
         "canonical": "get_friend_list",
         "permission": "read",
@@ -41821,17 +41918,17 @@
     ]
   },
   "counts": {
-    "registry_declared_keys": 13,
-    "registry_base_keys": 10,
+    "registry_declared_keys": 14,
+    "registry_base_keys": 11,
     "registry_alias_keys": 3,
     "mapped_reference_items": 5711,
     "by_category": {
       "actions": {
         "denominator": 206,
         "statuses": {
-          "missing": 196,
+          "missing": 195,
           "unknown": 0,
-          "partial_offline": 4,
+          "partial_offline": 5,
           "registered_backend_blocked": 0,
           "wired_offline": 3,
           "implemented_pending_validation": 3,
@@ -41899,9 +41996,9 @@
       "message_segments": {
         "denominator": 23,
         "statuses": {
-          "missing": 22,
+          "missing": 21,
           "unknown": 0,
-          "partial_offline": 1,
+          "partial_offline": 2,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,

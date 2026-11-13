@@ -252,6 +252,123 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         assert_eq!(stored.message, event["raw_message"]);
     }
     assert_ne!(ids[0], ids[1]);
+    let raw = ws_events.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        sse_events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        raw
+    );
+    let event: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let voice_id = event["message_id"].as_i64().unwrap() as i32;
+    let file = event["message"][0]["data"]["file"].as_str().unwrap();
+    assert_eq!(event["message"][0]["type"], "record");
+    assert_eq!(daemon.get_msg(voice_id).unwrap().message, event["message"]);
+    let handler = caligo_core::onebot_server::action_handler(daemon.clone());
+    let args = serde_json::json!({"file":file});
+    assert_eq!(
+        handler("get_record", &args, serde_json::Value::Null).retcode,
+        1404
+    );
+    assert_eq!(
+        handler(
+            "get_record",
+            &serde_json::json!({"file":file,"out_format":"wav"}),
+            serde_json::Value::Null
+        )
+        .retcode,
+        1404
+    );
+    assert_eq!(
+        handler(
+            "get_record",
+            &serde_json::json!({"file":"caligo-voice:30003:4"}),
+            serde_json::Value::Null
+        )
+        .retcode,
+        1440
+    );
+    let scope = caligo_model::capability::QueryScope {
+        account: "10001".into(),
+        host_nonce: 9,
+        session_generation: 2,
+        connection_epoch: daemon.connection_epoch(),
+    };
+    bridge
+        .send(&BridgeMsg::QueryCapabilities {
+            revision: caligo_model::ipc_v3::CAPABILITY_QUERY_REVISION,
+            scope: scope.clone(),
+            capabilities: vec![caligo_model::capability::QueryCapability::VoiceDownload],
+        })
+        .unwrap();
+    bridge
+        .send(&BridgeMsg::Health {
+            ingress_pending: 0,
+            native_ops_total: 0,
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::HealthAck {}
+    ));
+    let info = daemon.voice_info(file).unwrap();
+    // A valid wire shape still fails if its fingerprint disagrees with the journal.
+    for (md5, code) in [
+        ("ffffffffffffffffffffffffffffffff", 1440),
+        (info.md5.as_str(), 0),
+    ] {
+        let handler = handler.clone();
+        let args = args.clone();
+        let waiter =
+            std::thread::spawn(move || handler("get_record", &args, serde_json::json!("record")));
+        let CoreToBridgeMsg::Query {
+            request_id,
+            scope: actual_scope,
+            query,
+            ..
+        } = bridge.recv().unwrap()
+        else {
+            panic!("expected download query");
+        };
+        assert_eq!(actual_scope, scope);
+        assert_eq!(
+            query,
+            caligo_model::capability::HostQuery::VoiceDownload {
+                peer_uid: info.peer_uid.clone(),
+                message_id: info.message_id.clone(),
+                element_id: info.element_id.clone(),
+            }
+        );
+        let mut response_info = info.clone();
+        response_info.md5 = md5.into();
+        let silk_hex = format!(
+            "02232153494c4b5f5633{}",
+            "00".repeat(info.size as usize - 10)
+        );
+        bridge
+            .send(&BridgeMsg::QueryResult {
+                request_id,
+                scope: scope.clone(),
+                outcome: caligo_model::capability::QueryOutcome::Success(
+                    caligo_model::capability::QueryData::VoiceDownload(
+                        caligo_model::capability::VoiceDownload {
+                            info: response_info,
+                            silk_hex,
+                        },
+                    ),
+                ),
+            })
+            .unwrap();
+        let result = waiter.join().unwrap();
+        assert_eq!(result.retcode, code);
+        assert_eq!(result.echo, "record");
+        if code == 0 {
+            assert_eq!(result.data["file_size"], "1073");
+            assert!(result.data["base64"]
+                .as_str()
+                .unwrap()
+                .starts_with("AiMhU0lMS19WMw"));
+            assert!(result.data.get("file").is_none());
+        }
+    }
     assert!(
         ws_events.try_recv().is_err(),
         "old-generation, sent, updated, and replayed events must not fan out"
@@ -388,6 +505,10 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         .unwrap();
     assert_eq!(voice.element_id, "90071992547409931238");
     assert_eq!(voice.size, 1073);
+    assert_eq!(
+        reopened.voice_info(&token).unwrap().element_id,
+        voice.element_id
+    );
     let recovered_update = &records[2];
     let replayed_update = caligo_model::MsgEvent {
         event_seq: 0,

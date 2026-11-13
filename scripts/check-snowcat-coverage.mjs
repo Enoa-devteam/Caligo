@@ -164,6 +164,12 @@ export function initialProfiles() {
     [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()')],
     'Private incoming Silk only. Group/media variants, public OneBot retrieval, and Caligo QQ field acceptance remain open.');
   voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
+  const record = scoped('partial_offline', 'Incoming private voice publishes a durable record token and get_record retrieves bounded original Silk.',
+    [src(ONEBOT, 'fn get_record('), src(EVENTS, 'voice_file_token(')], sharedEntry, actionPermission,
+    clone(voiceDownload.backend_dependencies),
+    [src(LEDGER, 'A2 OneBot 语音读取'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
+    'Only account-scoped local file tokens and original Silk are supported. Conversion, outgoing voice, group voice and QQ field acceptance remain open.');
+  record.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
   const login = { ...clone(query), status: 'partial_offline',
@@ -195,7 +201,8 @@ export function initialProfiles() {
     { requirement: 'Authenticated event consumer; explicit account/session identity.', enforcement: [src(EVENTS, 'pub fn message_event_json(')], limits: 'No notice/request/meta-event production is inferred.' },
     [{ name: 'Current wrapper binding, durable message identity and incoming receive event', state: 'offline_only', evidence: [src(DAEMON, 'actor.wrapper_message_projection(&event)'), src(EVENTS, 'event.onebot_projection.as_ref()?')] }],
     [src(LEDGER, '普通私聊与群聊的事件接线'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
-    'Coverage is limited to ordinary private and group incoming text. Self-sent notifications, temporary chat, additional fields and real QQ acceptance remain open.');
+    'Coverage includes ordinary private/group incoming text and single private incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open.');
+  profiles.record = record;
   profiles.profile_service = scoped('research_lab', 'Research-only exact-key ProfileService UIN/UID round-trip exists; normal persistent backend wiring and field result remain open.',
     [src('crates/caligo-bridge/src/uid_map_probe.rs', 'pub(crate) fn run_profile('), src('crates/caligo-bridge/src/qq_v8.rs', 'fn build_profile_uid_map_query_js(')],
     [src('crates/caligo-cli/src/qqentry.rs', '--uid-map-profile-service')],
@@ -218,12 +225,14 @@ export function chooseAssessment(entry, registry) {
     if (r.handler.kind === 'send') return r.handler.target === 'private' ? 'private_send_blocked' : 'send_text';
     if (r.handler.kind === 'get_login_info') return 'login_partial';
     if (r.handler.kind === 'get_message') return 'query';
+    if (r.handler.kind === 'get_record') return 'record';
     if (['get_status', 'get_version_info'].includes(entry.name)) return 'query';
     return 'action_missing';
   }
   if (entry.category === 'protocols') return ({ 'OB11HttpServerAdapter': 'http', 'OB11HttpClientAdapter': 'http_post',
     'OB11WebSocketServerAdapter': 'ws_server', 'OB11WebSocketClientAdapter': 'ws_client', 'OB11HttpSSEServerAdapter': 'sse', 'OB11McpServerAdapter': 'mcp' })[entry.name] ?? 'missing';
   if (entry.id === 'message_segment.text') return 'text_segment';
+  if (entry.id === 'message_segment.record') return 'record';
   if (['event.OB11BaseMessageEvent', 'event_schema.OB11MessageSchema'].includes(entry.id)) return 'message_event';
   if (entry.category === 'wrapper_interfaces') {
     if (entry.name === 'downloadRichMedia' && entry.reference.interface === 'NodeIKernelMsgService') return 'voice_download';

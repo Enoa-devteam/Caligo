@@ -378,7 +378,7 @@ impl MessageStore {
 
         let id = self.next_id;
         if let Some(voice) = voice {
-            let token = format!("caligo-voice:{account_id}:{id}");
+            let token = caligo_model::onebot_traits::voice_file_token(account_id, id);
             return self.insert_message(StoredMessage {
                 message_id: id,
                 identity,
@@ -431,6 +431,7 @@ impl MessageStore {
     pub fn projection_for_event(&self, event: &MsgEvent) -> Option<caligo_model::OneBotMessageProjection> {
         let envelope = event.wrapper_message.as_ref()?;
         envelope.validate().ok()?;
+        let voice = envelope.voice();
         let account_id = event.session.account.0.parse::<u64>().ok()?;
         let peer_id = envelope.record.peer_uin.parse::<u64>().ok()?;
         let sender_user_id = envelope.record.sender_uin.parse::<u64>().ok()?;
@@ -451,7 +452,10 @@ impl MessageStore {
             || event.session.peer.0 != envelope.record.peer_uin
             || event.sender != envelope.record.sender_uin
             || event.native_id.0 != envelope.record.msg_id
-            || event.text != envelope.text().ok()?
+            || match voice {
+                Some(_) => !event.text.is_empty(),
+                None => event.text != envelope.text().ok()?,
+            }
             || event.platform_time != Some(envelope.record.msg_time.parse::<u64>().ok()?)
         {
             return None;
@@ -460,6 +464,16 @@ impl MessageStore {
         let stored = self.by_id.get(&message_id)?;
         if stored.sender.get("user_id")?.as_u64()? != sender_user_id {
             return None;
+        }
+        match (voice, &stored.voice) {
+            (None, None) => {}
+            (Some(element), Some(info))
+                if info.peer_uid == envelope.record.peer_uid
+                    && info.message_id == envelope.record.msg_id
+                    && info.element_id == element.element_id
+                    && info.size == element.size
+                    && info.md5 == element.md5 => {}
+            _ => return None,
         }
         Some(caligo_model::OneBotMessageProjection {
             peer_id,
@@ -481,6 +495,19 @@ impl MessageStore {
 }
 
 impl StoreReader for MessageStore {
+    fn voice_info(&self, file: &str) -> Option<VoiceInfo> {
+        let (account, id) = file.strip_prefix("caligo-voice:")?.split_once(':')?;
+        let message = self.get(id.parse::<i32>().ok()?)?;
+        let voice = message.voice.as_ref()?;
+        if account != self.account_id.to_string() || id != message.message_id.to_string()
+            || message.identity.chat_type != ChatType::Private
+            || message.identity.native_id != voice.message_id
+        {
+            return None;
+        }
+        Some(voice.clone())
+    }
+
     fn group_peers(&self) -> Vec<String> {
         let mut set = std::collections::BTreeSet::new();
         for m in self.by_id.values() {

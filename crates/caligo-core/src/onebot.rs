@@ -1,7 +1,8 @@
 //! OneBot V11 action layer. All transports share this action registry and
 //! dispatch exactly once through `SendSink`.
 
-use caligo_model::capability::{positive_decimal, GroupInfo, HostQuery, QueryData, QueryOutcome};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use caligo_model::capability::{positive_decimal, GroupInfo, HostQuery, QueryData, QueryOutcome, VoiceDownload, VoiceInfo, MAX_VOICE_DOWNLOAD_BYTES};
 use caligo_model::onebot_traits::{
     extract_text, SendDisposition, SendPayload, SendSink, SendTarget,
 };
@@ -100,6 +101,7 @@ pub enum ActionHandlerKind {
         allow_async: bool,
     },
     GetMessage,
+    GetRecord,
     GetLoginInfo,
     GetFriendList,
     GetGroupList,
@@ -117,6 +119,7 @@ pub enum ActionInputSchema {
     PrivateMessage,
     Message,
     MessageId,
+    Record,
     GroupInfo,
 }
 
@@ -177,6 +180,14 @@ impl ActionInputSchema {
                     "type":"integer", "minimum":i32::MIN, "maximum":i32::MAX
                 });
                 schema["required"] = serde_json::json!(["message_id"]);
+            }
+            Self::Record => {
+                schema["properties"] = serde_json::json!({
+                    "file":{"type":"string", "maxLength":64, "description":"Caligo record file token"},
+                    "file_id":{"type":"string", "maxLength":64, "description":"Alternate Caligo record file token"},
+                    "out_format":{"type":"string", "enum":["silk"], "default":"silk"}
+                });
+                schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
             }
         }
         schema
@@ -276,6 +287,13 @@ pub static ACTION_REGISTRY: &[ActionDefinition] = &[
         permission: ActionPermission::Read,
         handler: ActionHandlerKind::GetLoginInfo,
         input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_record",
+        canonical: "get_record",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetRecord,
+        input_schema: ActionInputSchema::Record,
     },
     ActionDefinition {
         name: "get_friend_list",
@@ -477,6 +495,15 @@ fn group_data(info: GroupInfo) -> Option<Value> {
 }
 
 fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    query_response_with_voice(query, backend, echo, None)
+}
+
+fn query_response_with_voice(
+    query: HostQuery,
+    backend: &dyn QueryBackend,
+    echo: Value,
+    expected_voice: Option<&VoiceInfo>,
+) -> ActionResponse {
     let invalid =
         || ActionResponse::failed(RET_BAD_REQUEST, "宿主查询响应不符合合同", echo.clone());
     let outcome = backend.query_host(query.clone(), QUERY_TIMEOUT);
@@ -492,6 +519,9 @@ fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> 
             (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
                 .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
+            (HostQuery::VoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
+                expected_voice.and_then(|expected| voice_data(expected, download))
+            }
             _ => None,
         },
         QueryOutcome::Unsupported => return ActionResponse::failed(RET_UNSUPPORTED, "宿主未支持此查询", echo),
@@ -507,6 +537,54 @@ fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> 
         Some(data) => ActionResponse::ok(data, echo),
         None => invalid(),
     }
+}
+
+fn voice_data(expected: &VoiceInfo, download: VoiceDownload) -> Option<Value> {
+    let size = expected.size;
+    if &download.info != expected || !(1..=MAX_VOICE_DOWNLOAD_BYTES).contains(&size)
+        || download.silk_hex.len() != size as usize * 2
+        || !download.silk_hex.is_ascii()
+    {
+        return None;
+    }
+    let bytes = (0..download.silk_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&download.silk_hex[i..i + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()?;
+    if !bytes.starts_with(b"#!SILK_V3") && !bytes.starts_with(b"\x02#!SILK_V3") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "base64":STANDARD.encode(bytes), "file_size":size.to_string(), "file_name":"voice.silk"
+    }))
+}
+
+fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    let file = match (params.get("file"), params.get("file_id")) {
+        (Some(value), None) | (None, Some(value)) => value.as_str(),
+        _ => None,
+    };
+    let Some(file) = file.filter(|file| !file.is_empty() && file.len() <= 64) else {
+        return ActionResponse::failed(RET_BAD_PARAMS, "必须提供一个语音文件标识", echo);
+    };
+    match params.get("out_format") {
+        None => {}
+        Some(value) if value.as_str() == Some("silk") => {}
+        Some(Value::String(_)) => return ActionResponse::failed(RET_UNSUPPORTED, "当前仅支持原始 Silk", echo),
+        Some(_) => return ActionResponse::failed(RET_BAD_PARAMS, "out_format 必须是字符串", echo),
+    }
+    let Some(info) = store.voice_info(file) else {
+        return ActionResponse::failed(RET_BAD_REQUEST, "语音文件标识不存在", echo);
+    };
+    if info.size > MAX_VOICE_DOWNLOAD_BYTES {
+        return ActionResponse::failed(RET_UNSUPPORTED, "语音超过当前下载上限", echo);
+    }
+    let query = HostQuery::VoiceDownload {
+        peer_uid: info.peer_uid.clone(),
+        message_id: info.message_id.clone(),
+        element_id: info.element_id.clone(),
+    };
+    query_response_with_voice(query, queries, echo, Some(&info))
 }
 
 /// Compatibility entry for callers without a host query backend. Directory
@@ -571,6 +649,7 @@ pub fn handle_action_with_queries(
             }
         }
         ActionHandlerKind::GetLoginInfo => query_response(HostQuery::LoginInfo, queries, echo),
+        ActionHandlerKind::GetRecord => get_record(params, store, queries, echo),
         ActionHandlerKind::GetFriendList => query_response(HostQuery::FriendList, queries, echo),
         ActionHandlerKind::GetGroupList => query_response(HostQuery::GroupList, queries, echo),
         ActionHandlerKind::GetGroupInfo => {
@@ -651,6 +730,15 @@ mod tests {
     }
     struct FakeStore;
     impl StoreReader for FakeStore {
+        fn voice_info(&self, file: &str) -> Option<VoiceInfo> {
+            (file == "caligo-voice:10001:42").then(|| VoiceInfo {
+                peer_uid: "u_friend".into(),
+                message_id: "100".into(),
+                element_id: "200".into(),
+                size: 10,
+                md5: "0123456789abcdef0123456789abcdef".into(),
+            })
+        }
         fn get_msg(&self, id: i32) -> Option<StoredMessageView> {
             (id == 42).then(|| StoredMessageView {
                 message_id: 42,
@@ -684,6 +772,7 @@ mod tests {
                 "send_private_msg_async",
                 "send_msg_async",
                 "get_msg",
+                "get_record",
                 "get_login_info",
                 "get_friend_list",
                 "get_group_list",
@@ -740,6 +829,12 @@ mod tests {
                     member_count: 3,
                     max_member_count: 50,
                 }),
+                HostQuery::VoiceDownload { peer_uid, message_id, element_id } => {
+                    QueryData::VoiceDownload(VoiceDownload {
+                        info: VoiceInfo { peer_uid, message_id, element_id, ..FakeStore.voice_info("caligo-voice:10001:42").unwrap() },
+                        silk_hex: "02232153494c4b5f5633".into(),
+                    })
+                }
                 _ => panic!("unexpected public query"),
             })
         }
@@ -757,6 +852,7 @@ mod tests {
                     serde_json::json!({"user_id":8,"message":"hello"})
                 }
                 ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
+                ActionInputSchema::Record => serde_json::json!({"file":"caligo-voice:10001:42"}),
                 ActionInputSchema::GroupInfo => serde_json::json!({"group_id":7,"no_cache":true}),
                 ActionInputSchema::Empty => serde_json::json!({}),
             };
@@ -792,6 +888,9 @@ mod tests {
                 ActionHandlerKind::GetMessage => {
                     assert_eq!(response.data["message_id"], 42);
                     assert_eq!(response.data["real_id"], 398263);
+                }
+                ActionHandlerKind::GetRecord => {
+                    assert_eq!(response.data["base64"], "AiMhU0lMS19WMw==");
                 }
                 ActionHandlerKind::GetLoginInfo => assert_eq!(
                     response.data,
@@ -963,6 +1062,10 @@ mod tests {
                         assert_eq!(schema["properties"]["message_id"]["minimum"], i32::MIN);
                         assert_eq!(schema["properties"]["message_id"]["maximum"], i32::MAX);
                         ActionInputSchema::MessageId
+                    } else if handler == ActionHandlerKind::GetRecord {
+                        assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
+                        assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk"]));
+                        ActionInputSchema::Record
                     } else if handler == ActionHandlerKind::GetGroupInfo {
                         assert_eq!(schema["required"], serde_json::json!(["group_id"]));
                         assert_eq!(schema["properties"]["group_id"]["minimum"], 1);

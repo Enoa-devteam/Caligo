@@ -1391,6 +1391,10 @@ fn transition_valid(from: &ActionState, to: &ActionState) -> bool {
 }
 
 impl StoreReader for AccountActor {
+    fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
+        self.message_store.as_ref()?.voice_info(file)
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<caligo_model::onebot_traits::StoredMessageView> {
         self.message_store.as_ref()?.get_msg(message_id)
     }

@@ -51,6 +51,10 @@ pub struct StoredMessageView {
 pub trait StoreReader {
     /// 按已持久化的 OneBot int32 message_id 查询完整标准消息。
     fn get_msg(&self, message_id: i32) -> Option<StoredMessageView>;
+    /// Resolve a local voice file token within this reader's account.
+    fn voice_info(&self, _file: &str) -> Option<crate::capability::VoiceInfo> {
+        None
+    }
     /// Login identity is absent until the host provides both account and nickname.
     fn login_info(&self) -> Option<(u64, String)>;
     /// Actual daemon/session state, absent until wired to the live actor.
@@ -60,6 +64,10 @@ pub trait StoreReader {
     fn group_peers(&self) -> Vec<String> {
         Vec::new()
     }
+}
+
+pub fn voice_file_token(account_id: u64, message_id: i32) -> String {
+    format!("caligo-voice:{account_id}:{message_id}")
 }
 
 /// 解析 message 段:字符串或标准数组,提取纯文本;未支持段显式失败。

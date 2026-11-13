@@ -43,8 +43,8 @@ test('registry token digest preserves u64 integer literals and ignores formattin
 
 test('base and alias support come from independent actual registry keys', () => {
   const { map } = fixture();
-  assert.equal(map.counts.registry_declared_keys, 13);
-  assert.equal(map.counts.registry_base_keys, 10);
+  assert.equal(map.counts.registry_declared_keys, 14);
+  assert.equal(map.counts.registry_base_keys, 11);
   assert.equal(map.counts.registry_alias_keys, 3);
   assert.equal(row(map, 'onebot.action.get_status').status, 'wired_offline');
   assert.equal(row(map, 'onebot.alias.get_status_async').status, 'missing');

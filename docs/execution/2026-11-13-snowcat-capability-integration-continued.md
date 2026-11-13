@@ -89,3 +89,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 ## A2 语音元素身份持久化
 
 固定 profile 的 D8 listener 接收单个入站 C2C 语音元素。Rust 二次验证来源、账号和 peer，仅保存消息/元素身份、大小和 MD5。原始媒体路径与文件内容不进入事件。MessageStore 使用与文本相同的持久 ID 分配，`get_msg` 返回 `record` 段及账号限定的本地文件标识。旧文本日志无需迁移。合成 D8 → Resident → IPC → journal → 重启回归通过，另验证错 peer 拒绝及既有私聊发送回归。此阶段公开事件仍按文本条件发布。
+
+## A2 OneBot 语音读取
+
+承接 `e1b4420`。普通私聊的单个语音元素在入账后向共享 OneBot 事件队列发布 `record` 段，沿用 `get_msg` 的同一文件标识。共享动作注册 `get_record`，接受 `file` 或 `file_id` 中的一个。文件标识在当前账号持久消息库内解析，再由 `VoiceDownload` 按当前 bridge scope 精确回读和下载。返回结果核对原入站元素的身份、大小和 MD5，响应给出原始 Silk 的 `base64`、`file_size` 和 `file_name`。本机绝对路径和 QQ 文件凭据不暴露。默认或明确 `silk` 可用；其余输出格式明确返回未支持，固定参考的转码依赖独立媒体后端。
+
+最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过。正常 handler 加真实 pipe 的合成回归核对了事件、`get_msg`、`get_record` 和重启后的同一标识，并覆盖异账号、未声明能力、MD5 不匹配和不支持的格式。初次 core 单测发现注册表 schema 断言缺新增类型，补上后通过。真实 Rust registry 的覆盖检查 12/12，共 14 个动作键。此结果仅为离线验收。
