@@ -1,10 +1,11 @@
 //! Normal private action -> durable daemon dispatch -> strong receipt and wrapper store.
 #![cfg(windows)]
 use caligo_core::daemon::{BridgeClient, Daemon, DaemonConfig};
-use caligo_core::onebot::{RET_NOT_CONFIRMED, RET_UNSUPPORTED};
+use caligo_core::onebot::{RET_BAD_PARAMS, RET_BAD_REQUEST, RET_NOT_CONFIRMED, RET_UNSUPPORTED};
 use caligo_core::onebot_server::action_handler;
 use caligo_model::capability::QueryScope;
 use caligo_model::ipc_v3::{BridgeMsg, CoreToBridgeMsg, EventPayload, OutcomePayload};
+use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::*;
 use serde_json::{json, Value};
 use std::sync::{atomic::Ordering, Arc};
@@ -84,13 +85,13 @@ impl Drop for Lab {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
-fn advertise(bridge: &mut BridgeClient, scope: QueryScope) {
+fn advertise(bridge: &mut BridgeClient, scope: QueryScope, private_voice: bool) {
     bridge
         .send(&BridgeMsg::SendCapabilities {
             scope,
             private_text: true,
             group_text: true,
-            private_voice: false,
+            private_voice,
         })
         .unwrap();
     bridge
@@ -170,12 +171,12 @@ fn private_requires_current_send_capability_and_strong_persisted_identity() {
     );
     let mut wrong = scope.clone();
     wrong.host_nonce += 1;
-    advertise(&mut bridge, wrong);
+    advertise(&mut bridge, wrong, false);
     assert_eq!(
         handler("send_private_msg", &params, Value::Null).retcode,
         RET_UNSUPPORTED
     );
-    advertise(&mut bridge, scope);
+    advertise(&mut bridge, scope, false);
     let call = handler.clone();
     let task =
         std::thread::spawn(move || call("send_private_msg", &params, json!({"echo":"private"})));
@@ -238,7 +239,7 @@ fn private_requires_current_send_capability_and_strong_persisted_identity() {
 fn private_unknown_returns_unknown_without_a_second_dispatch() {
     let lab = Lab::new();
     let (mut bridge, scope) = lab.connect();
-    advertise(&mut bridge, scope);
+    advertise(&mut bridge, scope, false);
     let handler = action_handler(lab.daemon.clone());
     let task = std::thread::spawn(move || {
         handler(
@@ -282,5 +283,72 @@ fn private_unknown_returns_unknown_without_a_second_dispatch() {
     assert!(
         matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}),
         "unknown must not enqueue another send"
+    );
+}
+
+#[test]
+fn private_record_waits_for_exact_readback_to_be_persisted() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.connect();
+    let handler = action_handler(lab.daemon.clone());
+    let silk = b"\x02#!SILK_V3\x03\x00\x44\x55\x66";
+    let message = json!([{"type":"record","data":{"file":format!("base64://{}",STANDARD.encode(silk))}}]);
+    let params = json!({"user_id":20002, "message":message});
+    assert_eq!(handler("send_private_msg", &params, Value::Null).retcode, RET_UNSUPPORTED);
+    advertise(&mut bridge, scope.clone(), true);
+    for bad in ["https://example.invalid/audio.silk", "C:/audio.silk", "base64://not-encoded"] {
+        let params = json!({"user_id":20002,"message":[{"type":"record","data":{"file":bad}}]});
+        assert_eq!(handler("send_private_msg", &params, Value::Null).retcode, RET_BAD_PARAMS);
+    }
+    assert_eq!(handler("send_group_msg", &json!({"group_id":30003,"message":message}), Value::Null).retcode,
+        RET_UNSUPPORTED);
+    assert_eq!(handler("send_private_msg", &json!({"user_id":20002,"message":[
+        {"type":"text","data":{"text":"mixed"}}, message[0],
+    ]}), Value::Null).retcode, RET_BAD_PARAMS);
+    let call = handler.clone();
+    let task = std::thread::spawn(move || call("send_msg", &params, json!("voice")));
+    let CoreToBridgeMsg::DispatchPrivateVoice {
+        request_id, scope: dispatch_scope, wire_seq, peer_uin, silk: audio, ..
+    } = bridge.recv().unwrap() else { panic!("expected private voice dispatch") };
+    assert_eq!(dispatch_scope, scope);
+    assert_eq!(peer_uin, "20002");
+    assert_eq!(audio, silk);
+    assert!(wire_seq > 0);
+    bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
+    let native_id = "90071992547409931234";
+    bridge.send(&BridgeMsg::SendResult {
+        request_id, outcome: OutcomePayload::Success { native_id: native_id.into() },
+    }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { terminal: true, .. }));
+    assert!(!task.is_finished(), "the receipt alone must not complete the action");
+
+    let mut readback = event(native_id);
+    readback.text.clear();
+    readback.wrapper_message.as_mut().unwrap().record.elements = vec![WrapperElement {
+        element_type: 4,
+        text_element: None,
+        voice: Some(WrapperVoice {
+            element_id: "90071992547409931235".into(), size: silk.len() as u32,
+            md5: "0123456789abcdef0123456789abcdef".into(),
+        }),
+    }];
+    bridge.send(&BridgeMsg::Event { event: readback }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
+    let result = task.join().unwrap();
+    assert_eq!(result.retcode, 0);
+    assert_eq!(result.echo, "voice");
+    let id = &result.data["message_id"];
+    let read = handler("get_msg", &json!({"message_id":id}), Value::Null);
+    let token = format!("caligo-voice:10001:{}", id.as_i64().unwrap());
+    assert_eq!(read.data["message"], json!([{"type":"record","data":{"file":token}}]));
+    assert_eq!(handler("get_record", &json!({"file":token}), Value::Null).retcode, RET_BAD_REQUEST);
+    let reopened = caligo_core::message_store::MessageStore::open(
+        lab.dir.join("journal.messages.jsonl"), 10001, None,
+    ).unwrap();
+    assert_eq!(
+        reopened.get_msg(id.as_i64().unwrap() as i32).unwrap().message,
+        read.data["message"],
     );
 }

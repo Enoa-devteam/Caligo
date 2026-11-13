@@ -90,7 +90,7 @@ function (args) {
   if (R.stopped || Date.now() >= deadline) return failure('voice_preparation_expired');
 
   const key = args.requestId;
-  const pending = {cookie, chat:1, peer:peerUid, voice, selfUin:args.account,
+  const pending = {cookie, chat:1, peer:peerUid, peerUin:args.peerUin, voice, selfUin:args.account,
     wireSeq:args.wireSeq, deadline, addId:null, updateId:null, done:false};
   R.sends[key] = pending;
   R.sendResults[key] = {status:'pending'};

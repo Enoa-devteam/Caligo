@@ -1581,11 +1581,15 @@
     },
     "record": {
       "status": "partial_offline",
-      "reason": "Incoming private voice publishes a durable record token. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
           "symbol": "fn get_record("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn send_payload("
         },
         {
           "path": "crates/caligo-core/src/onebot_events.rs",
@@ -1644,6 +1648,20 @@
               "symbol": "fn voice_media("
             }
           ]
+        },
+        {
+          "name": "Scoped private voice dispatch and verified native readback",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "pub fn submit_private_voice("
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_v8.rs",
+              "symbol": "pub fn build_voice_send_js("
+            }
+          ]
         }
       ],
       "supported_versions": {
@@ -1671,11 +1689,19 @@
             "symbol": "A2 独立 SILK 转码"
           },
           {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot 私聊语音发送"
+          },
+          {
             "path": "crates/caligo-core/tests/wrapper_message_chain.rs",
             "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_private_send_lab.rs",
+            "symbol": "fn private_record_waits_for_exact_readback_to_be_persisted()"
           }
         ],
-        "limits": "Account-scoped tokens only. WAV and OGG require a pinned SILK decoder and FFmpeg. Outgoing voice, group voice and QQ field acceptance remain open."
+        "limits": "Only short private Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. Outgoing download, group voice and QQ field acceptance remain open."
       }
     }
   },
@@ -2510,7 +2536,7 @@
       "reference_id": "onebot.action.get_record",
       "category": "actions",
       "status": "partial_offline",
-      "reason": "Incoming private voice publishes a durable record token. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "assessment": "record"
     },
     {
@@ -6339,7 +6365,7 @@
       "reference_id": "message_segment.record",
       "category": "message_segments",
       "status": "partial_offline",
-      "reason": "Incoming private voice publishes a durable record token. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "assessment": "record"
     },
     {
@@ -41685,7 +41711,7 @@
     }
   ],
   "registry": {
-    "semantic_sha256": "a545b79d2a4a2f02375f10b019fa9102c583ab7a46fd13565ccb62d42c47e9f0",
+    "semantic_sha256": "2bf818a76c8d6c0f76da555232e9653ef717d1e8d400a3b9d039b1cc865ff578",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {

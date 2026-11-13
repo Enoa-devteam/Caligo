@@ -187,7 +187,7 @@ impl WrapperMessageEnvelope {
         Ok(text)
     }
 
-    /// Only a single incoming C2C voice element has an evidenced download contract.
+    /// Single private voice admitted by D8. Self-sent rows come from D9 readback.
     pub fn voice(&self) -> Option<&WrapperVoice> {
         let [element] = self.record.elements.as_slice() else {
             return None;
@@ -195,11 +195,16 @@ impl WrapperMessageEnvelope {
         let voice = element.voice.as_ref()?;
         (element.element_type == 4
             && element.text_element.is_none()
-            && self.source == WrapperSource::Recv
             && self.record.chat_type == 1
-            && self.record.sender_uid == self.record.peer_uid
-            && self.record.sender_uin == self.record.peer_uin
-            && self.record.sender_uin != self.binding.account
+            && match self.source {
+                WrapperSource::Recv => self.record.sender_uid == self.record.peer_uid
+                    && self.record.sender_uin == self.record.peer_uin
+                    && self.record.sender_uin != self.binding.account,
+                WrapperSource::AddSend => self.record.sender_uin == self.binding.account
+                    && self.record.peer_uin != self.binding.account
+                    && self.record.send_status == Some(2),
+                WrapperSource::Update => false,
+            }
             && voice.is_valid())
         .then_some(voice)
     }

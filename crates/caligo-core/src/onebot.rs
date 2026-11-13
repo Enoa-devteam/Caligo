@@ -131,7 +131,7 @@ pub enum ActionInputSchema {
 impl ActionInputSchema {
     pub fn to_json_schema(self) -> Value {
         let id = serde_json::json!({"type":"integer", "minimum":0, "maximum":u64::MAX});
-        let message = serde_json::json!({
+        let mut message = serde_json::json!({
             "description":"Literal text or text segments; other segment types are unsupported",
             "anyOf":[
                 {"type":"string"},
@@ -145,6 +145,19 @@ impl ActionInputSchema {
                 }}
             ]
         });
+        if matches!(self, Self::PrivateMessage | Self::Message) {
+            message["description"] = Value::from("Literal text, text segments, or one private record segment containing Tencent SILK v3 Base64");
+            message["anyOf"].as_array_mut().unwrap().push(serde_json::json!({
+                "type":"array", "minItems":1, "maxItems":1, "items":{
+                    "type":"object", "required":["type","data"],
+                    "properties":{"type":{"const":"record"}, "data":{
+                        "type":"object","required":["file"],
+                        "properties":{"file":{"type":"string","pattern":"^base64://",
+                            "maxLength":9+4*caligo_model::voice::MAX_SEND_BYTES.div_ceil(3)}}
+                    }}
+                }
+            }));
+        }
         let mut schema = serde_json::json!({"type":"object", "properties":{}});
         match self {
             Self::Empty => {}
@@ -362,12 +375,11 @@ fn get_message_text(params: &Value) -> Result<String, ActionResponse> {
 }
 
 fn dispatch_send(
-    sink: &mut dyn SendSink,
     echo: Value,
-    payload: SendPayload,
+    outcome: Result<SendDisposition, String>,
     allow_async: bool,
 ) -> ActionResponse {
-    match sink.send(&payload) {
+    match outcome {
         Ok(SendDisposition::Confirmed { message_id }) => {
             ActionResponse::ok(serde_json::json!({"message_id": message_id}), echo)
         }
@@ -396,7 +408,7 @@ fn send_payload(
     echo: Value,
     allow_async: bool,
 ) -> ActionResponse {
-    let (target, text) = match target_kind {
+    let target = match target_kind {
         SendTargetKind::Group => {
             let group_id = match get_u64(params, "group_id") {
                 Ok(v) => v,
@@ -405,14 +417,7 @@ fn send_payload(
                     return r;
                 }
             };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (SendTarget::Group { group_id }, text)
+            SendTarget::Group { group_id }
         }
         SendTargetKind::Private => {
             let user_id = match get_u64(params, "user_id") {
@@ -422,14 +427,7 @@ fn send_payload(
                     return r;
                 }
             };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (SendTarget::Private { user_id }, text)
+            SendTarget::Private { user_id }
         }
         SendTargetKind::Inferred => {
             let inferred_type = if params.get("group_id").is_some() {
@@ -443,7 +441,7 @@ fn send_payload(
                 .get("message_type")
                 .and_then(Value::as_str)
                 .unwrap_or(inferred_type);
-            let target = match message_type {
+            match message_type {
                 "group" => match get_u64(params, "group_id") {
                     Ok(id) => SendTarget::Group { group_id: id },
                     Err(mut r) => {
@@ -465,18 +463,36 @@ fn send_payload(
                         echo,
                     )
                 }
-            };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (target, text)
+            }
         }
     };
-    dispatch_send(sink, echo, SendPayload { target, text }, allow_async)
+    if let Some([item]) = params.get("message").and_then(Value::as_array).map(Vec::as_slice) {
+        if item.get("type").and_then(Value::as_str) == Some("record") {
+            let SendTarget::Private { user_id } = target else {
+                return ActionResponse::failed(RET_UNSUPPORTED, "当前语音发送仅支持私聊", echo);
+            };
+            let Some(silk) = item.get("data").and_then(|data| data.get("file"))
+                .and_then(Value::as_str).and_then(|file| file.strip_prefix("base64://"))
+                .filter(|encoded| encoded.len() <= 4 * caligo_model::voice::MAX_SEND_BYTES.div_ceil(3))
+                .and_then(|encoded| STANDARD.decode(encoded).ok())
+                .filter(|bytes| caligo_model::voice::validate_short_tencent_silk(bytes))
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "语音 file 须为有界的腾讯 SILK v3 Base64", echo);
+            };
+            if user_id == 0 {
+                return ActionResponse::failed(RET_BAD_PARAMS, "语音 user_id 须为正整数", echo);
+            }
+            return dispatch_send(echo, sink.send_private_voice(user_id, silk), allow_async);
+        }
+    }
+    let text = match get_message_text(params) {
+        Ok(text) => text,
+        Err(mut response) => {
+            response.echo = echo;
+            return response;
+        }
+    };
+    dispatch_send(echo, sink.send(&SendPayload { target, text }), allow_async)
 }
 
 /// Whether an action name belongs to the implemented public API surface.

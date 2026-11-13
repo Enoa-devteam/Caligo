@@ -86,10 +86,15 @@ function setup(kind, armedAccount='10001') {
   assert.ok(eval(start).startsWith('ARMED'));
 }
 const run = () => JSON.parse(eval(send));
-function outcome() {
+function outcome(projected=false) {
   const batch=JSON.parse(eval(poll));
-  assert.equal(batch.items.length,0);
-  assert.ok(!JSON.stringify(batch).includes(md5));
+  assert.equal(batch.items.length, projected ? 1 : 0);
+  if (projected) {
+    assert.equal(batch.items[0].source,'add_send');
+    assert.deepEqual(batch.items[0].record.elements,[{elementType:4,voice:{element_id:elementId,
+      size:bytes.length,md5}}]);
+  }
+  assert.ok(!JSON.stringify(batch).includes('filePath'));
   return batch.sendResults['voice-7'];
 }
 function notify() {
@@ -121,7 +126,7 @@ function notify() {
   notify(); await flush();
   assert.equal(outcome().status,'pending');
   settle({result:0,msgId:'promise-id'}); await flush();
-  assert.deepEqual(outcome(),{status:'done',msgId});
+  assert.deepEqual(outcome(true),{status:'done',msgId});
   assert.equal(submits,1); assert.equal(reads,1);
   assert.deepEqual(fs.readFileSync(dest),bytes);
 

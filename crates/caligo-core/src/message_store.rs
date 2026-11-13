@@ -335,8 +335,14 @@ impl MessageStore {
             || event.native_id.0 != record.msg_id
             || event.text != text
             || event.platform_time != Some(platform_time)
-            || voice.is_some() && (event.direction != caligo_model::Direction::Incoming
-                || event.source != EventSource::Recv || sender_id == account_id)
+            || voice.is_some() && (event.source != EventSource::Recv
+                || match envelope.source {
+                    caligo_model::wrapper_message::WrapperSource::Recv =>
+                        event.direction != caligo_model::Direction::Incoming,
+                    caligo_model::wrapper_message::WrapperSource::AddSend =>
+                        event.direction != caligo_model::Direction::SelfSent,
+                    caligo_model::wrapper_message::WrapperSource::Update => true,
+                })
             || event.direction == caligo_model::Direction::SelfSent
                 && record.sender_uin != envelope.binding.account
         {
@@ -502,6 +508,7 @@ impl StoreReader for MessageStore {
         if account != self.account_id.to_string() || id != message.message_id.to_string()
             || message.identity.chat_type != ChatType::Private
             || message.identity.native_id != voice.message_id
+            || message.sender.get("user_id")?.as_u64()? == self.account_id
         {
             return None;
         }

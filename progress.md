@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-13 A2 语音发送：`79a53bd` 完成合成宿主的缓存、提交和回读合同。现已接通按连接代次授权的持久请求、正常 IPC 和 owner 调度，已确认消息的持久投影和 OneBot 入口待接。[私聊语音发送 IPC 与账本](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音发送-ipc-与账本)
+2026-11-13 A2 语音发送：`79a53bd` 完成合成宿主合同，`60d703c` 接通 scoped IPC、持久请求和 owner 调度。共享 OneBot 接受单段私聊腾讯 SILK v3 Base64，精确回读入库后返回可供 `get_msg` 查询的 ID。真实 QQ、宿主缓存寿命和已发送语音下载待验证。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
 
 2026-11-13 A2 转码：`099db2a` 的独立解码器通过合成腾讯 SILK v3 到 WAV/OGG 的真实工具验证。共享 `get_record` 已接可选 WAV/OGG，正常单账号与多账号启动均可加载本机工具配置。合成命名管道覆盖下载、转换及失败返回，QQ 现场未开始。[OneBot 语音转码](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音转码)
 

@@ -51,6 +51,8 @@ caligo-media --config <absolute-json> silk-ogg --input <absolute-silk> --output-
 
 OneBot `get_record` 接受入站私聊语音的账号限定文件标识。`out_format` 省略时返回原始 Silk，配置 `silk_decoder` 后可选 `wav` 或 `ogg`。下载上限 128 KiB，转码的中间 PCM 与输出各最多 4 MiB，并受更低的本机配置限制。响应给出 Base64、实际字节数和固定文件名。缺配置或不支持的格式返回 1404，工具失败返回 1502，转码超时或停止返回 1501。
 
+绑定会话声明私聊语音发送能力后，`send_private_msg` 或私聊 `send_msg` 可接受单个 `record` 段。将腾讯前缀 SILK v3 编码为 `base64://<数据>` 放入 `data.file`，上限为 128 KiB 和 50 个封装包。成功响应的 `message_id` 可供 `get_msg` 回读。发送未知返回 1501，并保留原请求。群发语音、路径或 URL 输入及已发送语音的下载仍未支持。
+
 ## 验收边界
 
 `media_tool_lab` 使用自有 Rust fake process runner，覆盖固定格式、坏 hash、超时、超大 stdout/stderr、非零退出、停止、输入 regular-file 和 byte limit。fake 测试只证明本地边界合同；真实 ffmpeg 可在用户授权且本机已安装时做 readonly version/format 检查，不下载、不运行参考仓库脚本，不构成 QQ 现场或长期运行验收。

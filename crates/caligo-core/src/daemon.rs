@@ -336,22 +336,28 @@ impl Daemon {
 
     /// Whether the currently active, exactly bound bridge advertised private text send.
     pub fn supports_private_text(&self) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_private_text(&scope))
+    }
+
+    pub fn supports_private_voice(&self) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_private_voice(&scope))
+    }
+
+    fn current_send_scope(&self) -> Option<QueryScope> {
         let Ok(actor) = self.actor.lock() else {
-            return false;
+            return None;
         };
         if actor.phase() != caligo_model::Phase::Active {
-            return false;
+            return None;
         }
-        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
-            return false;
-        };
-        let scope = QueryScope {
+        let session = actor.session()?;
+        let connection = actor.connection()?;
+        Some(QueryScope {
             account: session.account.0.clone(),
             host_nonce: session.host.host_nonce,
             session_generation: session.session_generation,
             connection_epoch: connection.connection_epoch,
-        };
-        self.query_broker.supports_private_text(&scope)
+        })
     }
 
     /// Submit one OneBot action through the same durable actor→bridge path as

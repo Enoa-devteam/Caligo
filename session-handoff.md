@@ -12,7 +12,7 @@
 
 语音持久化检查点 `e1b4420` 已接当前 profile 的单个私聊入站元素。`318e46d` 的共享事件和 `get_record` 使用同一账号限定文件标识。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
 
-`3ddb47d` 接通共享 OneBot 动作的可选 WAV/OGG。私聊语音发送已接入按连接代次声明的发送能力、持久请求和 bridge owner 调度。下一步接入精确回读后的持久消息投影和 OneBot `record` 发送，再处理其他媒体和 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。[语音发送 IPC 与账本](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音发送-ipc-与账本)
+`3ddb47d` 接通可选 WAV/OGG。私聊 `record` 发送已有 scoped IPC、owner 提交、精确回读与 OneBot 持久消息 ID。下一工作块核对群语音和其他媒体的宿主文件、关联与资源寿命，再推进 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。候选冻结前继续离线。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

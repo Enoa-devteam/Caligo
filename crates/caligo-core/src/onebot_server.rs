@@ -75,35 +75,13 @@ impl DaemonSendSink {
     pub fn new(daemon: Arc<Daemon>) -> Self {
         Self { daemon }
     }
-}
-
-impl SendSink for DaemonSendSink {
-    fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
-        let (kind, peer) = match &payload.target {
-            SendTarget::Group { group_id } => (SessionKind::Group, *group_id),
-            SendTarget::Private { user_id } if self.daemon.supports_private_text() => {
-                (SessionKind::Private, *user_id)
-            }
-            SendTarget::Private { .. } => {
-                return Ok(SendDisposition::Unsupported {
-                    reason: "当前宿主未声明绑定会话的私聊文本发送能力".into(),
-                })
-            }
-        };
-        let account = self.daemon.config.account.clone();
-        // Persist the public UIN; the owner adapter resolves a native UID.
-        let target = SessionKey::new(account, kind, peer.to_string());
-        let request_id = self.daemon.submit_onebot_text(
-            target.clone(),
-            payload.text.clone(),
-            SEND_DEADLINE_MS,
-        )?;
+    fn wait_for_receipt(&self, request_id: &str, target: &SessionKey) -> Result<SendDisposition, String> {
         let deadline = Instant::now() + Duration::from_millis(SEND_DEADLINE_MS + 1_000);
         // NativeStarted records dispatch progress, not delivery confirmation.
         // Return success only after both the native receipt and persisted
         // OneBot message id are available.
         loop {
-            if let Some((state, message_id)) = self.daemon.onebot_text_status(&request_id, &target)
+            if let Some((state, message_id)) = self.daemon.onebot_text_status(request_id, target)
             {
                 match state {
                     ActionState::ConfirmedSuccess { .. } => {
@@ -138,6 +116,41 @@ impl SendSink for DaemonSendSink {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+}
+
+impl SendSink for DaemonSendSink {
+    fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
+        let (kind, peer) = match &payload.target {
+            SendTarget::Group { group_id } => (SessionKind::Group, *group_id),
+            SendTarget::Private { user_id } if self.daemon.supports_private_text() => {
+                (SessionKind::Private, *user_id)
+            }
+            SendTarget::Private { .. } => {
+                return Ok(SendDisposition::Unsupported {
+                    reason: "当前宿主未声明绑定会话的私聊文本发送能力".into(),
+                })
+            }
+        };
+        let account = self.daemon.config.account.clone();
+        // Persist the public UIN; the owner adapter resolves a native UID.
+        let target = SessionKey::new(account, kind, peer.to_string());
+        let request_id = self.daemon.submit_onebot_text(
+            target.clone(), payload.text.clone(), SEND_DEADLINE_MS,
+        )?;
+        self.wait_for_receipt(&request_id, &target)
+    }
+
+    fn send_private_voice(&mut self, user_id: u64, silk: Vec<u8>) -> Result<SendDisposition, String> {
+        if !self.daemon.supports_private_voice() {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的私聊语音发送能力".into(),
+            });
+        }
+        let peer = user_id.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, SessionKind::Private, &peer);
+        let request_id = self.daemon.submit_private_voice(&peer, silk, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
     }
 }
 

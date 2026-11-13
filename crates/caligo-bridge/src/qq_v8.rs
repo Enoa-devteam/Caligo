@@ -396,13 +396,15 @@ pub const D8_START_JS: &str = r"
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
           (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+      } else if (pending.voice && !push('add_send', pending.readback.record, true)) {
+        R.sendResults[key] = {status:'unknown', reason:'verified_voice_projection_rejected'};
       } else {
         R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
       }
       pending.done = true;
       if (R.sends[key] === pending) delete R.sends[key];
     };
-    var push = function (src, m) {
+    var push = function (src, m, verifiedVoice) {
       try {
         if (!m || typeof m !== 'object' || !Array.isArray(m.elements) ||
             !m.elements.length || m.elements.length > 128) { R.rejected++; return; }
@@ -416,8 +418,8 @@ pub const D8_START_JS: &str = r"
             !Number.isInteger(m.subMsgType) || m.subMsgType < 0 ||
             (m.clientSeq !== undefined && typeof m.clientSeq !== 'string') ||
             (m.sendStatus !== undefined && !Number.isInteger(m.sendStatus))) { R.rejected++; return; }
-        // A self-sent voice receipt is used by D9; D8 only publishes incoming voice.
-        if ((src === 'add_send' || src === 'update') && voiceAccount &&
+        // The unverified self-sent callback only feeds D9 correlation.
+        if (!verifiedVoice && (src === 'add_send' || src === 'update') && voiceAccount &&
             m.chatType === 1 && m.senderUin === voiceAccount &&
             m.elements.length === 1 && m.elements[0] && m.elements[0].elementType === 4) {
           correlateSend(R, m, src);
@@ -426,9 +428,9 @@ pub const D8_START_JS: &str = r"
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
-          if (e && e.elementType === 4 && voiceAccount && src === 'recv' &&
-              m.chatType === 1 && m.elements.length === 1 && m.senderUin !== voiceAccount &&
-              m.senderUid === m.peerUid && m.senderUin === m.peerUin) {
+          if (e && e.elementType === 4 && voiceAccount && m.chatType === 1 && m.elements.length === 1 &&
+              (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
+                m.senderUid === m.peerUid && m.senderUin === m.peerUin))) {
             var ptt = e.pttElement;
             if (t || !ptt || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
                 !/[1-9]/.test(e.elementId) || typeof ptt.fileSize !== 'string' ||
@@ -452,13 +454,14 @@ pub const D8_START_JS: &str = r"
           msgType:m.msgType, subMsgType:m.subMsgType,
           peerUid:m.peerUid, peerUin:m.peerUin, senderUid:m.senderUid, senderUin:m.senderUin,
           sendStatus:m.sendStatus, elements:elements};
-        if (src === 'add_send' || src === 'update') correlateSend(R, m, src);
+        if (!verifiedVoice && (src === 'add_send' || src === 'update')) correlateSend(R, m, src);
         var item = {source:src, observed_at_unix_ms:Date.now(), record:record};
         var bytes = utf8Bytes(JSON.stringify(item));
         if (bytes > 65536 || R.recv.length >= 128 || R.recvBytes + bytes > 393216) {
           R.overflow++; return;
         }
         R.recv.push(item); R.recvBytes += bytes;
+        return true;
       } catch (err) { R.rejected++; }
     };
     var matchesSendElement = function (record, send) {
@@ -480,7 +483,8 @@ pub const D8_START_JS: &str = r"
         if (!send || send.done || send.failed || m.guildId !== send.cookie || m.chatType !== send.chat ||
             m.peerUid !== send.peer || typeof m.msgId !== 'string' || !m.msgId || m.msgId === '0' ||
             m.senderUin !== send.selfUin || !matchesSendElement(m, send) ||
-            (send.voice && (!/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
+            (send.voice && (m.peerUin !== send.peerUin ||
+              !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
           if (send.addId && (send.addId !== m.msgId ||
               (send.voice && send.addElementId !== m.elements[0].elementId))) {
@@ -508,11 +512,25 @@ pub const D8_START_JS: &str = r"
                 pending.readback = {status:'unknown', reason:'exact_query_miss'};
               } else {
                 var record = list[0];
-                pending.readback = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
+                var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
                   record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
                   record.sendStatus === 2 && matchesSendElement(record, pending) &&
-                  (!pending.voice || record.elements[0].elementId === pending.addElementId)
-                    ? {status:'readback', msgId:record.msgId}
+                  (!pending.voice || (record.peerUin === pending.peerUin &&
+                    record.elements[0].elementId === pending.addElementId));
+                var owned;
+                if (matched && pending.voice) {
+                  owned = {};
+                  var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
+                    'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
+                  for (var f = 0; f < fields.length; f++) {
+                    var value = record[fields[f]];
+                    if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+                  }
+                  owned.elements = [{elementType:4, elementId:pending.addElementId,
+                    pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
+                }
+                pending.readback = matched
+                    ? {status:'readback', msgId:record.msgId, record:owned}
                     : {status:'unknown', reason:'exact_query_identity_mismatch'};
               }
               settleSendResult(R, key, pending);
@@ -1566,7 +1584,9 @@ pub fn build_send_js(
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
           (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
-      } else { R.sendResults[key] = {status:'done', msgId:pending.readback.msgId}; }
+      } else {
+        R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
+      }
       pending.done = true;
       if (R.sends[key] === pending) delete R.sends[key];
     }"#;
