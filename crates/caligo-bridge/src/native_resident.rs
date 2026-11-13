@@ -203,11 +203,11 @@ fn cpb_event_from_record(fields: &RecordFields, groups: &HashSet<u64>) -> Option
         .sender_uin
         .as_deref()
         .filter(|value| !value.is_empty())?;
+    fields.seq?;
     let peer = fields
         .peer_uid
         .as_deref()
         .filter(|value| !value.is_empty())?;
-    fields.seq?;
     let text = fields.text.as_deref()?;
     let msg_time = fields.platform_time?;
     let chat_type = chat_type_for_peer(peer, groups);

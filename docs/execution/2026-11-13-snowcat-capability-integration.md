@@ -17,6 +17,14 @@
 - 编译器提示已有重复 `no_mangle` 属性、未使用变量/代码等告警；不以通过测试声称无告警。
 - A0 基线审阅修复：ProfileService acquisition 异常统一清除全局状态；跨 owner tick 保留 session；非 Map 返回继续拒绝，并吸收跨上下文 Promise/thenable 拒绝。`cargo test -p caligo-bridge --lib --features research uid_map_script_tests --locked --offline --target-dir target-harness -- --test-threads=1`：4/4 PASS，覆盖双向 exact-key Map、异常清理、session 持有、foreign Promise 与 delayed thenable。`qq_v8.rs` 单文件 rustfmt 检查仍报告既有格式差异，未批量格式化。
 
+## 共享入口与主线整合
+
+- `ef238e1`：保存计划、ProfileService research 基线及异常/持有修复。
+- `c1b5b1a`：10 个真实 OneBot 动作名（含 3 个 async alias）的 typed registry；支持判断和执行均经 `resolve_action`。参数 schema 和读写权限是发现元数据，不能替代运行时参数校验、鉴权或原生能力判定。定向 `cargo test -p caligo-core --lib onebot --locked --offline --target-dir target-harness` 27/27 PASS，文件 rustfmt 与 diff check PASS。
+- 主线 `2436f93` 合并保留 learned group peer 索引、既有 fail-closed 修复与两侧历史证据。公开目录动作的旧占位/空列表成功语义按本计划更正，见 [查询指南](../guides/onebot-queries.md)。
+- 主线整合回归：`RUST_TEST_THREADS=1 ./init.sh -Mode all` exit 0，default/research workspace 均 PASS；完整输出在 ignored `local-evidence/snowcat-main-integration-20261113.log`。目录拒绝语义定向 OneBot 29/29、learned peer 索引 1/1 PASS。
+- SSE 与 MCP 作为可独立验证的共享协议入口先行；这不表示 A1/A2 已完成。SSE 使用 HTTP POST 之后的有界 fanout；MCP 通过同一 registry 和 action handler。所有原生能力仍按实际 backend 拒绝或执行。
+
 ## 后续阶段和停止条件
 
 A0 的固定注册分母与 Caligo 映射审阅完成后，按 A1 宿主/IPC、A2 业务、A3 应用、A4 候选冻结推进，各阶段独立提交。没有真实 backend 的注册、空列表与占位结果不计已接线。未交付 ABI 保持明确失败并登记缺口，其他已有合同的工作继续。

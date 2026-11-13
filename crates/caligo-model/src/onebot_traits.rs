@@ -55,6 +55,11 @@ pub trait StoreReader {
     fn login_info(&self) -> Option<(u64, String)>;
     /// Actual daemon/session state, absent until wired to the live actor.
     fn online_status(&self) -> Option<bool>;
+    /// Group ids learned from persisted group messages; absent until observed.
+    /// Empty by default so readers without a message store stay truthful.
+    fn group_peers(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// 解析 message 段:字符串或标准数组,提取纯文本;未支持段显式失败。

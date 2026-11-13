@@ -61,6 +61,9 @@ impl SendSink for DaemonSendSink {
             SEND_DEADLINE_MS,
         )?;
         let deadline = Instant::now() + Duration::from_millis(SEND_DEADLINE_MS + 1_000);
+        // NativeStarted records dispatch progress, not delivery confirmation.
+        // Return success only after both the native receipt and persisted
+        // OneBot message id are available.
         loop {
             if let Some((state, message_id)) = self.daemon.onebot_text_status(&request_id, &target)
             {

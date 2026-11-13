@@ -23,7 +23,7 @@ pub struct G1Ctx {
 /// 锚点 RVA(与 capability profile `resolver.anchors` 一致)。
 const GETTER_RVA: usize = 0x72DE38;
 const ANCHOR_SVC_VTBL_RVA: usize = 0x3F6DED8;
-const ANCHOR_TRANSPORT_VTBL_RVA: usize = 0x41403B8;
+const ANCHOR_TRANSPORT_VTBL_RVA: usize = 0x3EBEA48;
 /// MSFService 单例槽(lifetime contract:getter 输出写入处)。
 const SVC_OBJ_SLOT: usize = 0x674D2C0;
 const SVC_CTRL_SLOT: usize = 0x674D2C8;

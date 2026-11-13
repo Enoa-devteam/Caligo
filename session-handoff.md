@@ -1,5 +1,8 @@
 # Session handoff
 
+## 2026-11-13 PR #2 conflict integration
+
+PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.
 ## Current Objective
 
 2026-11-13 已完成 SnowCat 研究对齐的首个工作块。`qq-entry --uid-map-profile-service --uid-map-uin <decimal> --uid-map-result <new-local-evidence.json>` 在原 owner pump 上运行固定 ProfileService 往返，已通过离线验证。[精确模块与验收记录](docs/execution/2026-10-11-n4-response-recovery.md#2026-11-13-n4-r3-snowcat-profileservice-离线实现)

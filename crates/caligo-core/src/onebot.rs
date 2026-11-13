@@ -408,6 +408,24 @@ pub fn is_supported_action(action: &str) -> bool {
     resolve_action(action).is_some()
 }
 
+/// Validate only the known directory request shape; this does not register a
+/// capability. Learned peers are an internal index, not a directory backend.
+fn unsupported_directory_validation(action: &str, params: &Value) -> Option<ActionResponse> {
+    if action == "get_group_info"
+        && !params
+            .get("group_id")
+            .and_then(Value::as_u64)
+            .is_some_and(|id| id > 0)
+    {
+        return Some(ActionResponse::failed(
+            RET_BAD_PARAMS,
+            "group_id 必须是正整数",
+            Value::Null,
+        ));
+    }
+    None
+}
+
 /// Process one action through the shared action registry.
 pub fn handle_action(
     action: &str,
@@ -416,6 +434,10 @@ pub fn handle_action(
     sink: &mut dyn SendSink,
     store: &dyn StoreReader,
 ) -> ActionResponse {
+    if let Some(mut response) = unsupported_directory_validation(action, params) {
+        response.echo = echo;
+        return response;
+    }
     let Some(definition) = resolve_action(action) else {
         return ActionResponse::failed(RET_UNSUPPORTED, "未支持动作", echo);
     };
@@ -556,14 +578,7 @@ mod tests {
             assert_eq!(entry.permission, canonical.permission);
             assert_eq!(entry.input_schema, canonical.input_schema);
         }
-        for name in [
-            "",
-            "GET_MSG",
-            "delete_msg",
-            "get_group_list",
-            "get_group_info",
-            "get_friend_list",
-        ] {
+        for name in ["", "GET_MSG", "delete_msg"] {
             assert!(!is_supported_action(name));
             let mut sink = FakeSink {
                 ready: true,
@@ -956,5 +971,90 @@ mod tests {
         ))
         .unwrap();
         assert!(!version["data"]["app_version"].as_str().unwrap().is_empty());
+    }
+
+    struct GroupStore;
+
+    impl StoreReader for GroupStore {
+        fn get_msg(&self, _: i32) -> Option<StoredMessageView> {
+            None
+        }
+        fn login_info(&self) -> Option<(u64, String)> {
+            None
+        }
+        fn online_status(&self) -> Option<bool> {
+            Some(true)
+        }
+        fn group_peers(&self) -> Vec<String> {
+            vec!["1098345913".into(), "1102382705".into()]
+        }
+    }
+
+    #[test]
+    fn directory_queries_do_not_report_learned_peers_as_complete_platform_data() {
+        // Preserve the internal index without presenting its partial observations
+        // as a group directory, placeholder names/counts, or an empty friend list.
+        assert_eq!(GroupStore.group_peers(), ["1098345913", "1102382705"]);
+        for store in [&GroupStore as &dyn StoreReader, &FakeStore] {
+            for (action, params) in [
+                ("get_group_list", Value::Null),
+                (
+                    "get_group_info",
+                    serde_json::json!({"group_id":1102382705u64}),
+                ),
+                ("get_group_info", serde_json::json!({"group_id":999u64})),
+                ("get_friend_list", Value::Null),
+            ] {
+                assert!(!is_supported_action(action));
+                assert!(resolve_action(action).is_none());
+                let echo = serde_json::json!({"action":action, "request":[1, false]});
+                let mut sink = ConfirmedSink::default();
+                let response = handle_action(action, &params, echo.clone(), &mut sink, store);
+                assert_eq!(response.status, "failed");
+                assert_eq!(response.retcode, RET_UNSUPPORTED);
+                assert_eq!(response.data, Value::Null);
+                assert_eq!(response.echo, echo);
+                assert!(sink.0.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_group_info_rejects_missing_or_invalid_id_without_fake_data() {
+        for params in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"group_id":null}),
+            serde_json::json!({"group_id":0}),
+            serde_json::json!({"group_id":-1}),
+            serde_json::json!({"group_id":"1102382705"}),
+            serde_json::json!({"group_id":1.5}),
+            serde_json::json!({"group_id":true}),
+        ] {
+            let echo = serde_json::json!(["invalid", params.clone()]);
+            let mut sink = ConfirmedSink::default();
+            let response = handle_action(
+                "get_group_info",
+                &params,
+                echo.clone(),
+                &mut sink,
+                &GroupStore,
+            );
+            assert_eq!(response.status, "failed");
+            assert_eq!(response.retcode, RET_BAD_PARAMS);
+            assert_eq!(response.data, Value::Null);
+            assert_eq!(response.echo, echo);
+            assert!(sink.0.is_empty());
+        }
+        // Valid request shape still has no actual directory backend.
+        let response = handle_action(
+            "get_group_info",
+            &serde_json::json!({"group_id":u64::MAX}),
+            Value::Null,
+            &mut ConfirmedSink::default(),
+            &GroupStore,
+        );
+        assert_eq!(response.retcode, RET_UNSUPPORTED);
+        assert_eq!(response.data, Value::Null);
     }
 }
