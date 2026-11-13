@@ -1,9 +1,15 @@
 # Session handoff
 
-## 2026-11-13 PR #2 conflict integration
+## 2026-11-13 SnowCat integration — Current Objective
+
+当前用户目标是执行 [SnowCat 分阶段计划](docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)，分支 `codex/snowcat-capability-integration`，[Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。已提交 `ef238e1` ProfileService 基线修复、`c1b5b1a` 统一动作 registry、`ca29fd4` 主线整合与目录拒绝语义、`929b914` 固定参考清单。最新证据统一见 [整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)。
+
+本轮 A0 固定注册分母与 Caligo mapping 已提交，`4f90fb0` 接通 A1 typed wrapper 消息至 journal，`65ea2fe` 先行接通 A3 共享 SSE/MCP。最终串行 default/research 全仓、并行 research 全仓、固定参考 6 项和覆盖 12 项检查通过；中间失败和测试修正均保留在执行记录。完整 A1/A2、WebUI/多账号/其余动作、候选冻结和 B1–B3 均未完成。先完成离线接线与验收，不能恢复旧交接中“先现场 ProfileService”的顺序。A0–A4 不启动 QQ；B2 再指定新鲜双账号和精确 profile。历史 unknown 和序号继续保留。下一工作块为 A1/A2 D9：传递 core request_id/wire_seq/remaining timeout，原生调用前登记关联，按 add/update/精确回读建立强身份；同时明确更新修订去重和 OneBot real_id/font/sub_type 合同。不要从 Promise result 或本地 correlation 直接制造成功。缺口和可重跑命令从 mapping 与执行记录进入。
+
+## 2026-11-13 PR #2 conflict integration（历史合并记录）
 
 PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.
-## Current Objective
+## Previous N4 Objective（历史上下文）
 
 2026-11-13 已完成 SnowCat 研究对齐的首个工作块。`qq-entry --uid-map-profile-service --uid-map-uin <decimal> --uid-map-result <new-local-evidence.json>` 在原 owner pump 上运行固定 ProfileService 往返，已通过离线验证。[精确模块与验收记录](docs/execution/2026-10-11-n4-response-recovery.md#2026-11-13-n4-r3-snowcat-profileservice-离线实现)
 
@@ -21,9 +27,9 @@ N4-R2/R3 的离线实现与合成合同检查点已提交。最新 R2 LAB 修复
 
 2026-11-08 sequence 7 后查：用户确认重启后的 PID/账号；进程清单中唯一新启动且响应正常的 QQ 主窗口 root 为 PID 33236（`11:59:17 +08:00`），本次脚本绑定 TEST-ACCOUNT-A→FRIEND-B。pilot manifest、四个 loaded role hash、单一 envscan 候选与原始 callsites 通过。一次 `CALIGO-K3-SEND-007` 在 `g3s_adopt` anchor gate 失败，没有 `g3s_submitted`/`g3s_done`，无 native message submission；sequence 7 消耗、不复用。精确 wrapper RTTI 确认 primary `MSFService@nt` 表 slots 0–30 共 31 项；slot31 是 offset-8 次级表的 COL。运行时 clone 的 31 个主表槽中 30 个直接匹配，slot17 经临时模块 thunk 转到 profile 原目标。只读 initializer 快照显示 guard state=0，initializer 指针位于 loaded-module 范围之外的 committed private executable 页，128-byte prefix 已本机留存、未调用。随后 PE 导出审计发现 `slrF54B.tmp` 的导出身份是 `snowluma_windows_resident_dispatch.dll` / `nnp_resident_dispatch_win`；slot17 因此确定由第三方代码触及。runner 用文件名过滤而漏掉 `.tmp`，preflight 的 `backend_already_loaded=false` 不能证明 clean backend；该模块 attach 前是否已加载未被保存。下溢日志、RTTI 和 initializer 细节见 progress 与 execution ledger。PID 33236 仍响应，Caligo bridge 与 Snowluma module 仍映射，不再调用、不重注入、不热卸载；PID 26132、9872、22704 已退出。
 
-## Restartable Next Step
+## Previous Restartable Next Step（由上方整合顺序替代）
 
-R3 当前优先核验 ProfileService。现场入口要求用户明确指定新启动的测试账号实例，并重新核对 PID/创建时间、PE backend 身份、pilot manifest、加载模块 hash 和唯一 envscan。随后仅运行一次只读往返，查看 `uid_map_profile_service_ready`、`api_call_attempted` 与 `roundtrip_match`。真实结果写入本机 `local-evidence/`。往返通过后仍需独立验证 response UID → CPB/native ID，才有依据接入常驻私聊和消息投影。
+以下是 N4 当时交接；当前先完成 A0–A4 离线整合。R3 当时优先核验 ProfileService。现场入口要求用户明确指定新启动的测试账号实例，并重新核对 PID/创建时间、PE backend 身份、pilot manifest、加载模块 hash 和唯一 envscan。随后仅运行一次只读往返，查看 `uid_map_profile_service_ready`、`api_call_attempted` 与 `roundtrip_match`。真实结果写入本机 `local-evidence/`。往返通过后仍需独立验证 response UID → CPB/native ID，才有依据接入常驻私聊和消息投影。
 
 `CALIGO-K1-PROBE-001` 与 `CALIGO-K3-SEND-002` 保持不重放；sequence 3 unknown。sequence 4 / `CALIGO-K3-SEND-004` 已提交一次，FRIEND-B 当次检查未显示，delivery unknown，不重发。sequence 5 / `CALIGO-K3-SEND-005` 是 FRIEND-B 自发送；callback TID 3540、drain TID 27176、response UID unreadable，不能证明 peer visibility，不重放。sequence 6 / `CALIGO-K3-SEND-006` 与 sequence 7 / `CALIGO-K3-SEND-007` 都在 `g3s_adopt` anchor gate 停止，没有 native submit；两序号均消耗。Sequence 8 / `CALIGO-K3-SEND-008` 在新根 PID 38072 上提交一次并观测到 callback (`err_code=0`)，callback TID 29124、drain TID 12244、response UID unreadable；FRIEND-B 用户随后检查称未显示，delivery unknown，不重放。PID 38072 仍响应、Caligo bridge 仍映射，不重用、不热卸载。Backend audit correction: sequence4–7 runner scripts only filtered module filenames, so backend absence is unverified for all four samples; PID 33236 had the Snowluma export identity and is excluded from further field calls. PIDs 26132, 9872, and 22704 have exited; their retained reports do not include complete module inventories.
 

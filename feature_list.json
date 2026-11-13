@@ -1,6 +1,6 @@
 {
   "$schema": ".agents/skills/harness-creator/templates/feature-list.schema.json",
-  "updated": "2026-11-07",
+  "updated": "2026-11-13",
   "baseline_commit": "0f5b483",
   "active_feature": null,
   "status_basis": "产品 status 反映完成门，implemented/wired/lab/field 分开描述。历史执行台账是证据，状态更新不能替代现场验收。",
@@ -34,7 +34,7 @@
       "plan_steps": ["N1"],
       "dependencies": ["feat-002"],
       "status": "in-progress",
-      "evidence": "N1 shared codec/golden 已归档，后续 CPB 与事件上行有现场记录；raw hits、seq 命名与事件计数不能独自替代 T04/T05。",
+      "evidence": "N1 shared codec/golden 已归档，后续 CPB 与事件上行有现场记录；raw hits、seq 命名与事件计数不能独自替代 T04/T05。2026-11-13 A1 D8 typed wrapper 普通文本经生产 decoder/resident/IPC 入 journal 并恢复，保留大整数 ID、原始元数据与秒时间，完整链和绑定/容量定向测试通过；OneBot projection 仍 None，没有新增 QQ 现场验收。参见 SnowCat 整合执行记录。",
       "evidence_paths": ["crates/caligo-model/src/qq_wire/send.rs", "crates/caligo-model/tests/qq_wire_golden.rs", "crates/caligo-bridge/src/native_resident.rs", "docs/execution/2026-10-09-snowluma-parity/ledger.md"],
       "done_criteria": ["两种普通文本 wire 与黄金样本一致", "sender/peer/平台时间/native ID/正文可独立对应同条记录", "重复正文不误去重，未知类型不串会话"]
     },
@@ -111,8 +111,8 @@
       "plan_steps": ["N8a", "N8b"],
       "dependencies": ["feat-007"],
       "status": "not-started",
-      "evidence": "已有 actor/IPC 作用域基础；多账号与界面全套验收未闭合。",
-      "evidence_paths": ["docs/plans/2026-10-09-gitnexus-plan-caligo-snowluma-capability-parity.md"],
+      "evidence": "已有 actor/IPC 作用域基础。2026-11-13 SnowCat 整合增加共享 typed action registry、固定参考清单/逐项 Caligo 映射，以及单账号 caligod 的 SSE/MCP 可选入口；协议离线验证见本轮执行记录。完整多账号、管理/WebUI、SDK、其余业务能力和现场验收仍未闭合，产品完成状态保持 not-started。",
+      "evidence_paths": ["docs/plans/2026-10-09-gitnexus-plan-caligo-snowluma-capability-parity.md", "docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md", "docs/execution/2026-11-13-snowcat-capability-integration.md", "docs/contracts/caligo-snowcat-capability-map.json"],
       "done_criteria": ["双账号同时工作且凭据/状态/存储独立", "一个账号退出不影响另一个", "管理与 SDK/MCP 经共享 registry，不旁路 QQ"]
     }
   ]

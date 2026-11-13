@@ -605,8 +605,8 @@
       }
     },
     "sse": {
-      "status": "implemented_pending_validation",
-      "reason": "Source implementation and CLI assembly candidates exist; targeted validation/final integration is still in progress.",
+      "status": "wired_offline",
+      "reason": "Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot_sse.rs",
@@ -627,12 +627,12 @@
             "symbol": "pub fn serve_sse("
           }
         ],
-        "limits": "Final auth/error/transport matrix pending."
+        "limits": "Transport authentication covers implemented actions/events only; no QQ role or native capability is granted."
       },
       "backend_dependencies": [
         {
-          "name": "Shared daemon bus/registry; pending targeted transport closure",
-          "state": "implemented_pending_validation",
+          "name": "Shared daemon bus/registry and validated normal caligod transport assembly",
+          "state": "wired_offline",
           "evidence": [
             {
               "path": "crates/caligo-core/src/onebot_sse.rs",
@@ -645,8 +645,8 @@
       "acceptance": {
         "declared": true,
         "implemented": true,
-        "wired": false,
-        "offline": "pending_final_validation",
+        "wired": true,
+        "offline": "recorded_lab_only",
         "native": "not_verified",
         "field": "not_verified",
         "production": "not_accepted",
@@ -654,14 +654,18 @@
           {
             "path": "crates/caligo-core/tests/onebot_sse_lab.rs",
             "symbol": "#[test]"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
+            "symbol": "最终全仓双构建 PASS"
           }
         ],
-        "limits": "Test source exists, but this mapping does not assert final test PASS or native/production acceptance."
+        "limits": "Only implemented actions/events are available. Final offline transport/workspace checks do not establish reference behavioral parity, QQ/native, field or production acceptance."
       }
     },
     "mcp": {
-      "status": "implemented_pending_validation",
-      "reason": "Source implementation and CLI assembly candidates exist; targeted validation/final integration is still in progress.",
+      "status": "wired_offline",
+      "reason": "Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot_mcp.rs",
@@ -682,12 +686,12 @@
             "symbol": "pub fn serve_mcp("
           }
         ],
-        "limits": "Final auth/error/transport matrix pending."
+        "limits": "Transport authentication covers implemented actions/events only; no QQ role or native capability is granted."
       },
       "backend_dependencies": [
         {
-          "name": "Shared daemon bus/registry; pending targeted transport closure",
-          "state": "implemented_pending_validation",
+          "name": "Shared daemon bus/registry and validated normal caligod transport assembly",
+          "state": "wired_offline",
           "evidence": [
             {
               "path": "crates/caligo-core/src/onebot_mcp.rs",
@@ -700,8 +704,8 @@
       "acceptance": {
         "declared": true,
         "implemented": true,
-        "wired": false,
-        "offline": "pending_final_validation",
+        "wired": true,
+        "offline": "recorded_lab_only",
         "native": "not_verified",
         "field": "not_verified",
         "production": "not_accepted",
@@ -709,9 +713,13 @@
           {
             "path": "crates/caligo-core/tests/onebot_mcp_lab.rs",
             "symbol": "#[test]"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
+            "symbol": "最终全仓双构建 PASS"
           }
         ],
-        "limits": "Test source exists, but this mapping does not assert final test PASS or native/production acceptance."
+        "limits": "Only implemented actions/events are available. Final offline transport/workspace checks do not establish reference behavioral parity, QQ/native, field or production acceptance."
       }
     },
     "text_segment": {
@@ -5861,8 +5869,8 @@
     {
       "reference_id": "protocol.OB11HttpSSEServerAdapter",
       "category": "protocols",
-      "status": "implemented_pending_validation",
-      "reason": "Source implementation and CLI assembly candidates exist; targeted validation/final integration is still in progress.",
+      "status": "wired_offline",
+      "reason": "Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.",
       "assessment": "sse"
     },
     {
@@ -5875,8 +5883,8 @@
     {
       "reference_id": "protocol.OB11McpServerAdapter",
       "category": "protocols",
-      "status": "implemented_pending_validation",
-      "reason": "Source implementation and CLI assembly candidates exist; targeted validation/final integration is still in progress.",
+      "status": "wired_offline",
+      "reason": "Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.",
       "assessment": "mcp"
     },
     {
@@ -41356,8 +41364,8 @@
           "unknown": 0,
           "partial_offline": 0,
           "registered_backend_blocked": 0,
-          "wired_offline": 4,
-          "implemented_pending_validation": 2,
+          "wired_offline": 6,
+          "implemented_pending_validation": 0,
           "research_lab": 0
         },
         "native_accepted": 0,

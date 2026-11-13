@@ -41,6 +41,32 @@
 - 主线整合回归：`RUST_TEST_THREADS=1 ./init.sh -Mode all` exit 0，default/research workspace 均 PASS；完整输出在 ignored `local-evidence/snowcat-main-integration-20261113.log`。目录拒绝语义定向 OneBot 29/29、learned peer 索引 1/1 PASS。
 - SSE 与 MCP 作为可独立验证的共享协议入口先行；这不表示 A1/A2 已完成。SSE 使用 HTTP POST 之后的有界 fanout；MCP 通过同一 registry 和 action handler。所有原生能力仍按实际 backend 拒绝或执行。
 
+## A1：typed wrapper 接收至 journal
+
+生产 `D8_START_JS` 监听 recv/update/add-send，完整消息有界入队，不裁剪 ID、正文或 JSON。Rust 保存启动捕获的 wrapper session；批次须匹配该 sid 及账号、host nonce、会话代次。固定 `msgId/msgSeq/msgRandom/clientSeq/msgTime` 字符串保持原精度；时间单位依据固定参考 `business-message/service-entry.ts:39–40` 与 `RESULTS.md` 秒级对照。
+
+`wrapper_message` owned 元数据经 owner decoder、Resident、IPC、Daemon 和 AccountActor 写入 journal/recovery。旧 journal/IPC 可缺省该可选字段。普通文本才进入此路径；缺身份、媒体/@/未知元素及超限记录分别拒绝或计溢出，坏记录不阻塞后续有效记录。AddSend 保留原来源并以 self-sent 首次记录入账，InfoListUpdate 为更新；不从 Promise 或字符串序号制造 OneBot 身份。
+
+队列预算计入保留的 raw metadata；bridge 未确认窗口按完整序列化 payload 计数，pop/ACK 扣减实际被移除的记录，修正旧的误减下一条记录问题。`MsgEvent::queue_bytes` 用于 core 入队、恢复重入和出队。OneBot projection 始终 `None`，本块终点为 journal，不声明 native get_msg 或强回执闭合。
+
+定向测试：`wrapper_message_chain` 1/1、`daemon_client_lab` 6/6、recovery 10/10、runtime 11/11、resident 20/20、typed model 1/1、bridge daemon-client unit 4/4、UID-map script 4/4 均 PASS。完整链实际使用生产 D8 JS → decoder → Resident → `event_payload` → 真实 pipe daemon → journal recovery，含 10k 字符文本、大整数、拒绝/溢出、错 sid/account/host/generation、旧代次审计、AddSend/Update 和 metadata 容量拒绝。定向输出在 ignored `target-harness/d8-final-test.log` 与 `target-harness/d8-window-test.log`。
+
+## A3 先行：SSE/MCP 正常入口
+
+`caligod --onebot-sse-bind <loopback> --onebot-mcp-bind <loopback>` 装配两个可选 listener，共享 daemon token、动作 registry 和停止标志，见[应用入口指南](../guides/onebot-app-entries.md)。正常 `caligod_smoke` 子进程通过鉴权 SSE、MCP tools/list 和 control Stop，1/1 PASS。
+
+SSE default/research 各 unit 3/3、真实 TCP integration 8/8 PASS；HTTP POST quick-operation 后 fanout、双客户端事件字节、鉴权、头/连接/事件上限、心跳、注销与停止有覆盖。确定性部分写入/持续 WouldBlock 验证总期限与停止；同步填满真实 EventBus 验证 3 drops 后写前拒绝/零输出/统计/注销。最初真实慢 socket fixture 未在期限内制造溢出，32MiB 与 4KiB socket buffer 尝试仍被 Windows loopback 吸收；相关失败保留，已删除平台缓冲假设，不将该样本计为 TCP 背压通过。确定性 unit 两构建各额外 3 轮全部通过。
+
+全仓首次复验在 SSE 测试辅助删除的中间态编译失败；第二次在 MCP 两个尚未更新/隔离的 fixture 断言失败（Accept 406 vs 200、async fixture 混入错误测试），原始输出保留在 ignored `local-evidence/snowcat-integration-final-all-20261113{,-r2}.log`。第三次全仓仍发现重复 Accept 头的 fixture 返回 400；修正后 `cargo test -p caligo-core --test onebot_mcp_lab --locked --offline --target-dir target-harness -- --test-threads=1` 6/6 PASS（`local-evidence/snowcat-mcp-final-20261113.log`）。MCP 支持 2025-03-26 / 2025-06-18，默认无版本头按 2025-03-26；Origin loopback、Accept 双类型、版本头、GET 405、总写期限和空 token 拒绝已核对。工具调用以文本返回完整 OneBot JSON，async 受理不误标业务失败。最终全仓结果以修正后的后续记录为准。
+
+## 本批最终验证
+
+- **最终全仓双构建 PASS**：`RUST_TEST_THREADS=1 ./init.sh -Mode all` exit 0，default/research workspace 全部通过。代码基线为 `4f90fb0` 加本批已审阅 SSE/MCP 装配工作树；最终提交仅保存该通过版本及证据。输出：ignored `local-evidence/snowcat-integration-final-all-20261113-r4.log`。
+- 并行 `cargo test --workspace --features caligo-core/research,caligo-cli/research --locked --offline --target-dir target-harness` exit 0。本批未复现原先共享 native fixture 失败；不据一次并行通过撤销历史失败。输出：ignored `local-evidence/snowcat-integration-parallel-research-20261113.log`。
+- 最终 MCP 6/6，SSE 每构建 unit 3/3 + TCP 8/8，D8 chain research 1/1，正常 caligod smoke 每构建 1/1 均包含在上述全仓门。
+- 文档、diff、能力映射与固定分母检查的最终结果随收尾提交记录；既有编译告警仍存在，未实施全仓格式化。
+- 本批完成 A0、A1 的 D8 子块及 A3 的 SSE/MCP 子块，未满足完整 A1–A4。D9 持久请求关联/强回执与查询、媒体和其余目录/扩展动作、多账号/WebUI/第二协议/部署仍在逐项清单中保留缺口。A4 未冻结，B1–B3 未执行；没有 QQ 现场操作，产品 NOT READY。
+
 ## 后续阶段和停止条件
 
 A0 的固定注册分母与 Caligo 映射审阅完成后，按 A1 宿主/IPC、A2 业务、A3 应用、A4 候选冻结推进，各阶段独立提交。没有真实 backend 的注册、空列表与占位结果不计已接线。未交付 ABI 保持明确失败并登记缺口，其他已有合同的工作继续。

@@ -134,10 +134,10 @@ export function initialProfiles() {
   for (const [id, file, symbol, flag, test] of [
     ['sse', 'crates/caligo-core/src/onebot_sse.rs', 'pub fn serve_sse(', '--onebot-sse-bind', 'crates/caligo-core/tests/onebot_sse_lab.rs'],
     ['mcp', 'crates/caligo-core/src/onebot_mcp.rs', 'pub fn serve_mcp(', '--onebot-mcp-bind', 'crates/caligo-core/tests/onebot_mcp_lab.rs'],
-  ]) profiles[id] = scoped('implemented_pending_validation', 'Source implementation and CLI assembly candidates exist; targeted validation/final integration is still in progress.',
-    [src(file, symbol)], [src(CLI, flag)], { requirement: 'Configured Bearer token; loopback binding.', enforcement: [src(file, symbol)], limits: 'Final auth/error/transport matrix pending.' },
-    [{ name: 'Shared daemon bus/registry; pending targeted transport closure', state: 'implemented_pending_validation', evidence: [src(file, symbol)] }],
-    [src(test, '#[test]')], 'Test source exists, but this mapping does not assert final test PASS or native/production acceptance.');
+  ]) profiles[id] = scoped('wired_offline', 'Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.',
+    [src(file, symbol)], [src(CLI, flag)], { requirement: 'Configured Bearer token; loopback binding.', enforcement: [src(file, symbol)], limits: 'Transport authentication covers implemented actions/events only; no QQ role or native capability is granted.' },
+    [{ name: 'Shared daemon bus/registry and validated normal caligod transport assembly', state: 'wired_offline', evidence: [src(file, symbol)] }],
+    [src(test, '#[test]'), src(LEDGER, '最终全仓双构建 PASS')], 'Only implemented actions/events are available. Final offline transport/workspace checks do not establish reference behavioral parity, QQ/native, field or production acceptance.');
   profiles.text_segment = scoped('partial_offline', 'Literal text/text-segment input and text-only event projection exist; broad message conversion/media support is absent.',
     [src('crates/caligo-model/src/onebot_traits.rs', 'pub fn extract_text('), src(EVENTS, 'pub fn message_event_json(')], sharedEntry,
     actionPermission, clone(send.backend_dependencies), registryLab,

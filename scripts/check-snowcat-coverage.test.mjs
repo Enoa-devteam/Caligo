@@ -113,8 +113,8 @@ test('checker separates declared/lab/native/field acceptance', () => {
   map.assessments.query.acceptance.native = 'verified';
   map.counts = summarize(map);
   assert.throws(() => check(map, dump), /acceptance promotion/);
-  assert.equal(row(artifact, 'protocol.OB11HttpSSEServerAdapter').status, 'implemented_pending_validation');
-  assert.equal(row(artifact, 'protocol.OB11McpServerAdapter').status, 'implemented_pending_validation');
+  assert.equal(row(artifact, 'protocol.OB11HttpSSEServerAdapter').status, 'wired_offline');
+  assert.equal(row(artifact, 'protocol.OB11McpServerAdapter').status, 'wired_offline');
   const profile = artifact.entries.filter(e => e.assessment === 'profile_service');
   assert.equal(profile.length, 2);
   assert.ok(profile.every(e => e.status === 'research_lab'));

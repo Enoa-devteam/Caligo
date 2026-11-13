@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-13 SnowCat 整合已开始：新分支 `codex/snowcat-capability-integration`，A0 固定基线与清单进行中。已保存 ProfileService research 增量并修复服务获取异常清理、跨 tick session 持有和异步拒绝；起始串行 default/research 全仓测试及定向脚本 4/4 通过。统一真实动作注册表已实现并通过 OneBot 定向 27/27；主线整合与能力分母继续核验。尚未冻结候选或启动 QQ。[整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)
+2026-11-13 SnowCat 分阶段整合：分支 `codex/snowcat-capability-integration`，[Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。A0 固定参考清单及 Caligo 映射已交付：206 基础动作/412 aliases、共 5,711 项，真实 registry 10 key；参考抽取 6/6、覆盖检查 12/12 通过。A1 D8 typed wrapper 消息已经由正常 research 入口接到 journal/recovery，完整链及容量/代次定向测试通过，projection 保持 None。A3 SSE/MCP 正常 caligod 装配已实现，进程启停测试通过；SSE 两构建 unit 3/3 + TCP 8/8 通过，MCP 6/6、最终串行 default/research 全仓及并行 research 全仓均通过。中间态编译和 fixture 失败如实保留在执行记录。完整 A1/A2、其余应用/业务能力、候选冻结与 B1–B3 未完成，未启动 QQ，产品 NOT READY。[整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)
 
 2026-11-13 N4-R3 SnowCat 研究接入（离线）：固定私有研究库 `7cf025f` 的双账号消息探针给出 `ProfileService` 参数顺序与按键取值的 Map 合同。Caligo 在现有 research `qq-entry` 加入 `--uid-map-profile-service`，仅为精确 9.9.36-53644 pilot 构建提供一次只读往返。合成脚本合同、串行全仓双构建测试、research release 构建及 CLI 拒绝测试通过。并行复跑遇到现有 native adapter fixture 的共享计数断言失败。Caligo 自身的 ProfileService 现场结果、response UID 与稳定消息 ID 关联和回调寿命仍待验证。R4 未准入，feat-005/006 blocked，产品 NOT READY。[N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md#2026-11-13-n4-r3-snowcat-profileservice-离线实现)
 
