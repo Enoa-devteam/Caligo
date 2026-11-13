@@ -15,7 +15,7 @@ use caligo_model::capability::{
 use caligo_model::ipc_v3::{CoreToBridgeMsg, CAPABILITY_QUERY_REVISION};
 
 pub const QUERY_CAPACITY: usize = 32;
-const MAX_CAPABILITIES: usize = 8;
+const MAX_CAPABILITIES: usize = 9;
 const MAX_REASON_BYTES: usize = 4096;
 
 #[derive(Default)]

@@ -873,7 +873,7 @@
             "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
           }
         ],
-        "limits": "Coverage includes ordinary private/group incoming text and single private incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open."
+        "limits": "Coverage includes ordinary private/group incoming text and single private/group incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open."
       }
     },
     "profile_service": {
@@ -1500,7 +1500,7 @@
     },
     "voice_download": {
       "status": "partial_offline",
-      "reason": "The exact-profile Caligo bridge downloads bounded private incoming Silk through a scoped daemon host query.",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and incoming group Silk through a scoped daemon host query.",
       "implementation": [
         {
           "path": "crates/caligo-bridge/src/qq_query.rs",
@@ -1576,12 +1576,12 @@
             "symbol": "fn voice_download_requires_scoped_advertisement_and_exact_owned_response()"
           }
         ],
-        "limits": "Private incoming Silk only. Group/media variants and Caligo QQ field acceptance remain open."
+        "limits": "Private and incoming group Silk only. Caligo QQ field acceptance remains open."
       }
     },
     "record": {
       "status": "partial_offline",
-      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
@@ -1701,7 +1701,7 @@
             "symbol": "fn private_record_waits_for_exact_readback_to_be_persisted()"
           }
         ],
-        "limits": "Only short private Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. Outgoing download, group voice and QQ field acceptance remain open."
+        "limits": "Only short private Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. Group voice send and QQ field acceptance remain open."
       }
     }
   },
@@ -2536,7 +2536,7 @@
       "reference_id": "onebot.action.get_record",
       "category": "actions",
       "status": "partial_offline",
-      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "assessment": "record"
     },
     {
@@ -6365,7 +6365,7 @@
       "reference_id": "message_segment.record",
       "category": "message_segments",
       "status": "partial_offline",
-      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. Incoming get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "reason": "Private record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
       "assessment": "record"
     },
     {
@@ -35947,7 +35947,7 @@
       "reference_id": "wrapper_interface.NodeIKernelMsgService.downloadRichMedia.471",
       "category": "wrapper_interfaces",
       "status": "partial_offline",
-      "reason": "The exact-profile Caligo bridge downloads bounded private incoming Silk through a scoped daemon host query.",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and incoming group Silk through a scoped daemon host query.",
       "assessment": "voice_download"
     },
     {

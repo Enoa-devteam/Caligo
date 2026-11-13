@@ -21,6 +21,7 @@ pub enum QueryCapability {
     MessagesById,
     VoiceInfo,
     VoiceDownload,
+    ExactVoiceDownload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,14 @@ pub enum HostQuery {
     /// Fetch one identified incoming private Silk element into bounded owned bytes.
     VoiceDownload {
         peer_uid: String,
+        message_id: String,
+        element_id: String,
+    },
+    /// Download by durable sender, conversation and element identity.
+    ExactVoiceDownload {
+        chat_type: u32,
+        peer_uid: String,
+        sender_uin: String,
         message_id: String,
         element_id: String,
     },
@@ -118,6 +127,7 @@ impl HostQuery {
             Self::MessagesById { .. } => QueryCapability::MessagesById,
             Self::VoiceInfo { .. } => QueryCapability::VoiceInfo,
             Self::VoiceDownload { .. } => QueryCapability::VoiceDownload,
+            Self::ExactVoiceDownload { .. } => QueryCapability::ExactVoiceDownload,
         }
     }
 
@@ -163,6 +173,17 @@ impl HostQuery {
                 }
                 Ok(())
             }
+            Self::ExactVoiceDownload { chat_type, peer_uid, sender_uin, message_id, element_id }
+                if !match *chat_type {
+                    1 => native_uid(peer_uid),
+                    2 => positive_decimal(peer_uid),
+                    _ => false,
+                } || !positive_decimal(sender_uin)
+                    || !native_message_id(message_id)
+                    || !native_message_id(element_id) =>
+            {
+                Err("invalid exact voice identity")
+            }
             _ => Ok(()),
         }
     }
@@ -206,7 +227,7 @@ pub struct VoiceInfo {
 impl VoiceInfo {
     fn matches(&self, peer_uid: &str, message_id: &str, element_id: &str, limit: u32) -> bool {
         self.peer_uid == peer_uid
-            && native_uid(peer_uid)
+            && (native_uid(peer_uid) || positive_decimal(peer_uid))
             && self.message_id == message_id
             && native_message_id(message_id)
             && self.element_id == element_id
@@ -299,11 +320,17 @@ impl QueryData {
                     peer_uid,
                     message_id,
                     element_id,
+                } | HostQuery::ExactVoiceDownload {
+                    peer_uid,
+                    message_id,
+                    element_id,
+                    ..
                 },
                 Self::VoiceDownload(download),
             ) => {
                 let info = &download.info;
-                info.matches(peer_uid, message_id, element_id, MAX_VOICE_DOWNLOAD_BYTES)
+                query.validate().is_ok()
+                    && info.matches(peer_uid, message_id, element_id, MAX_VOICE_DOWNLOAD_BYTES)
                     && download.silk_hex.len() == info.size as usize * 2
                     && download
                         .silk_hex

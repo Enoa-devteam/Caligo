@@ -109,8 +109,14 @@ fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
         element_id: "9007199254740994".into(),
     };
     let quote = |s: &str| serde_json::to_string(s).unwrap();
+    let exact = |chat_type, peer_uid: &str, sender_uin: &str| {
+        qq_query::build_query_start_js("voice", &scope, &HostQuery::ExactVoiceDownload {
+            chat_type, peer_uid: peer_uid.into(), sender_uin: sender_uin.into(),
+            message_id: "90071992547409939999".into(), element_id: "9007199254740994".into(),
+        }, 1000)
+    };
     let script = format!(
-        "const arm={}, stop={}, start={}, poll={}, cancel={};\n",
+        "const arm={}, stop={}, start={}, poll={}, cancel={}, group={}, sent={};\n",
         quote(D8_START_JS),
         quote(D8_STOP_JS),
         quote(&qq_query::build_query_start_js(
@@ -118,6 +124,8 @@ fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
         )),
         quote(&qq_query::build_query_poll_js("voice", &scope)),
         quote(&qq_query::build_query_cancel_js("voice", &scope)),
+        quote(&exact(2, "30003", "20002")),
+        quote(&exact(1, "u_voice_peer", "10001")),
     ) + r#"
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -127,16 +135,17 @@ const silk = Buffer.from('02232153494c4b5f563300ff','hex');
 const md5 = crypto.createHash('md5').update(silk).digest('hex');
 const msgId='90071992547409939999', elementId='9007199254740994';
 let listener, requested, calls = 0, delayed, mode = 'pending';
+let chatType=1, peerUid='u_voice_peer', peerUin='20002', senderUin='20002';
 const service = {
   sendMsg() {},
   addKernelMsgListener(value) { listener=value; return 7; },
   removeKernelMsgListener(id) { assert.equal(id,7); },
   getMsgsByMsgId(peer, ids) {
     assert.equal(this,service);
-    assert.deepEqual(peer,{chatType:1,peerUid:'u_voice_peer',guildId:''});
+    assert.deepEqual(peer,{chatType,peerUid,guildId:''});
     assert.deepEqual(ids,[msgId]);
-    const result = {result:0,msgList:[{msgId,chatType:1,peerUid:'u_voice_peer',
-      senderUid:'u_voice_peer',senderUin:'20002',elements:[{elementId,elementType:4,
+    const result = {result:0,msgList:[{msgId,chatType,peerUid,peerUin,
+      senderUid:'u_voice_peer',senderUin,sendStatus:2,elements:[{elementId,elementType:4,
       pttElement:{fileSize:String(silk.length),md5HexStr:md5}}]}]};
     if (mode === 'delayed') return new Promise(resolve => delayed=()=>resolve(result));
     return Promise.resolve(result);
@@ -145,7 +154,7 @@ const service = {
     assert.equal(this,service);
     calls++; requested = args.filePath;
     assert.ok(path.isAbsolute(requested));
-    assert.deepEqual(args,{msgId,elementId,peerUid:'u_voice_peer',chatType:1,fileModelId:'0',
+    assert.deepEqual(args,{msgId,elementId,peerUid,chatType,fileModelId:'0',
       downSourceType:0,downloadSourceType:0,triggerType:1,thumbSize:0,downloadType:1,filePath:requested});
     if (mode === 'sync') {
       fs.writeFileSync(requested,silk);
@@ -155,7 +164,7 @@ const service = {
   },
 };
 function completion(overrides={}) {
-  return {msgId,msgElementId:elementId,chatType:1,fileErrCode:'0',filePath:requested,...overrides};
+  return {msgId,msgElementId:elementId,chatType,fileErrCode:'0',filePath:requested,...overrides};
 }
 const session = {getSessionId:()=>1,getMsgService:()=>service};
 process._linkedBinding = () => ({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}});
@@ -195,11 +204,28 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(fs.existsSync(path.dirname(requested)),false);
   assert.equal(call(poll).code,404);
   assert.equal(calls,3);
+  chatType=2; peerUid=peerUin='30003'; senderUin='20099';
+  assert.equal(call(group).status,'pending'); await tick();
+  assert.equal(call(poll).status,'invalid_response');
+  assert.equal(calls,3);
+  senderUin='20002'; mode='pending';
+  assert.equal(call(group).status,'pending'); await tick();
+  assert.equal(calls,4);
+  fs.writeFileSync(requested,silk);
+  listener.onRichMediaDownloadComplete(completion({chatType:1}));
+  assert.equal(call(poll).status,'pending');
+  listener.onRichMediaDownloadComplete(completion());
+  assert.equal(call(poll).data.data.info.peer_uid,'30003');
+  chatType=1; peerUid='u_voice_peer'; peerUin='20002'; senderUin='10001'; mode='sync';
+  assert.equal(call(sent).status,'pending'); await tick();
+  assert.equal(call(poll).status,'success');
+  assert.equal(calls,5);
+  senderUin='20002';
   mode='delayed';
   assert.equal(call(start).status,'pending');
   assert.ok(eval(stop).startsWith('STOPPED'));
   delayed(); await tick();
-  assert.equal(calls,3,'stop prevents a late readback from dispatching');
+  assert.equal(calls,5,'stop prevents a late readback from dispatching');
   assert.equal(call(start).status,'not_ready');
   process.stdout.write(JSON.stringify(success));
 })().catch(error => { console.error(error); process.exitCode=1; });

@@ -21,11 +21,12 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::GroupInfo,
     QueryCapability::VoiceInfo,
     QueryCapability::VoiceDownload,
+    QueryCapability::ExactVoiceDownload,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
     // Voice operations form a suffix admitted only by the exact pilot profile.
-    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 2]
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 3]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
@@ -89,6 +90,7 @@ fn kind(query: &HostQuery) -> &'static str {
         HostQuery::MessagesById { .. } => "messages_by_id",
         HostQuery::VoiceInfo { .. } => "voice_info",
         HostQuery::VoiceDownload { .. } => "voice_download",
+        HostQuery::ExactVoiceDownload { .. } => "exact_voice_download",
     }
 }
 
@@ -125,6 +127,10 @@ fn query_args(query: &HostQuery) -> String {
             json_string(peer_uid),
             json_string(message_id),
             json_string(element_id),
+        ),
+        HostQuery::ExactVoiceDownload { chat_type, peer_uid, sender_uin, message_id, element_id } => format!(
+            "{{chatType:{chat_type},peerUid:{},senderUin:{},msgId:{},elementId:{},maxBytes:{MAX_VOICE_DOWNLOAD_BYTES}}}",
+            json_string(peer_uid), json_string(sender_uin), json_string(message_id), json_string(element_id)
         ),
         HostQuery::LoginInfo | HostQuery::FriendList | HostQuery::GroupList => "{}".into(),
     }
@@ -169,7 +175,7 @@ const COMMON_JS: &str = r#"
       binding.sessionGeneration === scope.sessionGeneration && binding.connectionEpoch === scope.connectionEpoch &&
       binding.sid === String(sid);
   }
-  function startVoiceDownload(R, p, service, info) {
+  function startVoiceDownload(R, p, service, info, chatType) {
     var fs = process.getBuiltinModule('node:fs');
     var path = process.getBuiltinModule('node:path');
     var os = process.getBuiltinModule('node:os');
@@ -188,7 +194,7 @@ const COMMON_JS: &str = r#"
     }
     function complete(result) {
       if (!result || result.msgId !== info.message_id || result.msgElementId !== info.element_id ||
-          result.chatType !== 1 || typeof result.fileErrCode !== 'string' ||
+          result.chatType !== chatType || typeof result.fileErrCode !== 'string' ||
           result.filePath !== file || R.voiceDownload !== complete) return;
       var descriptor;
       try {
@@ -227,7 +233,7 @@ const COMMON_JS: &str = r#"
     R.voiceDownload = complete;
     try {
       var result = service.downloadRichMedia({msgId:info.message_id,elementId:info.element_id,
-        peerUid:info.peer_uid,chatType:1,fileModelId:'0',downSourceType:0,downloadSourceType:0,
+        peerUid:info.peer_uid,chatType:chatType,fileModelId:'0',downSourceType:0,downloadSourceType:0,
         triggerType:1,thumbSize:0,downloadType:1,filePath:file});
       Promise.resolve(result).then(function(value) {
         if (value && typeof value.result === 'number' && value.result !== 0 && R.voiceDownload === complete) {
@@ -313,21 +319,27 @@ pub fn build_query_start_js(
       });
       return reply('pending');
     }
-    if (queryKind === 'voice_info' || queryKind === 'voice_download') {
+    if (queryKind === 'voice_info' || queryKind === 'voice_download' || queryKind === 'exact_voice_download') {
       var voiceService = R.session.getMsgService && R.session.getMsgService();
       if (!voiceService || typeof voiceService.getMsgsByMsgId !== 'function') return terminal(p, 'unsupported');
-      var download = queryKind === 'voice_download';
+      var exact = queryKind === 'exact_voice_download';
+      var download = queryKind !== 'voice_info';
+      var chatType = exact ? args.chatType : 1;
       if (download && (typeof voiceService.downloadRichMedia !== 'function' ||
           !R.listener || typeof R.listener.onRichMediaDownloadComplete !== 'function' ||
           typeof process.getBuiltinModule !== 'function')) return terminal(p, 'unsupported');
       if (download && R.voiceDownload) return terminal(p, 'rejected', 409, 'voice download already in flight');
-      settle(voiceService.getMsgsByMsgId({chatType:1,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
+      settle(voiceService.getMsgsByMsgId({chatType:chatType,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
         if (R.stopped || R.queryPending.get(requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
         if (!value || value.result !== 0 || !Array.isArray(value.msgList) || value.msgList.length !== 1) throw new Error('voice message readback shape');
         var message = value.msgList[0];
-        if (!message || message.msgId !== args.msgId || message.chatType !== 1 || message.peerUid !== args.peerUid ||
-            message.senderUid !== args.peerUid || typeof message.senderUin !== 'string' ||
-            !/^[1-9][0-9]{0,19}$/.test(message.senderUin) || message.senderUin === scope.account ||
+        if (!message || message.msgId !== args.msgId || message.chatType !== chatType || message.peerUid !== args.peerUid ||
+            typeof message.senderUin !== 'string' || !/^[1-9][0-9]{0,19}$/.test(message.senderUin) ||
+            (exact && (message.senderUin !== args.senderUin ||
+              (chatType === 2 && message.peerUin !== args.peerUid) ||
+              (message.senderUin === scope.account && message.sendStatus !== 2))) ||
+            (chatType === 1 && message.senderUin !== scope.account && message.senderUid !== args.peerUid) ||
+            (!exact && message.senderUin === scope.account) ||
             !Array.isArray(message.elements) || message.elements.length > 128) throw new Error('voice message identity');
         var matches = message.elements.filter(function(item) { return item && item.elementId === args.elementId; });
         if (matches.length !== 1 || matches[0].elementType !== 4 || !matches[0].pttElement) throw new Error('voice element identity');
@@ -342,7 +354,7 @@ pub fn build_query_start_js(
           return;
         }
         if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
-        startVoiceDownload(R, p, voiceService, info);
+        startVoiceDownload(R, p, voiceService, info, chatType);
       });
       return reply('pending');
     }

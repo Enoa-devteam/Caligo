@@ -541,7 +541,7 @@ fn query_response_with_voice(
             (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
                 .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
-            (HostQuery::VoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
+            (HostQuery::VoiceDownload { .. } | HostQuery::ExactVoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
                 if let Some((expected, format)) = record {
                     if let Some(bytes) = voice_bytes(expected, download) {
                         return record_response(bytes, format, echo);
@@ -648,17 +648,12 @@ fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBacken
     } else {
         RecordFormat::Silk
     };
-    let Some(info) = store.voice_info(file) else {
+    let Some((info, query)) = store.voice_record(file) else {
         return ActionResponse::failed(RET_BAD_REQUEST, "语音文件标识不存在", echo);
     };
     if info.size > MAX_VOICE_DOWNLOAD_BYTES {
         return ActionResponse::failed(RET_UNSUPPORTED, "语音超过当前下载上限", echo);
     }
-    let query = HostQuery::VoiceDownload {
-        peer_uid: info.peer_uid.clone(),
-        message_id: info.message_id.clone(),
-        element_id: info.element_id.clone(),
-    };
     query_response_with_voice(query, queries, echo, Some((&info, format)))
 }
 
@@ -910,6 +905,7 @@ mod tests {
                         silk_hex: "02232153494c4b5f5633".into(),
                     })
                 }
+                HostQuery::ExactVoiceDownload { .. } => return QueryOutcome::Unsupported,
                 _ => panic!("unexpected public query"),
             })
         }

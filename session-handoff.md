@@ -14,6 +14,8 @@
 
 `3ddb47d` 接通可选 WAV/OGG。私聊 `record` 发送已有 scoped IPC、owner 提交、精确回读与 OneBot 持久消息 ID。下一工作块核对群语音和其他媒体的宿主文件、关联与资源寿命，再推进 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。候选冻结前继续离线。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
 
+群入站语音及已发送私聊语音已接入精确下载与 OneBot。群语音发送使用固定参考的 PTT 元素和群目标合同单独接线。[语音读取证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群语音接收与已发送语音读取)
+
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 
 PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.

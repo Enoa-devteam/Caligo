@@ -428,9 +428,10 @@ pub const D8_START_JS: &str = r"
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
-          if (e && e.elementType === 4 && voiceAccount && m.chatType === 1 && m.elements.length === 1 &&
+          if (e && e.elementType === 4 && voiceAccount && m.elements.length === 1 &&
               (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
-                m.senderUid === m.peerUid && m.senderUin === m.peerUin))) {
+                ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||
+                 (m.chatType === 2 && m.peerUid === m.peerUin))))) {
             var ptt = e.pttElement;
             if (t || !ptt || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
                 !/[1-9]/.test(e.elementId) || typeof ptt.fileSize !== 'string' ||

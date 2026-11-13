@@ -60,6 +60,15 @@ pub trait StoreReader {
     fn voice_info(&self, _file: &str) -> Option<crate::capability::VoiceInfo> {
         None
     }
+    fn voice_record(&self, file: &str) -> Option<(crate::capability::VoiceInfo, crate::capability::HostQuery)> {
+        let info = self.voice_info(file)?;
+        let query = crate::capability::HostQuery::VoiceDownload {
+            peer_uid: info.peer_uid.clone(),
+            message_id: info.message_id.clone(),
+            element_id: info.element_id.clone(),
+        };
+        Some((info, query))
+    }
     /// Login identity is absent until the host provides both account and nickname.
     fn login_info(&self) -> Option<(u64, String)>;
     /// Actual daemon/session state, absent until wired to the live actor.

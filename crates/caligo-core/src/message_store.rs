@@ -5,7 +5,7 @@
 //! The append is flushed before the int32 OneBot ID is returned to a caller.
 
 use crate::onebot::StoreReader;
-use caligo_model::{capability::VoiceInfo, onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
+use caligo_model::{capability::{HostQuery, VoiceInfo}, onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -502,17 +502,39 @@ impl MessageStore {
 
 impl StoreReader for MessageStore {
     fn voice_info(&self, file: &str) -> Option<VoiceInfo> {
+        self.voice_record(file).map(|(info, _)| info)
+    }
+
+    fn voice_record(&self, file: &str) -> Option<(VoiceInfo, HostQuery)> {
         let (account, id) = file.strip_prefix("caligo-voice:")?.split_once(':')?;
         let message = self.get(id.parse::<i32>().ok()?)?;
         let voice = message.voice.as_ref()?;
         if account != self.account_id.to_string() || id != message.message_id.to_string()
-            || message.identity.chat_type != ChatType::Private
             || message.identity.native_id != voice.message_id
-            || message.sender.get("user_id")?.as_u64()? == self.account_id
         {
             return None;
         }
-        Some(voice.clone())
+        let sender = message.sender.get("user_id")?.as_u64()?;
+        let query = if message.identity.chat_type == ChatType::Private && sender != self.account_id {
+            HostQuery::VoiceDownload {
+                peer_uid: voice.peer_uid.clone(),
+                message_id: voice.message_id.clone(),
+                element_id: voice.element_id.clone(),
+            }
+        } else {
+            HostQuery::ExactVoiceDownload {
+                chat_type: match message.identity.chat_type {
+                    ChatType::Private => 1,
+                    ChatType::Group => 2,
+                },
+                peer_uid: voice.peer_uid.clone(),
+                sender_uin: sender.to_string(),
+                message_id: voice.message_id.clone(),
+                element_id: voice.element_id.clone(),
+            }
+        };
+        query.validate().ok()?;
+        Some((voice.clone(), query))
     }
 
     fn group_peers(&self) -> Vec<String> {

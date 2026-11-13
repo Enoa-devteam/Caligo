@@ -1395,6 +1395,10 @@ impl StoreReader for AccountActor {
         self.message_store.as_ref()?.voice_info(file)
     }
 
+    fn voice_record(&self, file: &str) -> Option<(caligo_model::capability::VoiceInfo, caligo_model::capability::HostQuery)> {
+        self.message_store.as_ref()?.voice_record(file)
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<caligo_model::onebot_traits::StoredMessageView> {
         self.message_store.as_ref()?.get_msg(message_id)
     }

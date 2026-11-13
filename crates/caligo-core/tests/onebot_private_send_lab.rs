@@ -1,9 +1,9 @@
 //! Normal private action -> durable daemon dispatch -> strong receipt and wrapper store.
 #![cfg(windows)]
 use caligo_core::daemon::{BridgeClient, Daemon, DaemonConfig};
-use caligo_core::onebot::{RET_BAD_PARAMS, RET_BAD_REQUEST, RET_NOT_CONFIRMED, RET_UNSUPPORTED};
+use caligo_core::onebot::{RET_BAD_PARAMS, RET_NOT_CONFIRMED, RET_UNSUPPORTED};
 use caligo_core::onebot_server::action_handler;
-use caligo_model::capability::QueryScope;
+use caligo_model::capability::{HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, VoiceDownload};
 use caligo_model::ipc_v3::{BridgeMsg, CoreToBridgeMsg, EventPayload, OutcomePayload};
 use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::*;
@@ -334,6 +334,19 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
             md5: "0123456789abcdef0123456789abcdef".into(),
         }),
     }];
+    let mut group = readback.clone();
+    group.event_seq = 2;
+    group.session = json!({"account":"10001","kind":"group","peer":"30003"});
+    group.direction = "incoming".into();
+    group.sender = "20002".into();
+    let wrapper = group.wrapper_message.as_mut().unwrap();
+    wrapper.source = WrapperSource::Recv;
+    wrapper.record.chat_type = 2;
+    wrapper.record.peer_uid = "30003".into();
+    wrapper.record.peer_uin = "30003".into();
+    wrapper.record.sender_uid = "u_friend".into();
+    wrapper.record.sender_uin = "20002".into();
+    wrapper.record.send_status = None;
     bridge.send(&BridgeMsg::Event { event: readback }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
     let result = task.join().unwrap();
@@ -343,7 +356,7 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
     let read = handler("get_msg", &json!({"message_id":id}), Value::Null);
     let token = format!("caligo-voice:10001:{}", id.as_i64().unwrap());
     assert_eq!(read.data["message"], json!([{"type":"record","data":{"file":token}}]));
-    assert_eq!(handler("get_record", &json!({"file":token}), Value::Null).retcode, RET_BAD_REQUEST);
+    assert_eq!(handler("get_record", &json!({"file":token}), Value::Null).retcode, RET_UNSUPPORTED);
     let reopened = caligo_core::message_store::MessageStore::open(
         lab.dir.join("journal.messages.jsonl"), 10001, None,
     ).unwrap();
@@ -351,4 +364,40 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
         reopened.get_msg(id.as_i64().unwrap() as i32).unwrap().message,
         read.data["message"],
     );
+    bridge.send(&BridgeMsg::QueryCapabilities {
+        revision: caligo_model::ipc_v3::CAPABILITY_QUERY_REVISION,
+        scope: scope.clone(), capabilities: vec![QueryCapability::ExactVoiceDownload],
+    }).unwrap();
+    let (_, events) = lab.daemon.subscribe_onebot_events("voice-lab");
+    bridge.send(&BridgeMsg::Event { event: group }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
+    let group_event: Value = serde_json::from_str(&events.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+    assert_eq!(group_event["message_type"], "group");
+    assert_eq!(group_event["group_id"], 30003);
+    assert_eq!(group_event["user_id"], 20002);
+    let group_token = group_event["message"][0]["data"]["file"].as_str().unwrap();
+    assert_ne!(group_token, token);
+    for (file, chat_type, peer_uid, sender_uin) in [
+        (token.as_str(), 1, "u_friend", "10001"),
+        (group_token, 2, "30003", "20002"),
+    ] {
+        let info = lab.daemon.voice_info(file).unwrap();
+        let call = handler.clone();
+        let params = json!({"file":file});
+        let task = std::thread::spawn(move || call("get_record", &params, Value::Null));
+        let CoreToBridgeMsg::Query { request_id, scope: dispatch_scope, query, .. } =
+            bridge.recv().unwrap() else { panic!("expected exact voice download") };
+        assert_eq!(dispatch_scope, scope);
+        assert_eq!(query, HostQuery::ExactVoiceDownload {
+            chat_type, peer_uid: peer_uid.into(), sender_uin: sender_uin.into(),
+            message_id: info.message_id.clone(), element_id: info.element_id.clone(),
+        });
+        let silk_hex = silk.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        bridge.send(&BridgeMsg::QueryResult { request_id, scope: scope.clone(),
+            outcome: QueryOutcome::Success(QueryData::VoiceDownload(VoiceDownload { info, silk_hex })),
+        }).unwrap();
+        let response = task.join().unwrap();
+        assert_eq!(response.retcode, 0);
+        assert_eq!(response.data["base64"], STANDARD.encode(silk));
+    }
 }
