@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "A0 reference-to-Caligo mapping; explicit normalized item assessments, no QQ/native/production acceptance asserted.",
+  "scope": "A0 reference-to-Caligo mapping; explicit normalized item assessments, no QQ/native/field/production acceptance asserted. Host query and newly integrated manager/UI/media capabilities remain partial or pending validation.",
   "reference": {
     "path": "docs/contracts/snowcat-capability-inventory.json",
     "sha256": "89de4711e2577f5531ba38b282bc47dea38c5a4ed0da4d416867c320fc45bc25",
@@ -12,7 +12,7 @@
     "exports": "Native export reference IDs are native_export.<module>.<ordinal>; all other IDs come from the immutable inventory, aliases use onebot.alias.<key>.",
     "acceptance": "declared/implemented/wired/offline/native/field/production are separate. Registered, partial_offline, research_lab and implemented_pending_validation never imply native acceptance.",
     "missing": "No audited equivalent handler/normal entry; no credit for placeholders, file existence, learned-only caches or reference-only evidence.",
-    "refresh": "Additive only: preserve existing rows, assessment profiles and manual row.review objects. Registry/counts update; stale row semantics fail validation and require explicit review."
+    "refresh": "Regenerate derived rows and assessment profiles. Preserve rows with a manual review and profiles with reviewed: true. Reject missing reference IDs and validate all resulting rows."
   },
   "assessments": {
     "missing": {
@@ -71,7 +71,7 @@
     },
     "directory_missing": {
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "implementation": null,
       "normal_entry": null,
       "permission": {
@@ -90,12 +90,12 @@
         "field": "not_verified",
         "production": "not_accepted",
         "evidence": [],
-        "limits": "Unsupported response/parameter validation is not a backend implementation."
+        "limits": "Registration and query plumbing are not end-to-end backend validation."
       },
       "rejection_evidence": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
-          "symbol": "fn unsupported_directory_validation("
+          "symbol": "let Some(definition) = resolve_action(action) else"
         }
       ]
     },
@@ -157,11 +157,11 @@
         },
         {
           "name": "Private UID identity and full message-segment support",
-          "state": "blocked_or_missing",
+          "state": "partial_offline",
           "evidence": [
             {
-              "path": "crates/caligo-core/src/onebot_server.rs",
-              "symbol": "常驻私聊 UID 映射尚未证实"
+              "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+              "symbol": "发送能力协商与查询能力分开保存"
             }
           ]
         }
@@ -177,32 +177,32 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "OneBot 29/29"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "共享动作与查询"
           },
           {
             "path": "crates/caligo-core/src/onebot.rs",
             "symbol": "fn registry_has_unique_names_and_resolvable_canonical_actions()"
           }
         ],
-        "limits": "Group text uses actual durable daemon path; fake-host tests do not prove native callback identity/lifetime or peer delivery. Inferred sends reject private targets through normal sink."
+        "limits": "Group text uses the durable daemon path. Private targets require a current capability announcement. Offline tests do not prove native callback lifetime or peer delivery."
       }
     },
     "private_send_blocked": {
-      "status": "registered_backend_blocked",
-      "reason": "Action is registered, but normal DaemonSendSink explicitly rejects private targets until UID mapping is independently proven.",
+      "status": "partial_offline",
+      "reason": "Private send is gated by an advertised host capability and requires a verified UIN-to-UID lookup plus exact message identity readback before reporting success.",
       "implementation": [
         {
-          "path": "crates/caligo-core/src/onebot.rs",
-          "symbol": "fn send_payload("
-        },
-        {
-          "path": "crates/caligo-core/src/onebot.rs",
-          "symbol": "fn dispatch_send("
-        },
-        {
           "path": "crates/caligo-core/src/onebot_server.rs",
-          "symbol": "impl SendSink for DaemonSendSink"
+          "symbol": "fn send(&mut self, payload: &SendPayload)"
+        },
+        {
+          "path": "crates/caligo-core/src/capability_broker.rs",
+          "symbol": "pub(crate) fn supports_private_text("
+        },
+        {
+          "path": "crates/caligo-bridge/src/daemon_client.rs",
+          "symbol": "fn capability_messages"
         }
       ],
       "normal_entry": [
@@ -235,22 +235,16 @@
       },
       "backend_dependencies": [
         {
-          "name": "Daemon/AccountActor/NativeSession plus ready session, strong receipt and persisted OneBot ID",
-          "state": "offline_path_only",
+          "name": "Advertised private-text capability, scoped UIN-to-UID query, exact readback and persisted identity",
+          "state": "implemented_pending_validation",
           "evidence": [
             {
-              "path": "crates/caligo-core/src/onebot_server.rs",
-              "symbol": "fn send(&mut self, payload: &SendPayload)"
-            }
-          ]
-        },
-        {
-          "name": "Private UID identity and full message-segment support",
-          "state": "blocked_or_missing",
-          "evidence": [
+              "path": "crates/caligo-core/src/capability_broker.rs",
+              "symbol": "pub(crate) fn supports_private_text("
+            },
             {
-              "path": "crates/caligo-core/src/onebot_server.rs",
-              "symbol": "常驻私聊 UID 映射尚未证实"
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "HostQuery::MessagesById"
             }
           ]
         }
@@ -266,28 +260,32 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "OneBot 29/29"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "共享动作与查询"
           },
           {
             "path": "crates/caligo-core/src/onebot.rs",
             "symbol": "fn registry_has_unique_names_and_resolvable_canonical_actions()"
           }
         ],
-        "limits": "Fail-closed private rejection is wired; successful private send backend is unavailable."
+        "limits": "The fail-closed gate and exact identity path have targeted tests; host end-to-end integration and field acceptance remain open."
       }
     },
     "query": {
       "status": "wired_offline",
-      "reason": "Real registry dispatch reads daemon/store state; offline behavior is covered, with readiness and reference response-shape limits.",
+      "reason": "Local persistent get_msg, daemon status, and version actions have normal offline paths; host-backed identity/list/detail queries are tracked separately.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
-          "symbol": "pub fn handle_action("
+          "symbol": "pub fn handle_action_with_queries("
         },
         {
           "path": "crates/caligo-core/src/daemon.rs",
           "symbol": "impl StoreReader for Daemon"
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "impl StoreReader for MessageStore"
         }
       ],
       "normal_entry": [
@@ -326,6 +324,10 @@
             {
               "path": "crates/caligo-core/src/daemon.rs",
               "symbol": "impl StoreReader for Daemon"
+            },
+            {
+              "path": "crates/caligo-core/src/message_store.rs",
+              "symbol": "impl StoreReader for MessageStore"
             }
           ]
         }
@@ -341,15 +343,15 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "OneBot 29/29"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "消息修订：default/research Store 各 6/6"
           },
           {
             "path": "crates/caligo-core/src/onebot.rs",
-            "symbol": "fn registry_has_unique_names_and_resolvable_canonical_actions()"
+            "symbol": "fn get_msg_returns_complete_standard_fields_and_int32_id()"
           }
         ],
-        "limits": "Native identity may be unavailable; get_msg reads locally persisted known IDs, not arbitrary native QQ history. Login/status may return not-ready; version describes Caligo. Current native-to-OneBot projection is under separate implementation/testing and is not claimed here."
+        "limits": "get_msg reads locally persisted known IDs, not arbitrary native QQ history. Host-backed login/list/detail behavior is not credited by this assessment."
       }
     },
     "http": {
@@ -404,8 +406,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "default/research 全仓 PASS"
           },
           {
             "path": "crates/caligo-core/src/onebot_transport.rs",
@@ -467,8 +469,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "default/research 全仓 PASS"
           },
           {
             "path": "crates/caligo-core/src/onebot_transport.rs",
@@ -530,8 +532,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "default/research 全仓 PASS"
           },
           {
             "path": "crates/caligo-core/src/onebot_transport.rs",
@@ -593,8 +595,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "default/research 全仓 PASS"
           },
           {
             "path": "crates/caligo-core/src/onebot_transport.rs",
@@ -776,11 +778,11 @@
         },
         {
           "name": "Private UID identity and full message-segment support",
-          "state": "blocked_or_missing",
+          "state": "partial_offline",
           "evidence": [
             {
-              "path": "crates/caligo-core/src/onebot_server.rs",
-              "symbol": "常驻私聊 UID 映射尚未证实"
+              "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+              "symbol": "发送能力协商与查询能力分开保存"
             }
           ]
         }
@@ -796,8 +798,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "OneBot 29/29"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "共享动作与查询"
           },
           {
             "path": "crates/caligo-core/src/onebot.rs",
@@ -814,6 +816,10 @@
         {
           "path": "crates/caligo-core/src/onebot_events.rs",
           "symbol": "pub fn message_event_json("
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "pub fn projection_for_event("
         }
       ],
       "normal_entry": [
@@ -834,9 +840,13 @@
       },
       "backend_dependencies": [
         {
-          "name": "Persisted MsgEvent with OneBotMessageProjection, incoming Recv direction and strong IDs",
+          "name": "Current wrapper binding, durable message identity and incoming receive event",
           "state": "offline_only",
           "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "actor.wrapper_message_projection(&event)"
+            },
             {
               "path": "crates/caligo-core/src/onebot_events.rs",
               "symbol": "event.onebot_projection.as_ref()?"
@@ -855,15 +865,15 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "普通私聊与群聊的事件接线"
           },
           {
-            "path": "crates/caligo-core/src/onebot_events.rs",
-            "symbol": "#[cfg(test)]"
+            "path": "crates/caligo-core/tests/wrapper_message_chain.rs",
+            "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
           }
         ],
-        "limits": "Synthetic projection/fanout does not prove real QQ native event decoding or all reference message fields."
+        "limits": "Coverage includes ordinary private/group incoming text and single private/group incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open."
       }
     },
     "profile_service": {
@@ -976,6 +986,10 @@
             {
               "path": "crates/caligo-core/src/daemon.rs",
               "symbol": "impl StoreReader for Daemon"
+            },
+            {
+              "path": "crates/caligo-core/src/message_store.rs",
+              "symbol": "impl StoreReader for MessageStore"
             }
           ]
         }
@@ -991,8 +1005,8 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "default/research workspace 均 PASS"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "default/research 全仓 PASS"
           }
         ],
         "limits": "No full component API/export/feature equivalence is claimed; all unmatched reference exports remain separately missing."
@@ -1004,11 +1018,15 @@
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
-          "symbol": "pub fn handle_action("
+          "symbol": "pub fn handle_action_with_queries("
         },
         {
           "path": "crates/caligo-core/src/daemon.rs",
           "symbol": "impl StoreReader for Daemon"
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "impl StoreReader for MessageStore"
         }
       ],
       "normal_entry": [
@@ -1047,6 +1065,10 @@
             {
               "path": "crates/caligo-core/src/daemon.rs",
               "symbol": "impl StoreReader for Daemon"
+            },
+            {
+              "path": "crates/caligo-core/src/message_store.rs",
+              "symbol": "impl StoreReader for MessageStore"
             }
           ]
         }
@@ -1062,26 +1084,851 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-            "symbol": "OneBot 29/29"
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "消息修订：default/research Store 各 6/6"
           },
           {
             "path": "crates/caligo-core/src/onebot.rs",
-            "symbol": "fn registry_has_unique_names_and_resolvable_canonical_actions()"
+            "symbol": "fn get_msg_returns_complete_standard_fields_and_int32_id()"
           }
         ],
         "limits": "Offline fake-store login response only; actual normal-path nickname/account result is not established."
+      }
+    },
+    "directory_pending": {
+      "status": "implemented_pending_validation",
+      "reason": "Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action_with_queries("
+        },
+        {
+          "path": "crates/caligo-core/src/capability_broker.rs",
+          "symbol": "pub(crate) fn begin<'a>("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "pub const SUPPORTED_CAPABILITIES: &[QueryCapability]"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action_with_queries("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Scoped query broker and fixed wrapper query executor",
+          "state": "implemented_pending_validation",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/capability_broker.rs",
+              "symbol": "pub(crate) fn begin<'a>("
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "pub const SUPPORTED_CAPABILITIES: &[QueryCapability]"
+            }
+          ]
+        }
+      ],
+      "supported_versions": null,
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": false,
+        "offline": "pending_final_validation",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "固定 6 项查询"
+          },
+          {
+            "path": "crates/caligo-core/tests/capability_query_lab.rs",
+            "symbol": "#[test]"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "#[test]"
+          }
+        ],
+        "limits": "Host integration is not final. No QQ field acceptance; LoginInfo is unsupported and directory OneBot routes remain pending full end-to-end validation."
+      }
+    },
+    "capability_query": {
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/capability_broker.rs",
+          "symbol": "pub(crate) fn begin<'a>("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "pub const SUPPORTED_CAPABILITIES: &[QueryCapability]"
+        },
+        {
+          "path": "crates/caligo-bridge/src/resident.rs",
+          "symbol": "pub fn drain_queries(&self)"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/daemon.rs",
+          "symbol": "pub fn query_host("
+        },
+        {
+          "path": "crates/caligo-bridge/src/daemon_client.rs",
+          "symbol": "for (request_id, scope, outcome) in resident.take_query_results()"
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Per-account/epoch scoped broker and owner-thread query queue",
+          "state": "implemented_pending_validation",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/capability_broker.rs",
+              "symbol": "pub(crate) fn begin<'a>("
+            },
+            {
+              "path": "crates/caligo-bridge/src/resident.rs",
+              "symbol": "pub fn drain_queries(&self)"
+            }
+          ]
+        }
+      ],
+      "supported_versions": null,
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": false,
+        "offline": "pending_final_validation",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "固定 6 项查询"
+          },
+          {
+            "path": "crates/caligo-core/tests/capability_query_lab.rs",
+            "symbol": "#[test]"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "#[test]"
+          }
+        ],
+        "limits": "Advertised host query set excludes LoginInfo. No QQ field acceptance or completed host end-to-end integration is claimed."
+      }
+    },
+    "account_manager": {
+      "status": "partial_offline",
+      "reason": "AccountManager provides ordinary multi-account configuration, isolated daemon lifecycle, and persistence paths with targeted offline evidence.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/account_manager.rs",
+          "symbol": "pub struct AccountManager"
+        },
+        {
+          "path": "crates/caligo-core/src/account_manager.rs",
+          "symbol": "pub fn start_all(&mut self)"
+        },
+        {
+          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "symbol": "fn main()"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "symbol": "fn main()"
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Account-scoped directories, credentials, daemon and pipe",
+          "state": "partial_offline",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/account_manager.rs",
+              "symbol": "pub fn start(&mut self, account: u64)"
+            },
+            {
+              "path": "crates/caligo-core/tests/account_manager_lab.rs",
+              "symbol": "#[test]"
+            }
+          ]
+        }
+      ],
+      "supported_versions": null,
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "账号管理：default/research 各 5/5 PASS"
+          },
+          {
+            "path": "crates/caligo-core/tests/manager_smoke.rs",
+            "symbol": "#[test]"
+          }
+        ],
+        "limits": "This is a Caligo manager capability, not equivalence for every reference WebUI route or native surface. No production or QQ field acceptance."
+      }
+    },
+    "management_ui": {
+      "status": "partial_offline",
+      "reason": "Loopback authenticated management HTTP/UI exposes a bounded account/config/lifecycle surface through the normal manager binary.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/management_http.rs",
+          "symbol": "pub struct ManagementHttpServer"
+        },
+        {
+          "path": "crates/caligo-core/src/management_http.rs",
+          "symbol": "fn route("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "symbol": "ManagementHttpServer::start("
+        },
+        {
+          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "symbol": "\"--management-bind\""
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Loopback bearer-authenticated management server over AccountManager",
+          "state": "partial_offline",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/management_http.rs",
+              "symbol": "pub fn start("
+            },
+            {
+              "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+              "symbol": "ManagementHttpServer::start("
+            }
+          ]
+        }
+      ],
+      "supported_versions": null,
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "管理 HTTP 修正后 default/research 各 7/7 PASS"
+          },
+          {
+            "path": "crates/caligo-core/tests/management_http_lab.rs",
+            "symbol": "#[test]"
+          }
+        ],
+        "limits": "Only explicitly implemented management routes are mapped; this is not parity with all 129 reference WebUI routes. Host query integration and production acceptance are not claimed."
+      }
+    },
+    "media_tool": {
+      "status": "partial_offline",
+      "reason": "A normal caligo-media CLI and bounded local ffmpeg/ffprobe process contract exist with fake-runner and owned-child evidence.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/media_tool.rs",
+          "symbol": "pub struct MediaTool"
+        },
+        {
+          "path": "crates/caligo-core/src/media_tool.rs",
+          "symbol": "pub fn audio_to_pcm("
+        },
+        {
+          "path": "crates/caligo-core/src/media_tool.rs",
+          "symbol": "pub fn pcm_to_container("
+        },
+        {
+          "path": "crates/caligo-core/src/media_tool.rs",
+          "symbol": "pub fn thumbnail("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligo-media.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/bin/caligo-media.rs",
+          "symbol": "fn run(cli: Cli)"
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds",
+          "state": "partial_offline",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/media_tool.rs",
+              "symbol": "pub fn verify_tools("
+            },
+            {
+              "path": "crates/caligo-core/src/media_tool.rs",
+              "symbol": "impl MediaProcessRunner for OsProcessRunner"
+            }
+          ]
+        }
+      ],
+      "supported_versions": null,
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "媒体工具：default `media_tool_lab` 6 PASS"
+          },
+          {
+            "path": "crates/caligo-core/tests/media_tool_lab.rs",
+            "symbol": "#[test]"
+          }
+        ],
+        "limits": "No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented."
+      }
+    },
+    "voice_download": {
+      "status": "partial_offline",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.",
+      "implementation": [
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "function startMediaDownload("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_v8.rs",
+          "symbol": "onRichMediaDownloadComplete:"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/daemon.rs",
+          "symbol": "pub fn query_host("
+        },
+        {
+          "path": "crates/caligo-bridge/src/resident.rs",
+          "symbol": "pub fn drain_queries(&self)"
+        }
+      ],
+      "permission": {
+        "requirement": "Account-scoped Caligo bridge IPC and exact host profile.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-bridge/src/qq_query.rs",
+            "symbol": "fn matches_voice_profile("
+          },
+          {
+            "path": "crates/caligo-core/src/capability_broker.rs",
+            "symbol": "pub(crate) fn begin<'a>("
+          }
+        ],
+        "limits": "Available through the daemon Rust host-query API."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startMediaDownload("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 私聊语音有界下载"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()"
+          },
+          {
+            "path": "crates/caligo-core/tests/capability_query_lab.rs",
+            "symbol": "fn voice_download_requires_scoped_advertisement_and_exact_owned_response()"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_image_contract.rs",
+            "symbol": "fn image_download_binds_callback_file_scope_integrity_and_lifetime()"
+          }
+        ],
+        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming and verified self PNG use shared get_image; scoped PNG sends are wired. Other image formats and Caligo QQ field acceptance remain open."
+      }
+    },
+    "record": {
+      "status": "partial_offline",
+      "reason": "Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn get_record("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn send_payload("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_events.rs",
+          "symbol": "voice_file_token("
+        },
+        {
+          "path": "crates/caligo-core/src/media_tool.rs",
+          "symbol": "pub fn silk_to_container("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startMediaDownload("
+            }
+          ]
+        },
+        {
+          "name": "WAV and OGG conversion through explicitly configured local tools",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/onebot_server.rs",
+              "symbol": "fn voice_media("
+            }
+          ]
+        },
+        {
+          "name": "Scoped private and group voice dispatch and verified native readback",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "pub fn submit_voice("
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_v8.rs",
+              "symbol": "pub fn build_voice_send_js("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot 语音读取"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 独立 SILK 转码"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot 私聊语音发送"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot 群语音发送"
+          },
+          {
+            "path": "crates/caligo-core/tests/wrapper_message_chain.rs",
+            "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_private_send_lab.rs",
+            "symbol": "fn private_record_waits_for_exact_readback_to_be_persisted()"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_private_send_lab.rs",
+            "symbol": "fn group_record_requires_group_capability_and_exact_group_projection()"
+          }
+        ],
+        "limits": "Only short Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. QQ field acceptance remains open."
+      }
+    },
+    "image": {
+      "status": "partial_offline",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn get_image("
+        },
+        {
+          "path": "crates/caligo-model/src/wrapper_message.rs",
+          "symbol": "pub fn image("
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "fn image_info("
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startMediaDownload("
+            }
+          ]
+        },
+        {
+          "name": "Scoped private/group PNG send with exact native readback and durable public ID",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "pub fn submit_image("
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_v8.rs",
+              "symbol": "pub fn build_image_send_js("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot PNG 图片发送接线"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_private_send_lab.rs",
+            "symbol": "fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback()"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot PNG 图片读取"
+          },
+          {
+            "path": "crates/caligo-core/tests/wrapper_image_chain.rs",
+            "symbol": "fn png_identity_events_get_image_and_restart_share_the_same_account_token()"
+          }
+        ],
+        "limits": "Only ordinary PNG is admitted, with at most 128 KiB send/download bytes. get_image returns Base64, file_size and file_name without local paths or media credentials. Other formats, mixed segments and QQ field acceptance remain open."
+      }
+    },
+    "group_members": {
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn member_data("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "if (queryKind === 'group_members')"
+        },
+        {
+          "path": "crates/caligo-model/src/capability.rs",
+          "symbol": "impl GroupMembers"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Exact pilot profile and complete getAllMemberList contract",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "pub const SUPPORTED_CAPABILITIES"
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "memberService.getAllMemberList.call"
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 群成员查询接线"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "fn group_members_require_complete_map_snapshot_and_preserve_native_identity()"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_query_lab.rs",
+            "symbol": "fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect()"
+          }
+        ],
+        "limits": "Only complete snapshots up to 2048 items and 512 KiB are returned. Member-info uses the snapshot, not a separate rich profile fetch; other extended profile fields and QQ field acceptance remain open."
       }
     }
   },
   "review_basis": [
     {
-      "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-      "symbol": "10 个真实 OneBot 动作名"
+      "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+      "symbol": "共享动作与查询"
     },
     {
-      "path": "docs/execution/2026-11-13-snowcat-capability-integration.md",
-      "symbol": "OneBot 29/29"
+      "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+      "symbol": "账号管理：default/research 各 5/5 PASS"
+    },
+    {
+      "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+      "symbol": "媒体工具：default `media_tool_lab` 6 PASS"
     }
   ],
   "entries": [
@@ -1571,9 +2418,9 @@
     {
       "reference_id": "onebot.action.get_friend_list",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
-      "assessment": "directory_missing"
+      "status": "implemented_pending_validation",
+      "reason": "Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.",
+      "assessment": "directory_pending"
     },
     {
       "reference_id": "onebot.action.get_friend_msg_history",
@@ -1669,9 +2516,9 @@
     {
       "reference_id": "onebot.action.get_group_info",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
-      "assessment": "directory_missing"
+      "status": "implemented_pending_validation",
+      "reason": "Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.",
+      "assessment": "directory_pending"
     },
     {
       "reference_id": "onebot.action.get_group_info_ex",
@@ -1683,23 +2530,23 @@
     {
       "reference_id": "onebot.action.get_group_list",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
-      "assessment": "directory_missing"
+      "status": "implemented_pending_validation",
+      "reason": "Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.",
+      "assessment": "directory_pending"
     },
     {
       "reference_id": "onebot.action.get_group_member_info",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
-      "assessment": "directory_missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "onebot.action.get_group_member_list",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
-      "assessment": "directory_missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "onebot.action.get_group_msg_history",
@@ -1760,9 +2607,9 @@
     {
       "reference_id": "onebot.action.get_image",
       "category": "actions",
-      "status": "missing",
-      "reason": "Absent from executable ACTION_REGISTRY; the shared action handler returns unsupported for this name.",
-      "assessment": "action_missing"
+      "status": "partial_offline",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
+      "assessment": "image"
     },
     {
       "reference_id": "onebot.action.get_login_info",
@@ -1782,7 +2629,7 @@
       "reference_id": "onebot.action.get_msg",
       "category": "actions",
       "status": "wired_offline",
-      "reason": "Real registry dispatch reads daemon/store state; offline behavior is covered, with readiness and reference response-shape limits.",
+      "reason": "Local persistent get_msg, daemon status, and version actions have normal offline paths; host-backed identity/list/detail queries are tracked separately.",
       "assessment": "query"
     },
     {
@@ -1900,9 +2747,9 @@
     {
       "reference_id": "onebot.action.get_record",
       "category": "actions",
-      "status": "missing",
-      "reason": "Absent from executable ACTION_REGISTRY; the shared action handler returns unsupported for this name.",
-      "assessment": "action_missing"
+      "status": "partial_offline",
+      "reason": "Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "assessment": "record"
     },
     {
       "reference_id": "onebot.action.get_rkey",
@@ -1936,7 +2783,7 @@
       "reference_id": "onebot.action.get_status",
       "category": "actions",
       "status": "wired_offline",
-      "reason": "Real registry dispatch reads daemon/store state; offline behavior is covered, with readiness and reference response-shape limits.",
+      "reason": "Local persistent get_msg, daemon status, and version actions have normal offline paths; host-backed identity/list/detail queries are tracked separately.",
       "assessment": "query"
     },
     {
@@ -1957,7 +2804,7 @@
       "reference_id": "onebot.action.get_version_info",
       "category": "actions",
       "status": "wired_offline",
-      "reason": "Real registry dispatch reads daemon/store state; offline behavior is covered, with readiness and reference response-shape limits.",
+      "reason": "Local persistent get_msg, daemon status, and version actions have normal offline paths; host-backed identity/list/detail queries are tracked separately.",
       "assessment": "query"
     },
     {
@@ -2166,8 +3013,8 @@
     {
       "reference_id": "onebot.action.send_private_msg",
       "category": "actions",
-      "status": "registered_backend_blocked",
-      "reason": "Action is registered, but normal DaemonSendSink explicitly rejects private targets until UID mapping is independently proven.",
+      "status": "partial_offline",
+      "reason": "Private send is gated by an advertised host capability and requires a verified UIN-to-UID lookup plus exact message identity readback before reporting success.",
       "assessment": "private_send_blocked"
     },
     {
@@ -3497,14 +4344,14 @@
       "reference_id": "onebot.alias.get_friend_list_async",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_friend_list_rate_limited",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
@@ -3693,14 +4540,14 @@
       "reference_id": "onebot.alias.get_group_info_async",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_info_rate_limited",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
@@ -3721,42 +4568,42 @@
       "reference_id": "onebot.alias.get_group_list_async",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_list_rate_limited",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_member_info_async",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_member_info_rate_limited",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_member_list_async",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
       "reference_id": "onebot.alias.get_group_member_list_rate_limited",
       "category": "aliases",
       "status": "missing",
-      "reason": "Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.",
+      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
       "assessment": "directory_missing"
     },
     {
@@ -4686,8 +5533,8 @@
     {
       "reference_id": "onebot.alias.send_private_msg_async",
       "category": "aliases",
-      "status": "registered_backend_blocked",
-      "reason": "Action is registered, but normal DaemonSendSink explicitly rejects private targets until UID mapping is independently proven.",
+      "status": "partial_offline",
+      "reason": "Private send is gated by an advertised host capability and requires a verified UIN-to-UID lookup plus exact message identity readback before reporting success.",
       "assessment": "private_send_blocked"
     },
     {
@@ -5708,9 +6555,9 @@
     {
       "reference_id": "message_segment.image",
       "category": "message_segments",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
+      "assessment": "image"
     },
     {
       "reference_id": "message_segment.music",
@@ -5729,9 +6576,9 @@
     {
       "reference_id": "message_segment.record",
       "category": "message_segments",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.",
+      "assessment": "record"
     },
     {
       "reference_id": "message_segment.file",
@@ -30124,9 +30971,9 @@
     {
       "reference_id": "native_surface.FFmpeg.decodeAudioToPCM",
       "category": "native_surfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "A normal caligo-media CLI and bounded local ffmpeg/ffprobe process contract exist with fake-runner and owned-child evidence.",
+      "assessment": "media_tool"
     },
     {
       "reference_id": "native_surface.FFmpeg.decodeAudioToFmt",
@@ -30733,16 +31580,16 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelBuddyService.getBuddyListV2.6",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelBuddyService.getBuddyListV2.16",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelBuddyService.getBuddyListFromCache.27",
@@ -32392,16 +33239,16 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getUinByUids.66",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getUidByUins.72",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.checkGroupMemberCache.78",
@@ -32448,9 +33295,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getAllMemberList.111",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.setHeader.125",
@@ -32560,9 +33407,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getGroupList.159",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getGroupExtList.161",
@@ -32574,9 +33421,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getGroupDetailInfo.163",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getMemberExtInfo.165",
@@ -34618,9 +35465,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.getMsgsByMsgId.195",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.getRecallMsgsByMsgId.197",
@@ -35311,9 +36158,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.downloadRichMedia.471",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.",
+      "assessment": "voice_download"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.getFirstUnreadMsgSeq.486",
@@ -36984,9 +37831,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelProfileService.getCoreAndBaseInfo.16",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "implemented_pending_validation",
+      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelProfileService.fetchUserDetailInfo.18",
@@ -40050,16 +40897,16 @@
     {
       "reference_id": "webui_route.OB11Config.ts.15",
       "category": "webui_routes",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Loopback authenticated management HTTP/UI exposes a bounded account/config/lifecycle surface through the normal manager binary.",
+      "assessment": "management_ui"
     },
     {
       "reference_id": "webui_route.OB11Config.ts.17",
       "category": "webui_routes",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Loopback authenticated management HTTP/UI exposes a bounded account/config/lifecycle surface through the normal manager binary.",
+      "assessment": "management_ui"
     },
     {
       "reference_id": "webui_route.OB11Config.ts.19",
@@ -41073,15 +41920,10 @@
       "id": "native_acceptance",
       "status": "unknown",
       "reason": "No QQ launched; native callback identity, strong message IDs, lifetime and per-item production gates remain open."
-    },
-    {
-      "id": "sse_mcp_final_validation",
-      "status": "unknown",
-      "reason": "Concurrent source/CLI assembly present; final targeted validation and freeze remain pending in this report."
     }
   ],
   "registry": {
-    "semantic_sha256": "514bfbbb74f41ce2c5638bd583c1183854cc177f2d0b3d8f65db4c53f04cac02",
+    "semantic_sha256": "369ffac1009d14753dfdb19cf7497afe5b35d35d92759c2817be4fbe612a3fff",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {
@@ -41234,6 +42076,118 @@
         }
       },
       {
+        "name": "get_record",
+        "canonical": "get_record",
+        "permission": "read",
+        "handler": {
+          "kind": "get_record"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_record"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_image",
+        "canonical": "get_image",
+        "permission": "read",
+        "handler": {
+          "kind": "get_image"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_image"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_friend_list",
+        "canonical": "get_friend_list",
+        "permission": "read",
+        "handler": {
+          "kind": "get_friend_list"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_friend_list"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_group_list",
+        "canonical": "get_group_list",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_list"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_list"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_group_info",
+        "canonical": "get_group_info",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_info"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_info"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_group_member_list",
+        "canonical": "get_group_member_list",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_member_list"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_member_list"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_group_member_info",
+        "canonical": "get_group_member_info",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_member_info"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_member_info"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
         "name": "get_status",
         "canonical": "get_status",
         "permission": "read",
@@ -41268,20 +42222,20 @@
     ]
   },
   "counts": {
-    "registry_declared_keys": 10,
-    "registry_base_keys": 7,
+    "registry_declared_keys": 17,
+    "registry_base_keys": 14,
     "registry_alias_keys": 3,
     "mapped_reference_items": 5711,
     "by_category": {
       "actions": {
         "denominator": 206,
         "statuses": {
-          "missing": 199,
+          "missing": 192,
           "unknown": 0,
-          "partial_offline": 3,
-          "registered_backend_blocked": 1,
+          "partial_offline": 8,
+          "registered_backend_blocked": 0,
           "wired_offline": 3,
-          "implemented_pending_validation": 0,
+          "implemented_pending_validation": 3,
           "research_lab": 0
         },
         "native_accepted": 0,
@@ -41292,8 +42246,8 @@
         "statuses": {
           "missing": 409,
           "unknown": 0,
-          "partial_offline": 2,
-          "registered_backend_blocked": 1,
+          "partial_offline": 3,
+          "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,
           "research_lab": 0
@@ -41346,9 +42300,9 @@
       "message_segments": {
         "denominator": 23,
         "statuses": {
-          "missing": 22,
+          "missing": 20,
           "unknown": 0,
-          "partial_offline": 1,
+          "partial_offline": 3,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,
@@ -41430,9 +42384,9 @@
       "native_surfaces": {
         "denominator": 30,
         "statuses": {
-          "missing": 30,
+          "missing": 29,
           "unknown": 0,
-          "partial_offline": 0,
+          "partial_offline": 1,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,
@@ -41444,12 +42398,12 @@
       "wrapper_interfaces": {
         "denominator": 1354,
         "statuses": {
-          "missing": 1352,
+          "missing": 1342,
           "unknown": 0,
-          "partial_offline": 0,
+          "partial_offline": 2,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
-          "implemented_pending_validation": 0,
+          "implemented_pending_validation": 8,
           "research_lab": 2
         },
         "native_accepted": 0,
@@ -41458,9 +42412,9 @@
       "webui_routes": {
         "denominator": 129,
         "statuses": {
-          "missing": 129,
+          "missing": 127,
           "unknown": 0,
-          "partial_offline": 0,
+          "partial_offline": 2,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 0,

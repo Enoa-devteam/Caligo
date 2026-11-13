@@ -2,6 +2,40 @@
 
 ## Current State
 
+2026-11-14 当前登录身份通知现场复验：无 UIN 输入的 research 探针在重启后的 A（PID 50100）取得 `nt_1` 的宿主通知，UIN/UID 精确双向映射及独立对照匹配。CLI exit 0，listener 移除返回，owner pump 正常关闭。生产 host nonce、昵称、换号撤权、资料刷新和 SSO 仍待验证。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-当前登录身份通知现场复验)
+
+2026-11-14 ProfileService 修正后现场复验：重启后的账号 A（PID 35864）从精确哈希的 `wrapper.node` 取得 `nt_1` ProfileService，已知 UIN 经精确键查询得到一个 UID，反查匹配输入。CLI exit 0，owner pump 正常关闭，QQ 仍响应。当前登录身份绑定、资料刷新、SSO 与 B2 集中验收仍待验证。[现场复验](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-修正后现场复验)
+
+2026-11-14 ProfileService 会话来源修正（离线）：研究探针按固定归档的公开晚接入路径，从精确哈希匹配的已加载 `wrapper.node` 取 `nt_1`，经 K4 owner pump 获取服务。新增路径夹具与 UID-map 共 5/5 通过。新版 QQ 现场待干净的已登录根。 [修正与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-会话来源修正)
+
+2026-11-14 双账号 ProfileService 现场探针：QQ 资料卡分别核对两个登录身份，9.9.36-53644 pilot 清单、两根 PE 审计与唯一 Environment 候选通过。Caligo 两轮均完成 owner bootstrap 与 shutdown，但当前重取的 wrapper 未提供 ProfileService，resolver 零派发。两实例仍响应，bridge 保留映射。当前身份与 wrapper/host nonce 的绑定、资料刷新和自有 SSO 仍待补证，B2 集中验收未开始。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-双账号-profileservice-现场探针)
+
+2026-11-13 A2 群成员：新增当前 scope 的完整成员快照查询、共享 `get_group_member_list` 和 `get_group_member_info`，绑定精确 pilot，校验 Map/身份/角色/预算并去除私有字段。wrapper 合同 6/6、正常 pipe/action 8/8、串行 default/research 与独立并行 research 全仓及覆盖 12/12 通过；未启动 QQ。[群成员接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群成员查询接线)
+
+2026-11-13 A2 PNG 发送接线：单 PNG 已经共享 OneBot、持久请求、scoped IPC、owner 和 D9 精确回读贯通；私聊/群聊独立能力，成功 ID 等待消息入库，unknown 不重发。修复查询能力 9 项上限拒绝当前 11 项声明的问题。串行 default/research 和独立并行 research 全仓、覆盖 12/12 通过；并发端口及 PID 复用导致的旧测试隔离问题已修正，继续排除离线阻塞，未启动 QQ。[PNG 发送接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片发送接线)
+
+先前检查点 `a35463f`（已由上方发送接线进展替代）：2026-11-13 A2 PNG 发送合同：完成有界 PNG framing/CRC 验证、自有宿主缓存构造和 D9 精确自发回读合同。合成宿主覆盖私聊/群聊、文件冲突、错回读、歧义、超时和停止；scoped IPC/core/OneBot 图片发送尚未接入，不声明发送能力。继续先整合全部任务再集中 QQ 验收。[PNG 发送合同](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-png-发送构造与-d9-合同)
+
+先前检查点 `051a035`：2026-11-13 A2 OneBot 图片：固定 profile 的普通入站 PNG 已接 D8、持久消息、共享私聊/群聊事件和 `get_image`。事件/get_msg/下载使用同一账号限定文件标识，重启保留 ID 与元数据。上传、自发图片、其他格式、其余任务及统一 QQ 验收仍未完成。[OneBot PNG 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)
+
+先前检查点 `c6c8792`：2026-11-13 A2 单图片：普通 PNG 的精确元数据回读与有界下载已接入固定 profile 的 scoped Rust 宿主查询。校验会话、发送者、消息/元素、大小、MD5 和 PNG 头部尺寸，超时保留在途目标至匹配回调。OneBot 图片持久化/事件/get_image、上传、其他格式及 QQ 现场待后续。[图片宿主查询](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)
+
+2026-11-13 A2 群语音：`746f654` 接通群入站和已发送私聊语音读取。群语音发送已接入独立 scoped 能力、持久派发与精确群消息回读，读写均有离线合同。真实 QQ 验收待 B2。[OneBot 群语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-群语音发送)
+
+2026-11-13 A2 语音发送：`79a53bd` 完成合成宿主合同，`60d703c` 接通 scoped IPC、持久请求和 owner 调度。共享 OneBot 接受单段私聊腾讯 SILK v3 Base64，精确回读入库后返回可供 `get_msg` 查询的 ID。真实 QQ、宿主缓存寿命和已发送语音下载待验证。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
+
+2026-11-13 A2 转码：`099db2a` 的独立解码器通过合成腾讯 SILK v3 到 WAV/OGG 的真实工具验证。共享 `get_record` 已接可选 WAV/OGG，正常单账号与多账号启动均可加载本机工具配置。合成命名管道覆盖下载、转换及失败返回，QQ 现场未开始。[OneBot 语音转码](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音转码)
+
+2026-11-13 A2 OneBot 语音：`e1b4420` 持久化入站私聊语音身份，`318e46d` 把同一 `record` 文件标识接入共享事件与 `get_record`。原始 Silk 通过当前 bridge 读取并返回 Base64，上传和真实 QQ 验收仍待推进。[OneBot 语音读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
+
+2026-11-13 A2 语音身份：固定 profile 的单个入站私聊语音元素已通过正常 D8 接收进入持久消息库。重启后 `get_msg` 保留同一 ID 和 `record` 文件标识。当前未做 QQ 现场验收。[语音元素身份持久化](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-语音元素身份持久化)
+
+2026-11-13 A2 语音：`0affb67` 在固定 9.9.36-53644 profile 接入 scoped `VoiceInfo` 精确私聊语音元素回读。后续 `VoiceDownload` 在同一作用域完成回读、回调关联和有界 Silk 文件校验，接入正常 Rust 宿主查询。公开 `get_record`、上传、其他媒体、SSO 和 QQ 现场仍待验证。[语音下载检查点](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
+
+2026-11-13 SnowCat 恢复执行：`be4c87a` 接入按连接代次声明的宿主能力并刷新 5,711 项覆盖映射（真实 registry 13 key）。普通私聊和群聊入站文本已接入持久 OneBot ID 与共享事件队列，管道和重启回归覆盖跨会话同 ID、重复修订、旧代次审计及错宿主拒绝。当前登录账号/昵称仍缺可信宿主来源，原生媒体、SSO、其余扩展和部署仍有缺口。候选未冻结，产品 NOT READY。[执行与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)
+
+2026-11-13 后续整合：`65e7e6c` 接入 D9 请求身份/受理/发送事件/精确回读、六种固定宿主查询、13 key 共享 registry、私聊显式能力门、wrapper 持久 get_msg 与同 ID 修订；`8e4583b` 接入私有配置/凭据隔离的双账号管理进程、真实 WebUI/API 和受控外部媒体 CLI。最终串行 default/research 全仓及并行 research 全仓均通过。浏览器已实际验证读取配置、单账号停止隔离、保存落盘回读、重启和正常 shutdown。当前资料不足的登录来源、消息 subtype/fanout、原生媒体上传/下载/SSO、其余扩展动作和部署/长期验收仍有缺口；候选未冻结，未启动 QQ，产品 NOT READY。[后续接线与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)
+
 2026-11-13 SnowCat 分阶段整合：分支 `codex/snowcat-capability-integration`，[Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。A0 固定参考清单及 Caligo 映射已交付：206 基础动作/412 aliases、共 5,711 项，真实 registry 10 key；参考抽取 6/6、覆盖检查 12/12 通过。A1 D8 typed wrapper 消息已经由正常 research 入口接到 journal/recovery，完整链及容量/代次定向测试通过，projection 保持 None。A3 SSE/MCP 正常 caligod 装配已实现，进程启停测试通过；SSE 两构建 unit 3/3 + TCP 8/8 通过，MCP 6/6、最终串行 default/research 全仓及并行 research 全仓均通过。中间态编译和 fixture 失败如实保留在执行记录。完整 A1/A2、其余应用/业务能力、候选冻结与 B1–B3 未完成，未启动 QQ，产品 NOT READY。[整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)
 
 2026-11-13 N4-R3 SnowCat 研究接入（离线）：固定私有研究库 `7cf025f` 的双账号消息探针给出 `ProfileService` 参数顺序与按键取值的 Map 合同。Caligo 在现有 research `qq-entry` 加入 `--uid-map-profile-service`，仅为精确 9.9.36-53644 pilot 构建提供一次只读往返。合成脚本合同、串行全仓双构建测试、research release 构建及 CLI 拒绝测试通过。并行复跑遇到现有 native adapter fixture 的共享计数断言失败。Caligo 自身的 ProfileService 现场结果、response UID 与稳定消息 ID 关联和回调寿命仍待验证。R4 未准入，feat-005/006 blocked，产品 NOT READY。[N4 执行记录](docs/execution/2026-10-11-n4-response-recovery.md#2026-11-13-n4-r3-snowcat-profileservice-离线实现)

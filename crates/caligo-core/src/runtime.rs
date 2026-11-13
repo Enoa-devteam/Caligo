@@ -31,7 +31,7 @@ pub struct RuntimeConfig {
     pub event_queue_max_bytes: usize,
     pub action_queue_max: usize,
     pub journal_max_bytes: u64,
-    /// 事件去重窗口容量(按 (native_id, 来源类) 计)。
+    /// 事件去重窗口容量，按会话消息身份及修订计。
     pub dedup_capacity: usize,
     pub journal_sync: SyncMode,
 }
@@ -192,6 +192,48 @@ fn session_to_dto_value(key: &SessionKey) -> serde_json::Value {
     .unwrap_or(serde_json::Value::Null)
 }
 
+fn event_identity_from_event(event: &MsgEvent) -> String {
+    serde_json::to_string(&(
+        &event.session.account.0,
+        event.session.kind.to_string(),
+        &event.session.peer.0,
+        &event.native_id.0,
+    ))
+    .unwrap_or_default()
+}
+
+fn event_identity_from_record(event: &crate::journal::EventRecord) -> String {
+    let account = event.session.get("account").and_then(|value| value.as_str()).unwrap_or_default();
+    let kind = event.session.get("kind").and_then(|value| value.as_str()).unwrap_or_default();
+    let peer = event.session.get("peer").and_then(|value| value.as_str()).unwrap_or_default();
+    serde_json::to_string(&(account, kind, peer, &event.native_id)).unwrap_or_default()
+}
+
+fn event_revision_fingerprint_from_event(event: &MsgEvent) -> String {
+    let raw = event.wrapper_message.as_ref().map(|envelope| &envelope.record);
+    serde_json::to_string(&serde_json::json!({
+        "text": &event.text,
+        "sender": &event.sender,
+        "native_id": &event.native_id.0,
+        "platform_time": event.platform_time,
+        "wrapper_record": raw,
+        "projection": &event.onebot_projection,
+    }))
+    .unwrap_or_default()
+}
+
+fn event_revision_fingerprint(event: &crate::journal::EventRecord) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "text": &event.text,
+        "sender": &event.sender,
+        "native_id": &event.native_id,
+        "platform_time": event.platform_time,
+        "wrapper_record": event.wrapper_message.as_ref().map(|envelope| &envelope.record),
+        "projection": &event.onebot_projection,
+    }))
+    .unwrap_or_default()
+}
+
 fn event_from_record(e: &crate::journal::EventRecord) -> Result<MsgEvent, String> {
     let dto: SessionKeyDto = serde_json::from_value(e.session.clone())
         .map_err(|err| format!("stored event session is invalid: {err}"))?;
@@ -256,14 +298,14 @@ pub struct AccountActor {
     next_wire_seq: u64,
     delivered_cursor: u64,
     seen_native: HashSet<String>,
-    seen_updates: HashSet<String>,
-    dedup_fifo: VecDeque<(bool, String)>, // (is_update, native_id),FIFO 驱逐
+    seen_updates: HashSet<(String, String)>,
+    dedup_fifo: VecDeque<(bool, String, String)>, // (is_update, identity, revision fingerprint)
     dedup_capacity: usize,
     receipt_audits: VecDeque<ReceiptAuditEntry>,
     gaps: VecDeque<GapRecord>,
     message_store: Option<MessageStore>,
     /// Events persisted to the core journal but awaiting a durable OneBot ID.
-    pending_message_store: HashMap<String, MsgEvent>,
+    pending_message_store: HashMap<(String, String), MsgEvent>,
     pub counters: RuntimeCounters,
     degraded_reason: Option<String>,
     config: RuntimeConfig,
@@ -333,7 +375,11 @@ impl AccountActor {
                 }
                 JournalRecord::Event(e) => {
                     report.recovered_events += 1;
-                    if e.onebot_projection.is_some() {
+                    if e.audit_only {
+                        actor.event_seq_next = actor.event_seq_next.max(e.event_seq + 1);
+                        continue;
+                    }
+                    if e.onebot_projection.is_some() || e.wrapper_message.is_some() {
                         if let Some(store) = actor.message_store.as_mut() {
                             let event = event_from_record(&e).map_err(OpenError::MessageStore)?;
                             store
@@ -428,12 +474,16 @@ impl AccountActor {
     }
 
     fn fold_event(&mut self, e: crate::journal::EventRecord) {
-        self.seen_native.insert(e.native_id.clone());
         if e.source == "update" {
-            self.seen_updates.insert(e.native_id.clone());
-            self.dedup_fifo.push_back((true, e.native_id.clone()));
+            let identity = event_identity_from_record(&e);
+            let fingerprint = event_revision_fingerprint(&e);
+            self.seen_updates.insert((identity.clone(), fingerprint.clone()));
+            self.dedup_fifo.push_back((true, identity, fingerprint));
         } else {
-            self.dedup_fifo.push_back((false, e.native_id.clone()));
+            let identity = event_identity_from_record(&e);
+            if self.seen_native.insert(identity.clone()) {
+                self.dedup_fifo.push_back((false, identity, String::new()));
+            }
         }
         self.event_seq_next = self.event_seq_next.max(e.event_seq + 1);
         self.evict_dedup_if_needed();
@@ -781,6 +831,13 @@ impl AccountActor {
         )
     }
 
+    pub(crate) fn wrapper_message_projection(
+        &self,
+        event: &MsgEvent,
+    ) -> Option<caligo_model::OneBotMessageProjection> {
+        self.message_store.as_ref()?.projection_for_event(event)
+    }
+
     /// QueryRequest 的完整摘要(状态 + 代次 + 目标 + 等待策略)。
     pub fn request_summary(&self, request_id: &str) -> Option<RequestSummary> {
         self.requests.get(request_id).map(|e| RequestSummary {
@@ -823,44 +880,56 @@ impl AccountActor {
     /// 受理接收事件:先持久化(= EventAck 依据),再入交付队列。
     /// 去重按 账号+会话+原生ID(+来源类);同正文不同 ID 一律保留。
     pub fn on_event(&mut self, mut ev: MsgEvent) -> Result<EventReceipt, RejectReason> {
-        let current_gen = self.session.as_ref().map(|s| s.session_generation);
-        let is_current = current_gen == Some(ev.session_generation);
-        if !is_current {
+        let current = self
+            .session
+            .as_ref()
+            .filter(|session| session.session_generation == ev.session_generation);
+        let Some(current) = current else {
             // 旧代次证据:持久化(审计),不进入当前业务链。
             ev.onebot_projection = None;
             let seq = self.alloc_seq();
             ev.event_seq = seq;
-            self.persist_event(&ev).map_err(|e| {
+            self.persist_event(&ev, true).map_err(|e| {
                 self.journal_failure(e);
                 RejectReason::JournalFailure
             })?;
             self.counters.events_old_generation_audited += 1;
             return Ok(EventReceipt::AuditedOldGeneration { event_seq: seq });
+        };
+        if let Some(wrapper) = &ev.wrapper_message {
+            if ev.session.account != current.account
+                || wrapper.binding.account != current.account.0
+                || wrapper.binding.host_nonce != current.host.host_nonce
+                || wrapper.binding.session_generation != current.session_generation
+            {
+                return Err(RejectReason::SessionStale);
+            }
+            // The public projection is derived only after durable insertion.
+            ev.onebot_projection = None;
         }
 
-        let dup_native = self.seen_native.contains(&ev.native_id.0);
-        let duplicate = match ev.source {
-            EventSource::Recv | EventSource::HistoryBackfill => {
-                if dup_native {
-                    true
-                } else {
-                    false
-                }
-            }
-            EventSource::Update => {
-                if self.seen_updates.contains(&ev.native_id.0) {
-                    true
-                } else {
-                    false
-                }
-            }
+        let identity = event_identity_from_event(&ev);
+        let is_update = ev.source == EventSource::Update;
+        let fingerprint = if is_update {
+            event_revision_fingerprint_from_event(&ev)
+        } else {
+            String::new()
+        };
+        let dedup_key = (identity, fingerprint);
+        if let Some(pending) = self.pending_message_store.get(&dedup_key).cloned() {
+            self.persist_message_projection(&pending)?;
+            self.enqueue_persisted_event(pending)?;
+            self.pending_message_store.remove(&dedup_key);
+            self.counters.events_duplicate_suppressed += 1;
+            return Ok(EventReceipt::DuplicateSuppressed);
+        }
+        let duplicate = if is_update {
+            self.seen_updates.contains(&dedup_key)
+        } else {
+            self.seen_native.contains(&dedup_key.0)
         };
         if duplicate {
-            if let Some(pending) = self.pending_message_store.get(&ev.native_id.0).cloned() {
-                self.persist_message_projection(&pending)?;
-                self.enqueue_persisted_event(pending)?;
-                self.pending_message_store.remove(&ev.native_id.0);
-            } else {
+            if !is_update {
                 self.persist_message_projection(&ev)?;
             }
             self.counters.events_duplicate_suppressed += 1;
@@ -884,26 +953,26 @@ impl AccountActor {
 
         let seq = self.alloc_seq();
         ev.event_seq = seq;
-        self.persist_event(&ev).map_err(|e| {
+        self.persist_event(&ev, false).map_err(|e| {
             self.journal_failure(e);
             RejectReason::JournalFailure
         })?;
         // Core journal is durable before the OneBot mapping. Mark the event
         // seen before the second append so a bridge replay retries the mapping
         // instead of writing another journal row.
-        self.seen_native.insert(ev.native_id.0.clone());
-        let is_update = ev.source == EventSource::Update;
         if is_update {
-            self.seen_updates.insert(ev.native_id.0.clone());
+            self.seen_updates.insert(dedup_key.clone());
+        } else {
+            self.seen_native.insert(dedup_key.0.clone());
         }
         self.dedup_fifo
-            .push_back((is_update, ev.native_id.0.clone()));
+            .push_back((is_update, dedup_key.0.clone(), dedup_key.1.clone()));
         self.evict_dedup_if_needed();
-        if ev.onebot_projection.is_some() && ev.source != EventSource::Update {
+        if ev.onebot_projection.is_some() || ev.wrapper_message.is_some() {
             self.pending_message_store
-                .insert(ev.native_id.0.clone(), ev.clone());
+                .insert(dedup_key.clone(), ev.clone());
             self.persist_message_projection(&ev)?;
-            self.pending_message_store.remove(&ev.native_id.0);
+            self.pending_message_store.remove(&dedup_key);
         }
         self.events_out.push_back(ev);
         self.events_out_bytes += ev_bytes;
@@ -986,9 +1055,9 @@ impl AccountActor {
 
     fn evict_dedup_if_needed(&mut self) {
         while self.dedup_fifo.len() > self.dedup_capacity {
-            if let Some((is_update, id)) = self.dedup_fifo.pop_front() {
+            if let Some((is_update, id, fingerprint)) = self.dedup_fifo.pop_front() {
                 if is_update {
-                    self.seen_updates.remove(&id);
+                    self.seen_updates.remove(&(id, fingerprint));
                 } else {
                     self.seen_native.remove(&id);
                 }
@@ -1127,7 +1196,7 @@ impl AccountActor {
         }))
     }
 
-    fn persist_event(&mut self, ev: &MsgEvent) -> Result<(), JournalError> {
+    fn persist_event(&mut self, ev: &MsgEvent, audit_only: bool) -> Result<(), JournalError> {
         self.journal
             .append(&JournalRecord::Event(crate::journal::EventRecord {
                 v: 1,
@@ -1142,6 +1211,7 @@ impl AccountActor {
                 native_id: ev.native_id.0.clone(),
                 text: ev.text.clone(),
                 platform_time: ev.platform_time,
+                audit_only,
                 wrapper_message: ev.wrapper_message.clone(),
                 onebot_projection: ev.onebot_projection.clone(),
                 observed_at_unix_ms: ev.observed_at_unix_ms,
@@ -1321,6 +1391,18 @@ fn transition_valid(from: &ActionState, to: &ActionState) -> bool {
 }
 
 impl StoreReader for AccountActor {
+    fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+        self.message_store.as_ref()?.image_info(file)
+    }
+
+    fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
+        self.message_store.as_ref()?.voice_info(file)
+    }
+
+    fn voice_record(&self, file: &str) -> Option<(caligo_model::capability::VoiceInfo, caligo_model::capability::HostQuery)> {
+        self.message_store.as_ref()?.voice_record(file)
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<caligo_model::onebot_traits::StoredMessageView> {
         self.message_store.as_ref()?.get_msg(message_id)
     }

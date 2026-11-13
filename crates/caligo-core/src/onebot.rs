@@ -1,12 +1,16 @@
 //! OneBot V11 action layer. All transports share this action registry and
 //! dispatch exactly once through `SendSink`.
 
+use crate::media_tool::{ContainerFormat, MediaError, MediaTool, StopToken, MAX_RECORD_OUTPUT_BYTES};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use caligo_model::capability::{positive_decimal, GroupInfo, HostQuery, QueryData, QueryOutcome, VoiceDownload, VoiceInfo, MAX_VOICE_DOWNLOAD_BYTES};
 use caligo_model::onebot_traits::{
     extract_text, SendDisposition, SendPayload, SendSink, SendTarget,
 };
 pub use caligo_model::onebot_traits::{StoreReader, StoredMessageView};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ActionResponse {
@@ -53,6 +57,25 @@ impl ActionResponse {
 }
 
 pub const RET_UNSUPPORTED: i32 = 1404;
+pub const RET_PERMISSION_DENIED: i32 = 1403;
+pub const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Fixed read-only operations shared by every public transport.
+/// Implementations enforce account, connection and session scope before success.
+pub trait QueryBackend {
+    fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome;
+
+    fn voice_media(&self) -> Option<(&MediaTool, StopToken)> {
+        None
+    }
+}
+
+struct UnsupportedQueries;
+impl QueryBackend for UnsupportedQueries {
+    fn query_host(&self, _: HostQuery, _: Duration) -> QueryOutcome {
+        QueryOutcome::Unsupported
+    }
+}
 pub const RET_BAD_PARAMS: i32 = 1400;
 pub const RET_BAD_REQUEST: i32 = 1440;
 pub const RET_NOT_CONFIRMED: i32 = 1501;
@@ -83,7 +106,14 @@ pub enum ActionHandlerKind {
         allow_async: bool,
     },
     GetMessage,
+    GetRecord,
+    GetImage,
     GetLoginInfo,
+    GetFriendList,
+    GetGroupList,
+    GetGroupInfo,
+    GetGroupMemberList,
+    GetGroupMemberInfo,
     GetStatus,
     GetVersionInfo,
 }
@@ -97,12 +127,17 @@ pub enum ActionInputSchema {
     PrivateMessage,
     Message,
     MessageId,
+    Record,
+    Image,
+    GroupInfo,
+    GroupMemberList,
+    GroupMemberInfo,
 }
 
 impl ActionInputSchema {
     pub fn to_json_schema(self) -> Value {
         let id = serde_json::json!({"type":"integer", "minimum":0, "maximum":u64::MAX});
-        let message = serde_json::json!({
+        let mut message = serde_json::json!({
             "description":"Literal text or text segments; other segment types are unsupported",
             "anyOf":[
                 {"type":"string"},
@@ -116,6 +151,26 @@ impl ActionInputSchema {
                 }}
             ]
         });
+        if matches!(self, Self::GroupMessage | Self::PrivateMessage | Self::Message) {
+            message["description"] = Value::from("Literal text, text segments, one Tencent SILK v3 record, or one ordinary PNG image in Base64");
+            message["anyOf"].as_array_mut().unwrap().push(serde_json::json!({
+                "type":"array", "minItems":1, "maxItems":1, "items":{
+                    "type":"object", "required":["type","data"],
+                    "properties":{"type":{"const":"record"}, "data":{
+                        "type":"object","required":["file"],
+                        "properties":{"file":{"type":"string","pattern":"^base64://",
+                            "maxLength":9+4*caligo_model::voice::MAX_SEND_BYTES.div_ceil(3)}}
+                    }}
+                }
+            }));
+        }
+        if matches!(self, Self::GroupMessage | Self::PrivateMessage | Self::Message) {
+            let mut image = message["anyOf"][2].clone();
+            image["items"]["properties"]["type"]["const"] = Value::from("image");
+            image["items"]["properties"]["data"]["properties"]["file"]["maxLength"] =
+                Value::from(9 + 4*caligo_model::png::MAX_SEND_BYTES.div_ceil(3));
+            message["anyOf"].as_array_mut().unwrap().push(image);
+        }
         let mut schema = serde_json::json!({"type":"object", "properties":{}});
         match self {
             Self::Empty => {}
@@ -141,11 +196,42 @@ impl ActionInputSchema {
                     {"required":["user_id"], "properties":{"message_type":{"const":"private"}}}
                 ]);
             }
+            Self::GroupInfo | Self::GroupMemberList | Self::GroupMemberInfo => {
+                schema["properties"]["group_id"] = serde_json::json!({
+                    "type":"integer", "minimum":1, "maximum":u64::MAX
+                });
+                schema["properties"]["no_cache"] = serde_json::json!({
+                    "type":"boolean", "default":false,
+                    "description":"Queries always read the host; no fabricated cache is used"
+                });
+                schema["required"] = serde_json::json!(["group_id"]);
+                if self == Self::GroupMemberInfo {
+                    schema["properties"]["no_cache"]["default"] = Value::from(true);
+                    schema["properties"]["user_id"] = serde_json::json!({"type":"integer","minimum":1,"maximum":u64::MAX});
+                    schema["required"] = serde_json::json!(["group_id","user_id"]);
+                }
+            }
             Self::MessageId => {
                 schema["properties"]["message_id"] = serde_json::json!({
                     "type":"integer", "minimum":i32::MIN, "maximum":i32::MAX
                 });
                 schema["required"] = serde_json::json!(["message_id"]);
+            }
+            Self::Record => {
+                schema["properties"] = serde_json::json!({
+                    "file":{"type":"string", "maxLength":64, "description":"Caligo record file token"},
+                    "file_id":{"type":"string", "maxLength":64, "description":"Alternate Caligo record file token"},
+                    "out_format":{"type":"string", "enum":["silk","wav","ogg"], "default":"silk",
+                        "description":"WAV and OGG require a configured SILK decoder"}
+                });
+                schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
+            }
+            Self::Image => {
+                schema["properties"] = serde_json::json!({
+                    "file":{"type":"string","maxLength":64,"description":"Caligo image file token"},
+                    "file_id":{"type":"string","maxLength":64,"description":"Alternate Caligo image file token"}
+                });
+                schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
             }
         }
         schema
@@ -247,6 +333,52 @@ pub static ACTION_REGISTRY: &[ActionDefinition] = &[
         input_schema: ActionInputSchema::Empty,
     },
     ActionDefinition {
+        name: "get_record",
+        canonical: "get_record",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetRecord,
+        input_schema: ActionInputSchema::Record,
+    },
+    ActionDefinition {
+        name: "get_image", canonical: "get_image", permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetImage, input_schema: ActionInputSchema::Image,
+    },
+    ActionDefinition {
+        name: "get_friend_list",
+        canonical: "get_friend_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetFriendList,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_group_list",
+        canonical: "get_group_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupList,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_group_info",
+        canonical: "get_group_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupInfo,
+        input_schema: ActionInputSchema::GroupInfo,
+    },
+    ActionDefinition {
+        name: "get_group_member_list",
+        canonical: "get_group_member_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupMemberList,
+        input_schema: ActionInputSchema::GroupMemberList,
+    },
+    ActionDefinition {
+        name: "get_group_member_info",
+        canonical: "get_group_member_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupMemberInfo,
+        input_schema: ActionInputSchema::GroupMemberInfo,
+    },
+    ActionDefinition {
         name: "get_status",
         canonical: "get_status",
         permission: ActionPermission::Read,
@@ -286,12 +418,11 @@ fn get_message_text(params: &Value) -> Result<String, ActionResponse> {
 }
 
 fn dispatch_send(
-    sink: &mut dyn SendSink,
     echo: Value,
-    payload: SendPayload,
+    outcome: Result<SendDisposition, String>,
     allow_async: bool,
 ) -> ActionResponse {
-    match sink.send(&payload) {
+    match outcome {
         Ok(SendDisposition::Confirmed { message_id }) => {
             ActionResponse::ok(serde_json::json!({"message_id": message_id}), echo)
         }
@@ -320,7 +451,7 @@ fn send_payload(
     echo: Value,
     allow_async: bool,
 ) -> ActionResponse {
-    let (target, text) = match target_kind {
+    let target = match target_kind {
         SendTargetKind::Group => {
             let group_id = match get_u64(params, "group_id") {
                 Ok(v) => v,
@@ -329,14 +460,7 @@ fn send_payload(
                     return r;
                 }
             };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (SendTarget::Group { group_id }, text)
+            SendTarget::Group { group_id }
         }
         SendTargetKind::Private => {
             let user_id = match get_u64(params, "user_id") {
@@ -346,14 +470,7 @@ fn send_payload(
                     return r;
                 }
             };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (SendTarget::Private { user_id }, text)
+            SendTarget::Private { user_id }
         }
         SendTargetKind::Inferred => {
             let inferred_type = if params.get("group_id").is_some() {
@@ -367,7 +484,7 @@ fn send_payload(
                 .get("message_type")
                 .and_then(Value::as_str)
                 .unwrap_or(inferred_type);
-            let target = match message_type {
+            match message_type {
                 "group" => match get_u64(params, "group_id") {
                     Ok(id) => SendTarget::Group { group_id: id },
                     Err(mut r) => {
@@ -389,18 +506,45 @@ fn send_payload(
                         echo,
                     )
                 }
-            };
-            let text = match get_message_text(params) {
-                Ok(t) => t,
-                Err(mut r) => {
-                    r.echo = echo;
-                    return r;
-                }
-            };
-            (target, text)
+            }
         }
     };
-    dispatch_send(sink, echo, SendPayload { target, text }, allow_async)
+    if let Some([item]) = params.get("message").and_then(Value::as_array).map(Vec::as_slice) {
+        if item.get("type").and_then(Value::as_str) == Some("image") {
+            let Some(png)=item.get("data").and_then(|data|data.get("file")).and_then(Value::as_str)
+                .and_then(|file|file.strip_prefix("base64://"))
+                .filter(|encoded|encoded.len() <= 4*caligo_model::png::MAX_SEND_BYTES.div_ceil(3))
+                .and_then(|encoded|STANDARD.decode(encoded).ok())
+                .filter(|bytes|caligo_model::png::dimensions(bytes).is_some()) else {
+                return ActionResponse::failed(RET_BAD_PARAMS,"图片 file 须为有界普通 PNG Base64",echo);
+            };
+            return dispatch_send(echo,sink.send_image(target,png),allow_async);
+        }
+        if item.get("type").and_then(Value::as_str) == Some("record") {
+            let Some(silk) = item.get("data").and_then(|data| data.get("file"))
+                .and_then(Value::as_str).and_then(|file| file.strip_prefix("base64://"))
+                .filter(|encoded| encoded.len() <= 4 * caligo_model::voice::MAX_SEND_BYTES.div_ceil(3))
+                .and_then(|encoded| STANDARD.decode(encoded).ok())
+                .filter(|bytes| caligo_model::voice::validate_short_tencent_silk(bytes))
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "语音 file 须为有界的腾讯 SILK v3 Base64", echo);
+            };
+            let outcome = match target {
+                SendTarget::Private { user_id } if user_id > 0 => sink.send_private_voice(user_id, silk),
+                SendTarget::Group { group_id } if group_id > 0 => sink.send_group_voice(group_id, silk),
+                _ => return ActionResponse::failed(RET_BAD_PARAMS, "语音目标须为正整数", echo),
+            };
+            return dispatch_send(echo, outcome, allow_async);
+        }
+    }
+    let text = match get_message_text(params) {
+        Ok(text) => text,
+        Err(mut response) => {
+            response.echo = echo;
+            return response;
+        }
+    };
+    dispatch_send(echo, sink.send(&SendPayload { target, text }), allow_async)
 }
 
 /// Whether an action name belongs to the implemented public API surface.
@@ -408,25 +552,220 @@ pub fn is_supported_action(action: &str) -> bool {
     resolve_action(action).is_some()
 }
 
-/// Validate only the known directory request shape; this does not register a
-/// capability. Learned peers are an internal index, not a directory backend.
-fn unsupported_directory_validation(action: &str, params: &Value) -> Option<ActionResponse> {
-    if action == "get_group_info"
-        && !params
-            .get("group_id")
-            .and_then(Value::as_u64)
-            .is_some_and(|id| id > 0)
-    {
-        return Some(ActionResponse::failed(
-            RET_BAD_PARAMS,
-            "group_id 必须是正整数",
-            Value::Null,
-        ));
-    }
-    None
+fn public_id(id: &str) -> Option<u64> {
+    positive_decimal(id)
+        .then(|| id.parse::<u64>().ok())
+        .flatten()
 }
 
-/// Process one action through the shared action registry.
+fn group_data(info: GroupInfo) -> Option<Value> {
+    if info.member_count > info.max_member_count {
+        return None;
+    }
+    Some(serde_json::json!({
+        "group_id":public_id(&info.group_id)?, "group_name":info.group_name,
+        "member_count":info.member_count, "max_member_count":info.max_member_count
+    }))
+}
+
+fn member_data(group_id: &str, member: caligo_model::capability::GroupMember) -> Option<Value> {
+    let mut data = serde_json::to_value(&member).ok()?;
+    data["group_id"] = Value::from(public_id(group_id)?);
+    data["user_id"] = Value::from(public_id(&member.user_id)?);
+    data["join_time"] = Value::from(member.join_time.parse::<u64>().ok()?);
+    data["last_sent_time"] = Value::from(member.last_sent_time.parse::<u64>().ok()?);
+    data["area"] = Value::from("");
+    data["title_expire_time"] = Value::from(0);
+    data["unfriendly"] = Value::from(false);
+    data["card_changeable"] = Value::from(true);
+    Some(data)
+}
+
+fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    query_response_with_voice(query, backend, echo, None, None)
+}
+
+fn query_response_with_voice(
+    query: HostQuery,
+    backend: &dyn QueryBackend,
+    echo: Value,
+    record: Option<(&VoiceInfo, RecordFormat<'_>)>,
+    image: Option<&caligo_model::capability::ImageInfo>,
+) -> ActionResponse {
+    let invalid =
+        || ActionResponse::failed(RET_BAD_REQUEST, "宿主查询响应不符合合同", echo.clone());
+    let outcome = backend.query_host(query.clone(), QUERY_TIMEOUT);
+    let data = match outcome {
+        QueryOutcome::Success(data) => match (query, data) {
+            (HostQuery::LoginInfo, QueryData::LoginInfo(info)) => public_id(&info.user_id)
+                .map(|user_id| serde_json::json!({"user_id":user_id, "nickname":info.nickname})),
+            (HostQuery::FriendList, QueryData::FriendList(list)) => list.into_iter()
+                .map(|info| Some(serde_json::json!({
+                    "user_id":public_id(&info.user_id)?, "nickname":info.nickname, "remark":info.remark
+                })))
+                .collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupMembers { group_id, .. }, QueryData::GroupMembers(list)) if list.matches(&group_id) =>
+                list.members.into_iter().map(|m|member_data(&group_id,m)).collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
+                .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
+            (HostQuery::VoiceDownload { .. } | HostQuery::ExactVoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
+                if let Some((expected, format)) = record {
+                    if let Some(bytes) = voice_bytes(expected, download) {
+                        return record_response(bytes, format, echo);
+                    }
+                }
+                None
+            }
+            (HostQuery::ImageDownload { .. }, QueryData::ImageDownload(download)) => {
+                if let Some(expected) = image {
+                    if let Some(bytes) = image_bytes(expected, download) {
+                        return ActionResponse::ok(serde_json::json!({
+                            "file_size":bytes.len().to_string(), "file_name":"image.png", "base64":STANDARD.encode(bytes)
+                        }), echo);
+                    }
+                }
+                None
+            }
+            _ => None,
+        },
+        QueryOutcome::Unsupported => return ActionResponse::failed(RET_UNSUPPORTED, "宿主未支持此查询", echo),
+        QueryOutcome::NotReady => return ActionResponse::failed(RET_NOT_READY, "宿主查询尚未就绪", echo),
+        QueryOutcome::PermissionDenied => return ActionResponse::failed(RET_PERMISSION_DENIED, "宿主拒绝查询权限", echo),
+        QueryOutcome::Rejected { code, reason } => return ActionResponse::failed(
+            RET_BAD_REQUEST, &format!("宿主查询拒绝 (code={code}): {reason}"), echo),
+        QueryOutcome::Timeout => return ActionResponse::failed(RET_NOT_CONFIRMED, "宿主查询超时", echo),
+        QueryOutcome::Disconnected => return ActionResponse::failed(RET_NOT_CONFIRMED, "宿主查询连接已断开", echo),
+        QueryOutcome::InvalidResponse => return invalid(),
+    };
+    match data {
+        Some(data) => ActionResponse::ok(data, echo),
+        None => invalid(),
+    }
+}
+
+fn voice_bytes(expected: &VoiceInfo, download: VoiceDownload) -> Option<Vec<u8>> {
+    let size = expected.size;
+    if &download.info != expected || !(1..=MAX_VOICE_DOWNLOAD_BYTES).contains(&size)
+        || download.silk_hex.len() != size as usize * 2
+        || !download.silk_hex.is_ascii()
+    {
+        return None;
+    }
+    let bytes = (0..download.silk_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&download.silk_hex[i..i + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()?;
+    if !bytes.starts_with(b"#!SILK_V3") && !bytes.starts_with(b"\x02#!SILK_V3") {
+        return None;
+    }
+    Some(bytes)
+}
+
+enum RecordFormat<'a> {
+    Silk,
+    Converted {
+        format: ContainerFormat,
+        tool: &'a MediaTool,
+        stop: StopToken,
+    },
+}
+
+fn record_response(bytes: Vec<u8>, format: RecordFormat<'_>, echo: Value) -> ActionResponse {
+    let (bytes, file_name) = match format {
+        RecordFormat::Silk => (bytes, "voice.silk"),
+        RecordFormat::Converted { format, tool, stop } => {
+            let artifact = match tool.silk_to_container(&bytes, format, &stop) {
+                Ok(artifact) => artifact,
+                Err(MediaError::TimedOut | MediaError::Stopped) => {
+                    return ActionResponse::failed(RET_NOT_CONFIRMED, "语音转码超时或已停止", echo);
+                }
+                Err(MediaError::FileTooLarge { .. }) => {
+                    return ActionResponse::failed(RET_UNSUPPORTED, "语音超过转码大小上限", echo);
+                }
+                Err(_) => return ActionResponse::failed(RET_NOT_READY, "语音转码失败", echo),
+            };
+            if artifact.bytes.len() as u64 > MAX_RECORD_OUTPUT_BYTES {
+                return ActionResponse::failed(RET_UNSUPPORTED, "语音超过转码大小上限", echo);
+            }
+            let file_name = match format {
+                ContainerFormat::Wav => "voice.wav",
+                ContainerFormat::Ogg => "voice.ogg",
+            };
+            (artifact.bytes, file_name)
+        }
+    };
+    ActionResponse::ok(serde_json::json!({
+        "file_size":bytes.len().to_string(), "base64":STANDARD.encode(bytes), "file_name":file_name
+    }), echo)
+}
+
+fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    let file = match (params.get("file"), params.get("file_id")) {
+        (Some(value), None) | (None, Some(value)) => value.as_str(),
+        _ => None,
+    };
+    let Some(file) = file.filter(|file| !file.is_empty() && file.len() <= 64) else {
+        return ActionResponse::failed(RET_BAD_PARAMS, "必须提供一个语音文件标识", echo);
+    };
+    let conversion = match params.get("out_format") {
+        None => None,
+        Some(Value::String(format)) => match format.as_str() {
+            "silk" => None,
+            "wav" => Some(ContainerFormat::Wav),
+            "ogg" => Some(ContainerFormat::Ogg),
+            _ => return ActionResponse::failed(RET_UNSUPPORTED, "语音输出格式未支持", echo),
+        },
+        Some(_) => return ActionResponse::failed(RET_BAD_PARAMS, "out_format 必须是字符串", echo),
+    };
+    let format = if let Some(format) = conversion {
+        let Some((tool, stop)) = queries.voice_media() else {
+            return ActionResponse::failed(RET_UNSUPPORTED, "未配置语音转码", echo);
+        };
+        RecordFormat::Converted { format, tool, stop }
+    } else {
+        RecordFormat::Silk
+    };
+    let Some((info, query)) = store.voice_record(file) else {
+        return ActionResponse::failed(RET_BAD_REQUEST, "语音文件标识不存在", echo);
+    };
+    if info.size > MAX_VOICE_DOWNLOAD_BYTES {
+        return ActionResponse::failed(RET_UNSUPPORTED, "语音超过当前下载上限", echo);
+    }
+    query_response_with_voice(query, queries, echo, Some((&info, format)), None)
+}
+
+fn image_bytes(expected: &caligo_model::capability::ImageInfo, download: caligo_model::capability::ImageDownload) -> Option<Vec<u8>> {
+    if &download.info != expected || expected.size > caligo_model::capability::MAX_IMAGE_DOWNLOAD_BYTES
+        || download.png_hex.len() != expected.size as usize * 2 || !download.png_hex.is_ascii() { return None; }
+    let bytes = (0..download.png_hex.len()).step_by(2)
+        .map(|i| u8::from_str_radix(&download.png_hex[i..i+2],16).ok()).collect::<Option<Vec<_>>>()?;
+    if bytes.len() < 33 || &bytes[..16] != b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
+        || u32::from_be_bytes(bytes[16..20].try_into().ok()?) != expected.width
+        || u32::from_be_bytes(bytes[20..24].try_into().ok()?) != expected.height { return None; }
+    Some(bytes)
+}
+
+fn get_image(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBackend, echo: Value) -> ActionResponse {
+    let file = match (params.get("file"),params.get("file_id")) {
+        (Some(v),None) | (None,Some(v)) => v.as_str(), _ => None,
+    };
+    let Some(file) = file.filter(|v| !v.is_empty() && v.len() <= 64) else {
+        return ActionResponse::failed(RET_BAD_PARAMS,"必须提供一个图片文件标识",echo);
+    };
+    let Some(info) = store.image_info(file) else {
+        return ActionResponse::failed(RET_BAD_REQUEST,"图片文件标识不存在",echo);
+    };
+    if info.size > caligo_model::capability::MAX_IMAGE_DOWNLOAD_BYTES {
+        return ActionResponse::failed(RET_UNSUPPORTED,"图片超过当前下载上限",echo);
+    }
+    let query = HostQuery::ImageDownload { chat_type:info.chat_type, peer_uid:info.peer_uid.clone(),
+        sender_uin:info.sender_uin.clone(), message_id:info.message_id.clone(), element_id:info.element_id.clone() };
+    query_response_with_voice(query,queries,echo,None,Some(&info))
+}
+
+/// Compatibility entry for callers without a host query backend. Directory
+/// actions remain explicitly unsupported; legacy login readers retain their data.
 pub fn handle_action(
     action: &str,
     params: &Value,
@@ -434,10 +773,27 @@ pub fn handle_action(
     sink: &mut dyn SendSink,
     store: &dyn StoreReader,
 ) -> ActionResponse {
-    if let Some(mut response) = unsupported_directory_validation(action, params) {
-        response.echo = echo;
-        return response;
+    if action == "get_login_info" {
+        return match store.login_info() {
+            Some((user_id, nickname)) => ActionResponse::ok(
+                serde_json::json!({"user_id":user_id, "nickname":nickname}),
+                echo,
+            ),
+            None => ActionResponse::failed(RET_NOT_READY, "账号身份尚未就绪", echo),
+        };
     }
+    handle_action_with_queries(action, params, echo, sink, store, &UnsupportedQueries)
+}
+
+/// Process one action through the shared registry and actual host query backend.
+pub fn handle_action_with_queries(
+    action: &str,
+    params: &Value,
+    echo: Value,
+    sink: &mut dyn SendSink,
+    store: &dyn StoreReader,
+    queries: &dyn QueryBackend,
+) -> ActionResponse {
     let Some(definition) = resolve_action(action) else {
         return ActionResponse::failed(RET_UNSUPPORTED, "未支持动作", echo);
     };
@@ -469,13 +825,85 @@ pub fn handle_action(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
-        ActionHandlerKind::GetLoginInfo => match store.login_info() {
-            Some((user_id, nickname)) => ActionResponse::ok(
-                serde_json::json!({"user_id": user_id, "nickname": nickname}),
+        ActionHandlerKind::GetLoginInfo => query_response(HostQuery::LoginInfo, queries, echo),
+        ActionHandlerKind::GetRecord => get_record(params, store, queries, echo),
+        ActionHandlerKind::GetImage => get_image(params, store, queries, echo),
+        ActionHandlerKind::GetFriendList => query_response(HostQuery::FriendList, queries, echo),
+        ActionHandlerKind::GetGroupList => query_response(HostQuery::GroupList, queries, echo),
+        ActionHandlerKind::GetGroupInfo => {
+            let Some(group_id) = params
+                .get("group_id")
+                .and_then(Value::as_u64)
+                .filter(|id| *id > 0)
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "group_id 必须是正整数", echo);
+            };
+            if params
+                .get("no_cache")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return ActionResponse::failed(RET_BAD_PARAMS, "no_cache 必须是布尔值", echo);
+            }
+            query_response(
+                HostQuery::GroupInfo {
+                    group_id: group_id.to_string(),
+                },
+                queries,
                 echo,
-            ),
-            None => ActionResponse::failed(RET_NOT_READY, "账号身份尚未就绪", echo),
-        },
+            )
+        }
+        ActionHandlerKind::GetGroupMemberList | ActionHandlerKind::GetGroupMemberInfo => {
+            let Some(group_id) = params
+                .get("group_id")
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0)
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "group_id 必须是正整数", echo);
+            };
+            let no_cache = match params.get("no_cache") {
+                None => definition.handler == ActionHandlerKind::GetGroupMemberInfo,
+                Some(Value::Bool(v)) => *v,
+                _ => return ActionResponse::failed(RET_BAD_PARAMS, "no_cache 必须是布尔值", echo),
+            };
+            let user_id = if definition.handler == ActionHandlerKind::GetGroupMemberInfo {
+                match params
+                    .get("user_id")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0)
+                {
+                    Some(v) => Some(v),
+                    None => {
+                        return ActionResponse::failed(RET_BAD_PARAMS, "user_id 必须是正整数", echo)
+                    }
+                }
+            } else {
+                None
+            };
+            let mut response = query_response(
+                HostQuery::GroupMembers {
+                    group_id: group_id.to_string(),
+                    force_refresh: no_cache,
+                },
+                queries,
+                echo.clone(),
+            );
+            if response.retcode == 0 {
+                if let Some(user_id) = user_id {
+                    let member = response
+                        .data
+                        .as_array()
+                        .and_then(|list| {
+                            list.iter().find(|m| m["user_id"].as_u64() == Some(user_id))
+                        })
+                        .cloned();
+                    response = match member {
+                        Some(m) => ActionResponse::ok(m, echo),
+                        None => ActionResponse::failed(RET_BAD_REQUEST, "群成员不存在", echo),
+                    };
+                }
+            }
+            response
+        }
         ActionHandlerKind::GetVersionInfo => ActionResponse::ok(
             serde_json::json!({
                 "app_name": "Caligo",
@@ -532,6 +960,21 @@ mod tests {
     }
     struct FakeStore;
     impl StoreReader for FakeStore {
+        fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+            (file == "caligo-image:10001:42").then(|| caligo_model::capability::ImageInfo {
+                chat_type:1, peer_uid:"u_friend".into(),sender_uin:"20002".into(),message_id:"100".into(),
+                element_id:"200".into(),size:70,md5:"e605ef58c3bb5f33463782ab90d58295".into(),width:1,height:1,pic_type:1001,
+            })
+        }
+        fn voice_info(&self, file: &str) -> Option<VoiceInfo> {
+            (file == "caligo-voice:10001:42").then(|| VoiceInfo {
+                peer_uid: "u_friend".into(),
+                message_id: "100".into(),
+                element_id: "200".into(),
+                size: 10,
+                md5: "0123456789abcdef0123456789abcdef".into(),
+            })
+        }
         fn get_msg(&self, id: i32) -> Option<StoredMessageView> {
             (id == 42).then(|| StoredMessageView {
                 message_id: 42,
@@ -565,7 +1008,14 @@ mod tests {
                 "send_private_msg_async",
                 "send_msg_async",
                 "get_msg",
+                "get_record",
+                "get_image",
                 "get_login_info",
+                "get_friend_list",
+                "get_group_list",
+                "get_group_info",
+            "get_group_member_list",
+            "get_group_member_info",
                 "get_status",
                 "get_version_info",
             ])
@@ -601,6 +1051,44 @@ mod tests {
         }
     }
 
+    struct FakeQueries;
+    impl QueryBackend for FakeQueries {
+        fn query_host(&self, query: HostQuery, _: Duration) -> QueryOutcome {
+            QueryOutcome::Success(match query {
+                HostQuery::LoginInfo => QueryData::LoginInfo(caligo_model::capability::LoginInfo {
+                    user_id: "1694717255".into(),
+                    nickname: "caligo".into(),
+                    online: true,
+                }),
+                HostQuery::FriendList => QueryData::FriendList(vec![]),
+                HostQuery::GroupList => QueryData::GroupList(vec![]),
+                HostQuery::GroupMembers {group_id,..} => QueryData::GroupMembers(caligo_model::capability::GroupMembers {group_id,members:vec![caligo_model::capability::GroupMember {
+                    user_id:"8".into(),nickname:"member".into(),card:"card".into(),sex:caligo_model::capability::MemberSex::Unknown,
+                    age:0,level:"0".into(),qq_level:0,join_time:"0".into(),last_sent_time:"0".into(),
+                    role:caligo_model::capability::MemberRole::Member,title:"".into(),is_robot:false,shut_up_timestamp:0,
+                }]}),
+                HostQuery::GroupInfo { group_id } => QueryData::GroupInfo(GroupInfo {
+                    group_id,
+                    group_name: "Lab group".into(),
+                    member_count: 3,
+                    max_member_count: 50,
+                }),
+                HostQuery::VoiceDownload { peer_uid, message_id, element_id } => {
+                    QueryData::VoiceDownload(VoiceDownload {
+                        info: VoiceInfo { peer_uid, message_id, element_id, ..FakeStore.voice_info("caligo-voice:10001:42").unwrap() },
+                        silk_hex: "02232153494c4b5f5633".into(),
+                    })
+                }
+                HostQuery::ExactVoiceDownload { .. } => return QueryOutcome::Unsupported,
+                HostQuery::ImageDownload { .. } => QueryData::ImageDownload(caligo_model::capability::ImageDownload {
+                    info:FakeStore.image_info("caligo-image:10001:42").unwrap(),
+                    png_hex:"89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63105432fe0f000214016604e0de7f0000000049454e44ae426082".into(),
+                }),
+                _ => panic!("unexpected public query"),
+            })
+        }
+    }
+
     #[test]
     fn every_registered_action_reaches_its_normal_handler() {
         for entry in ACTION_REGISTRY {
@@ -613,10 +1101,21 @@ mod tests {
                     serde_json::json!({"user_id":8,"message":"hello"})
                 }
                 ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
+                ActionInputSchema::Record => serde_json::json!({"file":"caligo-voice:10001:42"}),
+                ActionInputSchema::Image => serde_json::json!({"file":"caligo-image:10001:42"}),
+                ActionInputSchema::GroupInfo | ActionInputSchema::GroupMemberList => serde_json::json!({"group_id":7,"no_cache":true}),
+                ActionInputSchema::GroupMemberInfo => serde_json::json!({"group_id":7,"user_id":8}),
                 ActionInputSchema::Empty => serde_json::json!({}),
             };
             let echo = serde_json::json!([entry.name, {"seq":1}]);
-            let response = handle_action(entry.name, &params, echo.clone(), &mut sink, &FakeStore);
+            let response = handle_action_with_queries(
+                entry.name,
+                &params,
+                echo.clone(),
+                &mut sink,
+                &FakeStore,
+                &FakeQueries,
+            );
             assert_eq!(response.status, "ok", "{}: {response:?}", entry.name);
             assert_eq!(response.retcode, 0, "{}", entry.name);
             assert_eq!(response.echo, echo);
@@ -641,9 +1140,24 @@ mod tests {
                     assert_eq!(response.data["message_id"], 42);
                     assert_eq!(response.data["real_id"], 398263);
                 }
+                ActionHandlerKind::GetImage => { assert_eq!(response.data["file_name"],"image.png"); },
+                ActionHandlerKind::GetRecord => {
+                    assert_eq!(response.data["base64"], "AiMhU0lMS19WMw==");
+                }
                 ActionHandlerKind::GetLoginInfo => assert_eq!(
                     response.data,
                     serde_json::json!({"user_id":1694717255u64,"nickname":"caligo"})
+                ),
+                ActionHandlerKind::GetGroupMemberInfo => assert_eq!(response.data["user_id"],8),
+                ActionHandlerKind::GetGroupMemberList => assert_eq!(response.data[0]["user_id"],8),
+                ActionHandlerKind::GetFriendList | ActionHandlerKind::GetGroupList => {
+                    assert_eq!(response.data, serde_json::json!([]))
+                }
+                ActionHandlerKind::GetGroupInfo => assert_eq!(
+                    response.data,
+                    serde_json::json!({
+                        "group_id":7,"group_name":"Lab group","member_count":3,"max_member_count":50
+                    })
                 ),
                 ActionHandlerKind::GetStatus => assert_eq!(
                     response.data,
@@ -656,6 +1170,20 @@ mod tests {
             }
             if entry.permission == ActionPermission::Read {
                 assert!(sink.0.is_empty());
+            }
+            if entry.handler == ActionHandlerKind::GetRecord {
+                for format in ["wav", "ogg"] {
+                    let response = handle_action_with_queries(
+                        entry.name,
+                        &serde_json::json!({"file":"caligo-voice:10001:42","out_format":format}),
+                        echo.clone(),
+                        &mut sink,
+                        &FakeStore,
+                        &FakeQueries,
+                    );
+                    assert_eq!(response.retcode, RET_UNSUPPORTED);
+                    assert!(response.data.is_null());
+                }
             }
         }
     }
@@ -802,6 +1330,21 @@ mod tests {
                         assert_eq!(schema["properties"]["message_id"]["minimum"], i32::MIN);
                         assert_eq!(schema["properties"]["message_id"]["maximum"], i32::MAX);
                         ActionInputSchema::MessageId
+                    } else if handler == ActionHandlerKind::GetImage {
+                        assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
+                        ActionInputSchema::Image
+                    } else if handler == ActionHandlerKind::GetRecord {
+                        assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
+                        assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk", "wav", "ogg"]));
+                        ActionInputSchema::Record
+                    } else if matches!(handler,ActionHandlerKind::GetGroupMemberList|ActionHandlerKind::GetGroupMemberInfo) {
+                        if handler == ActionHandlerKind::GetGroupMemberList {ActionInputSchema::GroupMemberList} else {ActionInputSchema::GroupMemberInfo}
+                    } else if handler == ActionHandlerKind::GetGroupInfo {
+                        assert_eq!(schema["required"], serde_json::json!(["group_id"]));
+                        assert_eq!(schema["properties"]["group_id"]["minimum"], 1);
+                        assert_eq!(schema["properties"]["group_id"]["maximum"], u64::MAX);
+                        assert_eq!(schema["properties"]["no_cache"]["type"], "boolean");
+                        ActionInputSchema::GroupInfo
                     } else {
                         assert_eq!(schema["properties"], serde_json::json!({}));
                         ActionInputSchema::Empty
@@ -1005,8 +1548,8 @@ mod tests {
                 ("get_group_info", serde_json::json!({"group_id":999u64})),
                 ("get_friend_list", Value::Null),
             ] {
-                assert!(!is_supported_action(action));
-                assert!(resolve_action(action).is_none());
+                assert!(is_supported_action(action));
+                assert!(resolve_action(action).is_some());
                 let echo = serde_json::json!({"action":action, "request":[1, false]});
                 let mut sink = ConfirmedSink::default();
                 let response = handle_action(action, &params, echo.clone(), &mut sink, store);

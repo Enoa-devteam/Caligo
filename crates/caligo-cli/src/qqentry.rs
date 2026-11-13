@@ -31,6 +31,8 @@ struct QqEntryArgs {
     uid_map_surface_only: bool,
     /// Use the hash-bound ProfileService round-trip contract.
     uid_map_profile_service: bool,
+    /// Obtain current identity from the exact-build ProfileService.
+    current_login: bool,
     uid_map_result: Option<PathBuf>,
     uid_map_timeout_ms: u32,
 }
@@ -80,6 +82,7 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
             "--uid-map-result" => a.uid_map_result = next(&mut i).map(PathBuf::from),
             "--uid-map-surface-only" => a.uid_map_surface_only = true,
             "--uid-map-profile-service" => a.uid_map_profile_service = true,
+            "--current-login" => a.current_login = true,
             "--uid-map-timeout-ms" => {
                 a.uid_map_timeout_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(60_000)
             }
@@ -131,7 +134,7 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] --current-login --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
 }
 
@@ -140,6 +143,7 @@ fn usage() {
 enum UidMapRequest {
     RoundTrip { uin: u64, output: PathBuf },
     SurfaceOnly { output: PathBuf },
+    CurrentLogin { output: PathBuf },
 }
 
 /// 公共前置:研究门控 + 必填参数 + 门 1(manifest)+ 门 2(实例确认)。
@@ -159,8 +163,8 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
-    if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service) {
-        eprintln!("[uid-map] surface-only and ProfileService modes require qq-entry");
+    if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service || a.current_login) {
+        eprintln!("[uid-map] surface-only, current-login and ProfileService modes require qq-entry");
         return Err(ExitCode::FAILURE);
     }
     let uid_map_mode_valid = if need_env {
@@ -168,23 +172,28 @@ fn gates(
             (
                 a.uid_map_uin.is_some(),
                 a.uid_map_surface_only,
+                a.current_login,
                 a.uid_map_result.is_some(),
             ),
-            (true, false, true) | (false, true, true) | (false, false, false)
+            (true, false, false, true)
+                | (false, true, false, true)
+                | (false, false, true, true)
+                | (false, false, false, false)
         )
     } else {
         a.uid_map_uin.is_some() == a.uid_map_result.is_some()
     };
     if !uid_map_mode_valid || (a.uid_map_profile_service && a.uid_map_uin.is_none()) {
-        eprintln!("[uid-map] 请选择 round-trip(--uid-map-uin + --uid-map-result)、surface-only(--uid-map-surface-only + --uid-map-result)，或不启用 UID-map");
+        eprintln!("[uid-map] 请选择 --uid-map-uin、--uid-map-surface-only 或 --current-login，并提供 --uid-map-result");
         return Err(ExitCode::FAILURE);
     }
     if need_env && a.uid_map_uin == Some(0) {
         eprintln!("[uid-map] round-trip UIN 必须大于零");
         return Err(ExitCode::FAILURE);
     }
-    if (a.uid_map_uin.is_some() || a.uid_map_surface_only)
-        && (a.daemon_pipe.is_some() || a.daemon_auth.is_some())
+    if (a.uid_map_uin.is_some() || a.uid_map_surface_only || a.current_login)
+        && (a.daemon_pipe.is_some() || a.daemon_auth.is_some()
+            || a.daemon_generation.is_some() || a.daemon_account.is_some())
     {
         eprintln!("[uid-map] 一次性 UID-map 探针不能与 daemon hook 共用 owner pump");
         return Err(ExitCode::FAILURE);
@@ -432,13 +441,28 @@ fn print_uid_map_surface_summary(path: &Path, expected_pid: u32) -> bool {
         && pid_matches
 }
 
+#[cfg(feature = "research")]
+fn print_current_login_summary(path: &Path, expected_pid: u32) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(result) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+    println!("[current-login] status={status}; identity evidence is local");
+    status == "current_login_match"
+        && result.get("pid").and_then(|v| v.as_u64()) == Some(u64::from(expected_pid))
+        && result.get("current_login").is_some_and(|v| v.is_object())
+}
+
 pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     let (pid, bridge, report, env, wait_s, _wait_ms, extra) = match gates(args, true) {
         Ok(v) => v,
         Err(c) => return c,
     };
     #[cfg(feature = "research")]
-    if extra.uid_map_profile_service {
+    if extra.uid_map_profile_service || extra.current_login {
         let manifest = extra
             .manifest
             .as_deref()
@@ -462,7 +486,8 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
-        (None, true, Some(path)) => match prepare_uid_map_result(path) {
+        (None, _, Some(path)) => match prepare_uid_map_result(path) {
+            Ok(output) if extra.current_login => Some(UidMapRequest::CurrentLogin { output }),
             Ok(output) => Some(UidMapRequest::SurfaceOnly { output }),
             Err(e) => {
                 eprintln!("[uid-map-surface] {e}");
@@ -549,12 +574,13 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             eprintln!("[uid-map] bootstrap was not a fresh success; no UID-map operation was made");
             return ExitCode::from(2);
         }
-        let (uin, mode, output, surface_only) = match request {
+        let (uin, mode, output) = match request {
             UidMapRequest::RoundTrip { uin, output } => {
                 let mode = if extra.uid_map_profile_service { 2 } else { 0 };
-                (uin, mode, output, false)
+                (uin, mode, output)
             }
-            UidMapRequest::SurfaceOnly { output } => (0, 1, output, true),
+            UidMapRequest::SurfaceOnly { output } => (0, 1, output),
+            UidMapRequest::CurrentLogin { output } => (0, 3, output),
         };
         let query = unsafe {
             remote_uid_map_probe(
@@ -578,10 +604,10 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
         let operation_ok = if query_code == Some(caligo_bridge::uid_map_probe::code::OK) {
-            if surface_only {
-                print_uid_map_surface_summary(&output, pid)
-            } else {
-                print_uid_map_summary(&output)
+            match mode {
+                1 => print_uid_map_surface_summary(&output, pid),
+                3 => print_current_login_summary(&output, pid),
+                _ => print_uid_map_summary(&output),
             }
         } else {
             false

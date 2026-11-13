@@ -14,13 +14,15 @@
 | 构建与测试 | [开发验证](guides/development.md) |
 | OneBot 群/好友查询动作 | [查询动作](guides/onebot-queries.md) |
 | OneBot/SSE/MCP 应用接入 | [协议入口](guides/onebot-app-entries.md) |
+| 多账号与管理页面 | [账号管理](guides/account-management.md)、[管理 UI](guides/management-ui.md) |
+| 外部媒体工具 | [媒体工具](guides/media-tools.md) |
 | FFI、适配、现场准入 | [原生研究](guides/native-research.md) |
 | 新规则、状态、文档维护 | [文档规范](guides/documentation.md) |
 | 工作块依赖与完成门 | [feature_list](../feature_list.json) |
 
 ## 计划与执行（按阶段选择）
 
-- SnowCat 研究成果整合：[先接线、后统一验收计划](plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)；[分阶段执行记录](execution/2026-11-13-snowcat-capability-integration.md)；[固定参考能力清单](contracts/snowcat-capability-inventory.json)；[Caligo 逐项映射](contracts/caligo-snowcat-capability-map.json)。
+- SnowCat 研究成果整合：[先接线、后统一验收计划](plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)；[首批执行记录](execution/2026-11-13-snowcat-capability-integration.md)；[后续接线与验收](execution/2026-11-13-snowcat-capability-integration-continued.md)；[固定参考能力清单](contracts/snowcat-capability-inventory.json)；[Caligo 逐项映射](contracts/caligo-snowcat-capability-map.json)。
 - N4 当前解阻入口：[2026-10-11 响应恢复计划](plans/2026-10-11-gitnexus-plan-caligo-n4-response-recovery.md)；先离线修请求关联与结果语义，现场仍硬停。
 - N4 执行现状：[响应恢复执行记录](execution/2026-10-11-n4-response-recovery.md)；序号 authority 决策见 [ADR](decisions/2026-10-11-wire-sequence-authority.md)。R1 离线合同通过，R5/R6 OneBot transports 有离线接线与协议合同；R2 native 寿命、R3 强身份、R4 现场和 R6 真实应用完成门仍开放。
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-/** A0 Caligo mapping validator and additive bootstrap. Node builtins only.
+/** Caligo capability mapping validator and refresh. Node builtins only.
  * Reference inventory is immutable input. Never runs reference code or QQ.
  * Default: run the real Rust registry example, validate coverage and semantics.
  * --registry-json <path>: validate a previously captured registry (offline only).
- * --refresh: add missing rows/update registry/counts, preserving existing reviews.
+ * --refresh: regenerate derived mappings and registry/counts, preserving reviews.
  * --init: create the initial map; refuses an existing output file.
  * --output <path>: override map path (useful for review/test artifacts).
  * Rows use normalized assessment profiles: resolveEntry() yields every required
@@ -31,7 +31,14 @@ const DAEMON = 'crates/caligo-core/src/daemon.rs';
 const CLI = 'crates/caligo-core/src/bin/caligod.rs';
 const EVENTS = 'crates/caligo-core/src/onebot_events.rs';
 const TRANSPORT = 'crates/caligo-core/src/onebot_transport.rs';
-const LEDGER = 'docs/execution/2026-11-13-snowcat-capability-integration.md';
+const BROKER = 'crates/caligo-core/src/capability_broker.rs';
+const QUERY = 'crates/caligo-bridge/src/qq_query.rs';
+const RESIDENT = 'crates/caligo-bridge/src/resident.rs';
+const MANAGER = 'crates/caligo-core/src/account_manager.rs';
+const MANAGEMENT_HTTP = 'crates/caligo-core/src/management_http.rs';
+const MEDIA = 'crates/caligo-core/src/media_tool.rs';
+const BASELINE_LEDGER = 'docs/execution/2026-11-13-snowcat-capability-integration.md';
+const LEDGER = 'docs/execution/2026-11-13-snowcat-capability-integration-continued.md';
 export const STATUSES = ['missing', 'unknown', 'partial_offline', 'registered_backend_blocked', 'wired_offline', 'implemented_pending_validation', 'research_lab'];
 export const CATEGORIES = ['actions', 'aliases', 'decorators', 'events', 'event_schemas', 'message_segments', 'protocols', 'components',
   'component_surface_exports', 'native_components', 'component_exports', 'native_surfaces', 'wrapper_interfaces', 'webui_routes', 'tools', 'named_contract_gaps'];
@@ -95,33 +102,94 @@ export function initialProfiles() {
   const actionPermission = { requirement: 'Transport authentication; read/write classification is discovery metadata only.',
     enforcement: [src(ONEBOT, 'pub enum ActionPermission'), src('crates/caligo-core/src/onebot_http.rs', 'fn token_ok(')],
     limits: 'No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport.' };
-  const registryLab = [src(LEDGER, 'OneBot 29/29'), src(ONEBOT, 'fn registry_has_unique_names_and_resolvable_canonical_actions()')];
-  const transportLab = [src(LEDGER, 'default/research workspace 均 PASS'), src(TRANSPORT, 'mod tests')];
+  const registryLab = [src(LEDGER, '共享动作与查询'), src(ONEBOT, 'fn registry_has_unique_names_and_resolvable_canonical_actions()')];
+  const transportLab = [src(LEDGER, 'default/research 全仓 PASS'), src(TRANSPORT, 'mod tests')];
   const missing = { status: 'missing', reason: 'No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.',
     implementation: null, normal_entry: null, permission: { requirement: null, enforcement: [], limits: 'Missing handler; capability permission contract unimplemented.' },
     backend_dependencies: [], supported_versions: null, acceptance: noAcceptance() };
   const actionMissing = { ...clone(missing), reason: 'Absent from executable ACTION_REGISTRY; the shared action handler returns unsupported for this name.',
     rejection_evidence: [src(ONEBOT, 'let Some(definition) = resolve_action(action) else')],
     acceptance: { ...noAcceptance(), limits: 'Unsupported response/parameter validation is not a backend implementation.' } };
-  const directory = { ...clone(actionMissing), reason: 'Directory action absent from ACTION_REGISTRY; learned peer caches, placeholder group_info and empty friend_list do not establish a directory backend.',
-    rejection_evidence: [src(ONEBOT, 'fn unsupported_directory_validation(')] };
+  const directory = { ...clone(actionMissing), reason: 'Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.',
+    acceptance: { ...noAcceptance(), limits: 'Registration and query plumbing are not end-to-end backend validation.' } };
+  const directoryPending = scoped('implemented_pending_validation', 'Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.',
+    [src(ONEBOT, 'pub fn handle_action_with_queries('), src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]')],
+    [src(CLI, 'fn main()'), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action_with_queries(')], actionPermission,
+    [{ name: 'Scoped query broker and fixed wrapper query executor', state: 'implemented_pending_validation', evidence: [src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]')] }],
+    [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
+    'Host integration is not final. No QQ field acceptance; LoginInfo is unsupported and directory OneBot routes remain pending full end-to-end validation.');
   const send = scoped('partial_offline', 'Registered text handler and daemon route exist; reference send surface is broader than literal/text segments and native acceptance remains open.',
     [src(ONEBOT, 'fn send_payload('), src(ONEBOT, 'fn dispatch_send('), src(SERVER, 'impl SendSink for DaemonSendSink')], sharedEntry, actionPermission,
     [{ name: 'Daemon/AccountActor/NativeSession plus ready session, strong receipt and persisted OneBot ID', state: 'offline_path_only', evidence: [src(SERVER, 'fn send(&mut self, payload: &SendPayload)')] },
-      { name: 'Private UID identity and full message-segment support', state: 'blocked_or_missing', evidence: [src(SERVER, '常驻私聊 UID 映射尚未证实')] }], registryLab,
-    'Group text uses actual durable daemon path; fake-host tests do not prove native callback identity/lifetime or peer delivery. Inferred sends reject private targets through normal sink.');
-  const privateSend = { ...clone(send), status: 'registered_backend_blocked', reason: 'Action is registered, but normal DaemonSendSink explicitly rejects private targets until UID mapping is independently proven.',
-    acceptance: { ...clone(send.acceptance), wired: true, limits: 'Fail-closed private rejection is wired; successful private send backend is unavailable.' } };
-  const query = scoped('wired_offline', 'Real registry dispatch reads daemon/store state; offline behavior is covered, with readiness and reference response-shape limits.',
-    [src(ONEBOT, 'pub fn handle_action('), src(DAEMON, 'impl StoreReader for Daemon')], sharedEntry, actionPermission,
-    [{ name: 'Daemon StoreReader and persisted MessageStore/session state', state: 'wired_offline', evidence: [src(DAEMON, 'impl StoreReader for Daemon')] }], registryLab,
-    'Native identity may be unavailable; get_msg reads locally persisted known IDs, not arbitrary native QQ history. Login/status may return not-ready; version describes Caligo.');
+      { name: 'Private UID identity and full message-segment support', state: 'partial_offline', evidence: [src(LEDGER, '发送能力协商与查询能力分开保存')] }], registryLab,
+    'Group text uses the durable daemon path. Private targets require a current capability announcement. Offline tests do not prove native callback lifetime or peer delivery.');
+  const privateSend = { ...clone(send), reason: 'Private send is gated by an advertised host capability and requires a verified UIN-to-UID lookup plus exact message identity readback before reporting success.',
+    implementation: [src(SERVER, 'fn send(&mut self, payload: &SendPayload)'), src(BROKER, 'pub(crate) fn supports_private_text('), src('crates/caligo-bridge/src/daemon_client.rs', 'fn capability_messages')],
+    backend_dependencies: [{ name: 'Advertised private-text capability, scoped UIN-to-UID query, exact readback and persisted identity', state: 'implemented_pending_validation', evidence: [src(BROKER, 'pub(crate) fn supports_private_text('), src(QUERY, 'HostQuery::MessagesById')] }],
+    acceptance: { ...clone(send.acceptance), wired: true, limits: 'The fail-closed gate and exact identity path have targeted tests; host end-to-end integration and field acceptance remain open.' } };
+  const query = scoped('wired_offline', 'Local persistent get_msg, daemon status, and version actions have normal offline paths; host-backed identity/list/detail queries are tracked separately.',
+    [src(ONEBOT, 'pub fn handle_action_with_queries('), src(DAEMON, 'impl StoreReader for Daemon'), src('crates/caligo-core/src/message_store.rs', 'impl StoreReader for MessageStore')], sharedEntry, actionPermission,
+    [{ name: 'Daemon StoreReader and persisted MessageStore/session state', state: 'wired_offline', evidence: [src(DAEMON, 'impl StoreReader for Daemon'), src('crates/caligo-core/src/message_store.rs', 'impl StoreReader for MessageStore')] }],
+    [src(LEDGER, '消息修订：default/research Store 各 6/6'), src(ONEBOT, 'fn get_msg_returns_complete_standard_fields_and_int32_id()')],
+    'get_msg reads locally persisted known IDs, not arbitrary native QQ history. Host-backed login/list/detail behavior is not credited by this assessment.');
+  const capabilityQuery = scoped('implemented_pending_validation', 'Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.',
+    [src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]'), src(RESIDENT, 'pub fn drain_queries(&self)')],
+    [src(DAEMON, 'pub fn query_host('), src('crates/caligo-bridge/src/daemon_client.rs', 'for (request_id, scope, outcome) in resident.take_query_results()')], actionPermission,
+    [{ name: 'Per-account/epoch scoped broker and owner-thread query queue', state: 'implemented_pending_validation', evidence: [src(BROKER, "pub(crate) fn begin<'a>("), src(RESIDENT, 'pub fn drain_queries(&self)')] }],
+    [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
+    'Advertised host query set excludes LoginInfo. No QQ field acceptance or completed host end-to-end integration is claimed.');
+  const accountManager = scoped('partial_offline', 'AccountManager provides ordinary multi-account configuration, isolated daemon lifecycle, and persistence paths with targeted offline evidence.',
+    [src(MANAGER, 'pub struct AccountManager'), src(MANAGER, 'pub fn start_all(&mut self)'), src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')],
+    [src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')], actionPermission,
+    [{ name: 'Account-scoped directories, credentials, daemon and pipe', state: 'partial_offline', evidence: [src(MANAGER, 'pub fn start(&mut self, account: u64)'), src('crates/caligo-core/tests/account_manager_lab.rs', '#[test]')] }],
+    [src(LEDGER, '账号管理：default/research 各 5/5 PASS'), src('crates/caligo-core/tests/manager_smoke.rs', '#[test]')],
+    'This is a Caligo manager capability, not equivalence for every reference WebUI route or native surface. No production or QQ field acceptance.');
+  const managementUi = scoped('partial_offline', 'Loopback authenticated management HTTP/UI exposes a bounded account/config/lifecycle surface through the normal manager binary.',
+    [src(MANAGEMENT_HTTP, 'pub struct ManagementHttpServer'), src(MANAGEMENT_HTTP, 'fn route(')],
+    [src('crates/caligo-core/src/bin/caligo-manager.rs', 'ManagementHttpServer::start('), src('crates/caligo-core/src/bin/caligo-manager.rs', '"--management-bind"')], actionPermission,
+    [{ name: 'Loopback bearer-authenticated management server over AccountManager', state: 'partial_offline', evidence: [src(MANAGEMENT_HTTP, 'pub fn start('), src('crates/caligo-core/src/bin/caligo-manager.rs', 'ManagementHttpServer::start(')] }],
+    [src(LEDGER, '管理 HTTP 修正后 default/research 各 7/7 PASS'), src('crates/caligo-core/tests/management_http_lab.rs', '#[test]')],
+    'Only explicitly implemented management routes are mapped; this is not parity with all 129 reference WebUI routes. Host query integration and production acceptance are not claimed.');
+  const mediaTool = scoped('partial_offline', 'A normal caligo-media CLI and bounded local ffmpeg/ffprobe process contract exist with fake-runner and owned-child evidence.',
+    [src(MEDIA, 'pub struct MediaTool'), src(MEDIA, 'pub fn audio_to_pcm('), src(MEDIA, 'pub fn pcm_to_container('), src(MEDIA, 'pub fn thumbnail(')],
+    [src('crates/caligo-core/src/bin/caligo-media.rs', 'fn main()'), src('crates/caligo-core/src/bin/caligo-media.rs', 'fn run(cli: Cli)')], actionPermission,
+    [{ name: 'Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds', state: 'partial_offline', evidence: [src(MEDIA, 'pub fn verify_tools('), src(MEDIA, 'impl MediaProcessRunner for OsProcessRunner')] }],
+    [src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS'), src('crates/caligo-core/tests/media_tool_lab.rs', '#[test]')],
+    'No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented.');
+  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private and group Silk or ordinary single PNG images through scoped daemon host queries.',
+    [src(QUERY, 'function startMediaDownload('), src('crates/caligo-bridge/src/qq_v8.rs', 'onRichMediaDownloadComplete:')],
+    [src(DAEMON, 'pub fn query_host('), src(RESIDENT, 'pub fn drain_queries(&self)')],
+    { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
+    [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startMediaDownload(')] }],
+    [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()'), src('crates/caligo-bridge/tests/wrapper_image_contract.rs', 'fn image_download_binds_callback_file_scope_integrity_and_lifetime()')],
+    'Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming and verified self PNG use shared get_image; scoped PNG sends are wired. Other image formats and Caligo QQ field acceptance remain open.');
+  voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
+  const record = scoped('partial_offline', 'Private and group record segments support bounded Tencent SILK sends and durable message readback. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
+    [src(ONEBOT, 'fn get_record('), src(ONEBOT, 'fn send_payload('), src(EVENTS, 'voice_file_token('), src('crates/caligo-core/src/media_tool.rs', 'pub fn silk_to_container(')], sharedEntry, actionPermission,
+    [...clone(voiceDownload.backend_dependencies),
+      { name: 'WAV and OGG conversion through explicitly configured local tools', state: 'offline_only', evidence: [src(SERVER, 'fn voice_media(')] },
+      { name: 'Scoped private and group voice dispatch and verified native readback', state: 'offline_only', evidence: [src(DAEMON, 'pub fn submit_voice('), src('crates/caligo-bridge/src/qq_v8.rs', 'pub fn build_voice_send_js(')] }],
+    [src(LEDGER, 'A2 OneBot 语音读取'), src(LEDGER, 'A2 独立 SILK 转码'), src(LEDGER, 'A2 OneBot 私聊语音发送'), src(LEDGER, 'A2 OneBot 群语音发送'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn private_record_waits_for_exact_readback_to_be_persisted()'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn group_record_requires_group_capability_and_exact_group_projection()')],
+    'Only short Tencent SILK v3 Base64 can be sent. WAV and OGG retrieval requires a pinned decoder and FFmpeg. QQ field acceptance remains open.');
+  record.supported_versions = clone(voiceDownload.supported_versions);
+  const image = scoped('partial_offline', 'Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.',
+    [src(ONEBOT, 'fn get_image('), src('crates/caligo-model/src/wrapper_message.rs', 'pub fn image('), src('crates/caligo-core/src/message_store.rs', 'fn image_info(')], sharedEntry, actionPermission,
+    [...clone(voiceDownload.backend_dependencies), { name: 'Scoped private/group PNG send with exact native readback and durable public ID', state: 'offline_only', evidence: [src(DAEMON, 'pub fn submit_image('), src('crates/caligo-bridge/src/qq_v8.rs', 'pub fn build_image_send_js(')] }],
+    [src(LEDGER, 'A2 OneBot PNG 图片发送接线'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback()'), src(LEDGER, 'A2 OneBot PNG 图片读取'), src('crates/caligo-core/tests/wrapper_image_chain.rs', 'fn png_identity_events_get_image_and_restart_share_the_same_account_token()')],
+    'Only ordinary PNG is admitted, with at most 128 KiB send/download bytes. get_image returns Base64, file_size and file_name without local paths or media credentials. Other formats, mixed segments and QQ field acceptance remain open.');
+  image.supported_versions = clone(voiceDownload.supported_versions);
+  const groupMembers = scoped('partial_offline', 'Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.',
+    [src(ONEBOT, 'fn member_data('), src(QUERY, "if (queryKind === 'group_members')"), src('crates/caligo-model/src/capability.rs', 'impl GroupMembers')], sharedEntry, actionPermission,
+    [{ name: 'Exact pilot profile and complete getAllMemberList contract', state: 'offline_only', evidence: [src(QUERY, 'pub const SUPPORTED_CAPABILITIES'), src(QUERY, 'memberService.getAllMemberList.call')] }],
+    [src(LEDGER, 'A2 群成员查询接线'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn group_members_require_complete_map_snapshot_and_preserve_native_identity()'), src('crates/caligo-core/tests/onebot_query_lab.rs', 'fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect()')],
+    'Only complete snapshots up to 2048 items and 512 KiB are returned. Member-info uses the snapshot, not a separate rich profile fetch; other extended profile fields and QQ field acceptance remain open.');
+  groupMembers.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
   const login = { ...clone(query), status: 'partial_offline',
     reason: 'Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.',
     acceptance: { ...clone(query.acceptance), limits: 'Offline fake-store login response only; actual normal-path nickname/account result is not established.' } };
-  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, send_text: send, private_send_blocked: privateSend, query, login_partial: login };
+  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload, image, group_members: groupMembers };
   for (const [id, symbol, file, flag, dep] of [
     ['http', 'pub fn serve_http(', SERVER, '--onebot-http-bind', 'DaemonSendSink and shared registry'],
     ['http_post', 'pub fn run_http_post_ready(', TRANSPORT, '--onebot-http-post-url', 'Daemon ordered HTTP POST event bus and quick operations'],
@@ -137,27 +205,28 @@ export function initialProfiles() {
   ]) profiles[id] = scoped('wired_offline', 'Concrete transport is assembled by normal caligod; final targeted, default/research workspace and parallel research validation passed.',
     [src(file, symbol)], [src(CLI, flag)], { requirement: 'Configured Bearer token; loopback binding.', enforcement: [src(file, symbol)], limits: 'Transport authentication covers implemented actions/events only; no QQ role or native capability is granted.' },
     [{ name: 'Shared daemon bus/registry and validated normal caligod transport assembly', state: 'wired_offline', evidence: [src(file, symbol)] }],
-    [src(test, '#[test]'), src(LEDGER, '最终全仓双构建 PASS')], 'Only implemented actions/events are available. Final offline transport/workspace checks do not establish reference behavioral parity, QQ/native, field or production acceptance.');
+    [src(test, '#[test]'), src(BASELINE_LEDGER, '最终全仓双构建 PASS')], 'Only implemented actions/events are available. Final offline transport/workspace checks do not establish reference behavioral parity, QQ/native, field or production acceptance.');
   profiles.text_segment = scoped('partial_offline', 'Literal text/text-segment input and text-only event projection exist; broad message conversion/media support is absent.',
     [src('crates/caligo-model/src/onebot_traits.rs', 'pub fn extract_text('), src(EVENTS, 'pub fn message_event_json(')], sharedEntry,
     actionPermission, clone(send.backend_dependencies), registryLab,
     'Input supports text only. Incoming event requires explicit projection/time/identity/subtype/font; native producer completeness and reference parity remain open.');
   profiles.message_event = scoped('partial_offline', 'OneBot incoming private/group text projection and daemon fanout exist with explicit required-field gates.',
-    [src(EVENTS, 'pub fn message_event_json(')], [src(DAEMON, 'publish_onebot_message')],
+    [src(EVENTS, 'pub fn message_event_json('), src('crates/caligo-core/src/message_store.rs', 'pub fn projection_for_event(')], [src(DAEMON, 'publish_onebot_message')],
     { requirement: 'Authenticated event consumer; explicit account/session identity.', enforcement: [src(EVENTS, 'pub fn message_event_json(')], limits: 'No notice/request/meta-event production is inferred.' },
-    [{ name: 'Persisted MsgEvent with OneBotMessageProjection, incoming Recv direction and strong IDs', state: 'offline_only', evidence: [src(EVENTS, 'event.onebot_projection.as_ref()?')] }],
-    [src(LEDGER, 'default/research workspace 均 PASS'), src(EVENTS, '#[cfg(test)]')],
-    'Synthetic projection/fanout does not prove real QQ native event decoding or all reference message fields.');
+    [{ name: 'Current wrapper binding, durable message identity and incoming receive event', state: 'offline_only', evidence: [src(DAEMON, 'actor.wrapper_message_projection(&event)'), src(EVENTS, 'event.onebot_projection.as_ref()?')] }],
+    [src(LEDGER, '普通私聊与群聊的事件接线'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
+    'Coverage includes ordinary private/group incoming text and single private/group incoming voice on the fixed profile. Self-sent notifications, temporary chat and real QQ acceptance remain open.');
+  profiles.record = record;
   profiles.profile_service = scoped('research_lab', 'Research-only exact-key ProfileService UIN/UID round-trip exists; normal persistent backend wiring and field result remain open.',
     [src('crates/caligo-bridge/src/uid_map_probe.rs', 'pub(crate) fn run_profile('), src('crates/caligo-bridge/src/qq_v8.rs', 'fn build_profile_uid_map_query_js(')],
     [src('crates/caligo-cli/src/qqentry.rs', '--uid-map-profile-service')],
     { requirement: 'research build plus exact-hash pilot and explicit field admission; no live call in this task.', enforcement: [src('crates/caligo-bridge/src/uid_map_probe.rs', 'pub(crate) fn run_profile(')], limits: 'Research feature does not authorize field interaction.' },
     [{ name: 'Owner pump/V8/session/ProfileService Map exact-key contract', state: 'research_lab', evidence: [src('crates/caligo-bridge/src/qq_v8.rs', 'fn profile_uid_map_checks_exact_keys_and_rejects_unexpected_results()')] }],
-    [src(LEDGER, '4/4 PASS')], '9.9.36-53644 pilot contract only; native runtime result, stable identity linkage and lifetime remain unverified.');
+    [src(BASELINE_LEDGER, '4/4 PASS')], '9.9.36-53644 pilot contract only; native runtime result, stable identity linkage and lifetime remain unverified.');
   profiles.profile_service.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact local module hashes required; no blanket native acceptance.' };
   profiles.component_partial = scoped('partial_offline', 'Caligo owns a narrower Rust core/store/OneBot implementation; this is functional overlap, not replacement of the full reference component.',
     [src(ONEBOT, 'pub static ACTION_REGISTRY'), src(DAEMON, 'pub struct Daemon'), src('crates/caligo-core/src/message_store.rs', 'pub struct MessageStore')],
-    [src(CLI, 'fn main()')], actionPermission, clone(query.backend_dependencies), [src(LEDGER, 'default/research workspace 均 PASS')],
+    [src(CLI, 'fn main()')], actionPermission, clone(query.backend_dependencies), [src(LEDGER, 'default/research 全仓 PASS')],
     'No full component API/export/feature equivalence is claimed; all unmatched reference exports remain separately missing.');
   return profiles;
 }
@@ -166,15 +235,37 @@ export function chooseAssessment(entry, registry) {
   const r = registry.find(r => r.name === entry.name);
   if (entry.category === 'actions' || entry.category === 'aliases') {
     if (!r) return ['get_group_info', 'get_group_list', 'get_friend_list', 'get_group_member_info', 'get_group_member_list'].includes(entry.name.replace(/_(async|rate_limited)$/, '')) ? 'directory_missing' : 'action_missing';
+    if (['get_group_member_list','get_group_member_info'].includes(entry.name)) return 'group_members';
+    if (['get_friend_list', 'get_group_list', 'get_group_info'].includes(entry.name)) return 'directory_pending';
     if (r.handler.kind === 'send') return r.handler.target === 'private' ? 'private_send_blocked' : 'send_text';
     if (r.handler.kind === 'get_login_info') return 'login_partial';
-    return 'query';
+    if (r.handler.kind === 'get_message') return 'query';
+    if (r.handler.kind === 'get_record') return 'record';
+    if (r.handler.kind === 'get_image') return 'image';
+    if (['get_status', 'get_version_info'].includes(entry.name)) return 'query';
+    return 'action_missing';
   }
   if (entry.category === 'protocols') return ({ 'OB11HttpServerAdapter': 'http', 'OB11HttpClientAdapter': 'http_post',
     'OB11WebSocketServerAdapter': 'ws_server', 'OB11WebSocketClientAdapter': 'ws_client', 'OB11HttpSSEServerAdapter': 'sse', 'OB11McpServerAdapter': 'mcp' })[entry.name] ?? 'missing';
   if (entry.id === 'message_segment.text') return 'text_segment';
+  if (entry.id === 'message_segment.record') return 'record';
+  if (entry.id === 'message_segment.image') return 'image';
   if (['event.OB11BaseMessageEvent', 'event_schema.OB11MessageSchema'].includes(entry.id)) return 'message_event';
-  if (entry.category === 'wrapper_interfaces' && entry.reference.interface === 'NodeIKernelProfileService' && ['getUidByUin', 'getUinByUid'].includes(entry.name)) return 'profile_service';
+  if (entry.category === 'wrapper_interfaces') {
+    if (entry.name === 'getAllMemberList' && entry.reference.interface === 'NodeIKernelGroupService') return 'group_members';
+    if (entry.name === 'downloadRichMedia' && entry.reference.interface === 'NodeIKernelMsgService') return 'voice_download';
+    if (entry.name === 'getUidByUin' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';
+    if (entry.name === 'getUinByUid' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';
+    if (entry.name === 'getUidByUins' && entry.reference.interface === 'NodeIKernelGroupService') return 'capability_query';
+    if (entry.name === 'getUinByUids' && entry.reference.interface === 'NodeIKernelGroupService') return 'capability_query';
+    if (entry.name === 'getMsgsByMsgId' && entry.reference.interface === 'NodeIKernelMsgService') return 'capability_query';
+    if (entry.name === 'getBuddyListV2' && entry.reference.interface === 'NodeIKernelBuddyService') return 'capability_query';
+    if (entry.name === 'getCoreAndBaseInfo' && entry.reference.interface === 'NodeIKernelProfileService') return 'capability_query';
+    if (entry.name === 'getGroupList' && entry.reference.interface === 'NodeIKernelGroupService') return 'capability_query';
+    if (entry.name === 'getGroupDetailInfo' && entry.reference.interface === 'NodeIKernelGroupService') return 'capability_query';
+  }
+  if (entry.id === 'native_surface.FFmpeg.decodeAudioToPCM') return 'media_tool';
+  if (entry.category === 'webui_routes' && ['webui_route.OB11Config.ts.15', 'webui_route.OB11Config.ts.17'].includes(entry.id)) return 'management_ui';
   if (['component.snowcat-core', 'component.snowcat-onebot', 'component.snowcat-database'].includes(entry.id)) return 'component_partial';
   return 'missing';
 }
@@ -212,27 +303,34 @@ export function buildMap(inventory, dump, previous = null) {
       exports: 'Native export reference IDs are native_export.<module>.<ordinal>; all other IDs come from the immutable inventory, aliases use onebot.alias.<key>.',
       acceptance: 'declared/implemented/wired/offline/native/field/production are separate. Registered, partial_offline, research_lab and implemented_pending_validation never imply native acceptance.',
       missing: 'No audited equivalent handler/normal entry; no credit for placeholders, file existence, learned-only caches or reference-only evidence.',
-      refresh: 'Additive only: preserve existing rows, assessment profiles and manual row.review objects. Registry/counts update; stale row semantics fail validation and require explicit review.',
     },
     assessments: profiles,
-    review_basis: [src(LEDGER, '10 个真实 OneBot 动作名'), src(LEDGER, 'OneBot 29/29')],
     entries: [],
     extra_gaps: [
       { id: 'reference_inventory_semantic_granularity', status: 'unknown', reason: 'Inventory declarations are finite denominators, not a full semantic decomposition of every internal helper or runtime effect.' },
       { id: 'native_acceptance', status: 'unknown', reason: 'No QQ launched; native callback identity, strong message IDs, lifetime and per-item production gates remain open.' },
-      { id: 'sse_mcp_final_validation', status: 'unknown', reason: 'Concurrent source/CLI assembly present; final targeted validation and freeze remain pending in this report.' },
+      { id: 'sse_mcp_final_validation', status: 'wired_offline', reason: 'SSE/MCP normal assembly and final default/research targeted validation passed; this remains offline evidence only.' },
     ],
   };
-  for (const [id, profile] of Object.entries(profiles)) if (!map.assessments[id]) map.assessments[id] = profile;
+  for (const [id, profile] of Object.entries(profiles)) {
+    // Generated assessments track current code; explicitly reviewed profiles stay intact.
+    if (!map.assessments[id]?.reviewed) map.assessments[id] = profile;
+  }
+  map.extra_gaps = (map.extra_gaps ?? []).filter(gap => gap.id !== 'sse_mcp_final_validation');
+  map.schema_rules.refresh = 'Regenerate derived rows and assessment profiles. Preserve rows with a manual review and profiles with reviewed: true. Reject missing reference IDs and validate all resulting rows.';
   const existing = new Map(map.entries.map(e => [e.reference_id, e]));
   map.entries = entries.map(entry => {
-    if (existing.has(entry.id)) return existing.get(entry.id);
+    const previousRow = existing.get(entry.id);
+    if (previousRow?.review) return previousRow;
     const assessment = chooseAssessment(entry, dump.registry);
     return { reference_id: entry.id, category: entry.category, status: map.assessments[assessment].status,
       reason: map.assessments[assessment].reason, assessment };
   });
-  const orphaned = [...existing.keys()].filter(id => !entries.some(e => e.id === id));
+  const currentIds = new Set(entries.map(entry => entry.id));
+  const orphaned = [...existing.keys()].filter(id => !currentIds.has(id));
   if (orphaned.length) fail('Refresh refuses to discard previous mapping rows whose reference IDs vanished');
+  map.scope = 'A0 reference-to-Caligo mapping; explicit normalized item assessments, no QQ/native/field/production acceptance asserted. Host query and newly integrated manager/UI/media capabilities remain partial or pending validation.';
+  map.review_basis = [src(LEDGER, '共享动作与查询'), src(LEDGER, '账号管理：default/research 各 5/5 PASS'), src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS')];
   map.registry = { semantic_sha256: registryDigest(dump.raw), digest_format: 'UTF-8 JSON tokens with external whitespace removed; integer literals preserved',
     command: dump.command, source: src(ONEBOT, 'pub static ACTION_REGISTRY'),
     exporter: src('crates/caligo-core/examples/dump_onebot_registry.rs', 'caligo_core::onebot::ACTION_REGISTRY'),
@@ -271,6 +369,10 @@ export function validateMap(inventory, map, dump, { checkSources = true, root = 
     check(row.category === item.category, `Category drift: ${row.reference_id}`);
     check(STATUSES.includes(row.status), `Invalid actual status: ${row.reference_id}`);
     check(row.status === (row.review?.status ?? profile.status), `Assessment status mismatch: ${row.reference_id}`);
+    if (!row.review) {
+      const expectedAssessment = chooseAssessment(item, dump.registry);
+      check(row.assessment === expectedAssessment, `Reference mapping does not match current evidence: ${row.reference_id}`);
+    }
     check(typeof row.reason === 'string' && row.reason.length > 10, `Missing reason: ${row.reference_id}`);
     for (const field of ['implementation', 'normal_entry', 'permission', 'backend_dependencies', 'acceptance', 'supported_versions'])
       check(field in resolved, `Missing resolved ${field}: ${row.reference_id}`);
@@ -291,12 +393,22 @@ export function validateMap(inventory, map, dump, { checkSources = true, root = 
       const registered = byName.has(item.name);
       check(registered === !['missing', 'unknown'].includes(row.status), `Registry/mapping support mismatch: ${item.name}`);
       if (registered && byName.get(item.name).handler.target === 'private')
-        check(row.status === 'registered_backend_blocked', `Private backend falsely credited: ${item.name}`);
+        check(['partial_offline', 'registered_backend_blocked'].includes(row.status), `Private backend status is invalid: ${item.name}`);
+      if (registered && ['get_friend_list', 'get_group_list', 'get_group_info'].includes(item.name))
+        check(row.status === 'implemented_pending_validation', `Directory query was promoted before end-to-end validation: ${item.name}`);
       if (item.name.endsWith('_rate_limited') && !registered) check(row.status === 'missing', `Unregistered rate_limited alias credited: ${item.name}`);
+    }
+    if (row.assessment === 'capability_query') {
+      check(row.status === 'implemented_pending_validation', `Host query promoted before end-to-end validation: ${row.reference_id}`);
+      check(resolved.supported_versions === null, `Query capability has unsupported version claim: ${row.reference_id}`);
+    }
+    if (['account_manager', 'management_ui', 'media_tool'].includes(row.assessment)) {
+      check(row.status === 'partial_offline', `Local tool capability may not be promoted by unknown host/native state: ${row.reference_id}`);
+      check(acceptance.native === 'not_verified' && acceptance.field === 'not_verified', `Local tool has native/field acceptance: ${row.reference_id}`);
     }
   }
   check(JSON.stringify(map.counts) === JSON.stringify(summarize(map)), 'Recorded coverage counts drift');
-  check(map.counts.by_category.actions.denominator === 206, 'Expected 206 base actions');
+  check(map.counts.by_category.actions.denominator === 206, 'Expected 206 reference base actions');
   check(map.counts.by_category.aliases.denominator === 412, 'Expected 412 aliases');
   if (checkSources) {
     const cache = new Map();

@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability_broker::CapabilityBroker;
+use crate::media_tool::MediaTool;
 use crate::ipc::{
     encode_frame, validate_auth, validate_bridge_hello_v3, validate_hello_v3, BridgeMsg,
     ControlMsg, CoreToBridgeMsg, CoreToControlMsg, EventPayload, FrameDecoder, OutcomePayload,
@@ -26,6 +28,7 @@ use crate::runtime::{host_identity, AccountActor, NativeResult, RuntimeConfig};
 use crate::transport::{
     connect_client, generate_token, token_hex, PipeConnection, PipeServer, TransportError,
 };
+use caligo_model::capability::{positive_decimal, HostQuery, QueryOutcome, QueryScope};
 use caligo_model::{
     Direction, EventSource, MsgEvent, NativeMessageId, SendTextRequest, SessionIdentity,
 };
@@ -137,6 +140,7 @@ pub struct DaemonConfig {
 
 /// 常驻 core(LAB 形态;计划 §7-D5)。
 pub struct Daemon {
+    pub(crate) voice_media: Option<MediaTool>,
     pub config: DaemonConfig,
     auth_hex: std::sync::Mutex<String>,
     core_nonce: u64,
@@ -156,10 +160,32 @@ pub struct Daemon {
     /// (read 以 100ms 粒度轮询该标志)。
     pub(crate) bridge_wake: Arc<AtomicBool>,
     api_request_seq: AtomicU64,
+    query_broker: CapabilityBroker,
+}
+
+/// Every return path (including wire errors) releases ephemeral query waiters.
+struct BridgeQuerySession<'a> {
+    daemon: &'a Daemon,
+    epoch: u64,
+    open: Arc<AtomicBool>,
+}
+
+impl Drop for BridgeQuerySession<'_> {
+    fn drop(&mut self) {
+        self.open.store(false, Ordering::Relaxed);
+        self.daemon.query_broker.disconnect(self.epoch);
+    }
 }
 
 impl Daemon {
     pub fn start(config: DaemonConfig) -> Result<Arc<Self>, crate::runtime::OpenError> {
+        Self::start_with_voice_media(config, None)
+    }
+
+    pub fn start_with_voice_media(
+        config: DaemonConfig,
+        voice_media: Option<MediaTool>,
+    ) -> Result<Arc<Self>, crate::runtime::OpenError> {
         let message_store = match config.account.parse::<u64>() {
             Ok(account_id) if account_id > 0 => {
                 let mut path = config.journal_path.clone();
@@ -185,6 +211,7 @@ impl Daemon {
             ))
         })?;
         Ok(Arc::new(Self {
+            voice_media,
             auth_hex: std::sync::Mutex::new(token_hex(&token)),
             core_nonce: u64::from_le_bytes(token[0..8].try_into().unwrap()),
             actor: Mutex::new(actor),
@@ -199,6 +226,7 @@ impl Daemon {
             test_result_fault_armed: AtomicBool::new(false),
             bridge_wake: Arc::new(AtomicBool::new(false)),
             api_request_seq: AtomicU64::new(1),
+            query_broker: CapabilityBroker::default(),
             config,
         }))
     }
@@ -236,6 +264,108 @@ impl Daemon {
     /// 当前连接代次(观测/LAB;每条新 bridge 连接递增)。
     pub fn connection_epoch(&self) -> u64 {
         self.epoch.load(Ordering::Relaxed)
+    }
+
+    /// Execute one fixed read-only query. This does not persist or retry it.
+    pub fn query_host(&self, query: HostQuery, timeout: std::time::Duration) -> QueryOutcome {
+        self.query_host_cancellable(query, timeout, &AtomicBool::new(false))
+    }
+
+    pub fn query_host_cancellable(
+        &self,
+        query: HostQuery,
+        timeout: std::time::Duration,
+        cancel: &AtomicBool,
+    ) -> QueryOutcome {
+        if self.stop.load(Ordering::Relaxed) {
+            return QueryOutcome::Disconnected;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return QueryOutcome::Rejected {
+                code: -2,
+                reason: "query cancelled".into(),
+            };
+        }
+        if query.validate().is_err() {
+            return QueryOutcome::Rejected {
+                code: -1,
+                reason: "invalid read-only query".into(),
+            };
+        }
+        let Ok(sequence) =
+            self.api_request_seq
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+        else {
+            return QueryOutcome::NotReady;
+        };
+        let request_id = format!("query-{:016x}-{sequence}", self.core_nonce);
+        let ticket = {
+            let actor = self.actor.lock().unwrap();
+            if actor.phase() != caligo_model::Phase::Active {
+                return QueryOutcome::NotReady;
+            }
+            let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+                return QueryOutcome::NotReady;
+            };
+            let scope = QueryScope {
+                account: session.account.0.clone(),
+                host_nonce: session.host.host_nonce,
+                session_generation: session.session_generation,
+                connection_epoch: connection.connection_epoch,
+            };
+            self.query_broker
+                .begin(request_id, scope, query, timeout, &self.dispatch_out)
+        };
+        let ticket = match ticket {
+            Ok(ticket) => ticket,
+            Err(outcome) => return outcome,
+        };
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        // No actor, broker or dispatch mutex is held during the wait.
+        ticket.wait(&self.stop, cancel)
+    }
+
+    pub fn pending_query_count(&self) -> usize {
+        self.query_broker.pending_count()
+    }
+    pub fn stale_query_result_count(&self) -> u64 {
+        self.query_broker.stale_result_count()
+    }
+
+    /// Whether the currently active, exactly bound bridge advertised private text send.
+    pub fn supports_private_text(&self) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_private_text(&scope))
+    }
+
+    pub fn supports_private_voice(&self) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_private_voice(&scope))
+    }
+
+    pub fn supports_group_voice(&self) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_group_voice(&scope))
+    }
+
+    pub fn supports_image(&self, chat_type: u32) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_image(&scope,chat_type))
+    }
+
+    fn current_send_scope(&self) -> Option<QueryScope> {
+        let Ok(actor) = self.actor.lock() else {
+            return None;
+        };
+        if actor.phase() != caligo_model::Phase::Active {
+            return None;
+        }
+        let session = actor.session()?;
+        let connection = actor.connection()?;
+        Some(QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        })
     }
 
     /// Submit one OneBot action through the same durable actor→bridge path as
@@ -296,6 +426,172 @@ impl Daemon {
                 }),
                 text: request.text,
             });
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        Ok(request_id)
+    }
+
+    pub fn submit_private_voice(
+        &self,
+        peer_uin: &str,
+        silk: Vec<u8>,
+        deadline_ms: u64,
+    ) -> Result<String, String> {
+        self.submit_voice(caligo_model::SessionKind::Private, peer_uin, silk, deadline_ms)
+    }
+
+    /// Submit an owned voice through the durable send ledger.
+    /// The audio stays in the bounded dispatch queue and is never journaled.
+    pub fn submit_voice(
+        &self,
+        kind: caligo_model::SessionKind,
+        peer_uin: &str,
+        silk: Vec<u8>,
+        deadline_ms: u64,
+    ) -> Result<String, String> {
+        let group = kind == caligo_model::SessionKind::Group;
+        if !positive_decimal(peer_uin) || (!group && peer_uin == self.config.account)
+            || !(1..=30_000).contains(&deadline_ms)
+            || !caligo_model::voice::validate_short_tencent_silk(&silk)
+        {
+            return Err("invalid voice request".into());
+        }
+        let mut actor = self.actor.lock().map_err(|_| "account actor lock poisoned")?;
+        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+            return Err("no active QQ session".into());
+        };
+        let scope = QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        };
+        let supported = if group {
+            self.query_broker.supports_group_voice(&scope)
+        } else {
+            self.query_broker.supports_private_voice(&scope)
+        };
+        if !supported {
+            return Err("current bridge did not advertise this voice send".into());
+        }
+        let sequence = self.api_request_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+            .map_err(|_| "request ID sequence exhausted")?;
+        let request_id = format!("voice-{:016x}-{sequence}", self.core_nonce);
+        let target = caligo_model::SessionKey::new(&scope.account, kind, peer_uin);
+        // Reuse the ledger's hashed submission envelope without retaining media bytes.
+        use sha2::{Digest, Sha256};
+        let digest = format!("voice:{:x}", Sha256::digest(&silk));
+        let payload_hash = SendTextRequest::compute_payload_hash(
+            scope.session_generation, &target, &digest, deadline_ms,
+        );
+        let request = SendTextRequest {
+            request_id: request_id.clone(),
+            session_identity: session.clone(),
+            target,
+            text: digest,
+            payload_hash,
+            deadline_ms,
+        };
+        actor.submit_send(request).map_err(|error| format!("voice request rejected: {error:?}"))?;
+        let wire_seq = actor.dispatch_begin(&request_id)
+            .map_err(|error| format!("voice dispatch preparation failed: {error:?}"))?;
+        let timeout_ms = actor.remaining_timeout_ms(&request_id).unwrap_or_default();
+        let dispatch = if group {
+            CoreToBridgeMsg::DispatchGroupVoice {
+                scope, request_id: request_id.clone(), wire_seq, timeout_ms, group_id: peer_uin.into(), silk,
+            }
+        } else {
+            CoreToBridgeMsg::DispatchPrivateVoice {
+                scope, request_id: request_id.clone(), wire_seq, timeout_ms,
+                peer_uin: peer_uin.into(), silk,
+            }
+        };
+        self.dispatch_out.lock().map_err(|_| "dispatch queue lock poisoned")?.push(dispatch);
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        Ok(request_id)
+    }
+
+    pub fn submit_image(
+        &self,
+        kind: caligo_model::SessionKind,
+        peer_uin: &str,
+        png: Vec<u8>,
+        deadline_ms: u64,
+    ) -> Result<String, String> {
+        let group = kind == caligo_model::SessionKind::Group;
+        if !positive_decimal(peer_uin)
+            || (!group && peer_uin == self.config.account)
+            || !(1..=30_000).contains(&deadline_ms)
+            || caligo_model::png::dimensions(&png).is_none()
+        {
+            return Err("invalid image request".into());
+        }
+        let mut actor = self
+            .actor
+            .lock()
+            .map_err(|_| "account actor lock poisoned")?;
+        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+            return Err("no active QQ session".into());
+        };
+        let scope = QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        };
+        let supported = if group {
+            self.query_broker.supports_image(&scope, 2)
+        } else {
+            self.query_broker.supports_image(&scope, 1)
+        };
+        if !supported {
+            return Err("current bridge did not advertise this image send".into());
+        }
+        let sequence = self
+            .api_request_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map_err(|_| "request ID sequence exhausted")?;
+        let request_id = format!("image-{:016x}-{sequence}", self.core_nonce);
+        let target = caligo_model::SessionKey::new(&scope.account, kind, peer_uin);
+        // Reuse the ledger's hashed submission envelope without retaining media bytes.
+        use sha2::{Digest, Sha256};
+        let digest = format!("image:{:x}", Sha256::digest(&png));
+        let payload_hash = SendTextRequest::compute_payload_hash(
+            scope.session_generation,
+            &target,
+            &digest,
+            deadline_ms,
+        );
+        let request = SendTextRequest {
+            request_id: request_id.clone(),
+            session_identity: session.clone(),
+            target,
+            text: digest,
+            payload_hash,
+            deadline_ms,
+        };
+        actor
+            .submit_send(request)
+            .map_err(|error| format!("image request rejected: {error:?}"))?;
+        let wire_seq = actor
+            .dispatch_begin(&request_id)
+            .map_err(|error| format!("image dispatch preparation failed: {error:?}"))?;
+        let timeout_ms = actor.remaining_timeout_ms(&request_id).unwrap_or_default();
+        let dispatch = CoreToBridgeMsg::DispatchImage {
+            scope,
+            request_id: request_id.clone(),
+            wire_seq,
+            timeout_ms,
+            chat_type: if group { 2 } else { 1 },
+            peer_uin: peer_uin.into(),
+            png,
+        };
+        self.dispatch_out
+            .lock()
+            .map_err(|_| "dispatch queue lock poisoned")?
+            .push(dispatch);
         self.bridge_wake.store(true, Ordering::Relaxed);
         Ok(request_id)
     }
@@ -366,17 +662,29 @@ impl Daemon {
         let _ = self.onebot_events.lock().unwrap().publish(event_json);
     }
 
-    fn publish_onebot_message(&self, event: &MsgEvent) {
-        let message_id = self
-            .actor
-            .lock()
-            .unwrap()
-            .onebot_message_id(&event.session, &event.native_id.0);
-        let Some(message_id) = message_id else {
+    fn publish_onebot_message(&self, mut event: MsgEvent) {
+        if event.direction != Direction::Incoming || event.source != EventSource::Recv {
             return;
+        }
+        let message_id = {
+            let actor = self.actor.lock().unwrap();
+            if event.wrapper_message.is_some() {
+                let Some(projection) = actor.wrapper_message_projection(&event) else {
+                    return;
+                };
+                let message_id = projection.real_id;
+                event.onebot_projection = Some(projection);
+                message_id
+            } else {
+                let Some(message_id) = actor.onebot_message_id(&event.session, &event.native_id.0)
+                else {
+                    return;
+                };
+                message_id
+            }
         };
         let Some(json) = self.config.account.parse::<u64>().ok().and_then(|self_id| {
-            crate::onebot_events::message_event_json(self_id, message_id, event)
+            crate::onebot_events::message_event_json(self_id, message_id, &event)
         }) else {
             return;
         };
@@ -484,6 +792,13 @@ impl Daemon {
         // 连接代次:每条新 bridge 连接分配新 epoch(C1);旧连接不得以
         // 相同/更小 epoch 触发重连恢复。
         let epoch = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        self.query_broker.reset(epoch);
+        let session_open = Arc::new(AtomicBool::new(true));
+        let _query_session = BridgeQuerySession {
+            daemon: self,
+            epoch,
+            open: session_open.clone(),
+        };
         // 握手:版本 → 认证 → 角色 → 基线/账号/代次。
         let hello: BridgeMsg = stream.recv_json(&conn, &self.stop)?;
         let BridgeMsg::Hello {
@@ -576,6 +891,12 @@ impl Daemon {
                 return Ok(());
             }
         }
+        self.query_broker.bind(QueryScope {
+            account: account.clone(),
+            host_nonce,
+            session_generation,
+            connection_epoch: epoch,
+        });
         send_json(
             &conn,
             &Self::hello_ack(true, None, &self.config.core_build, epoch),
@@ -598,7 +919,6 @@ impl Daemon {
 
         // 组合唤醒观察者:stop 或 dispatch 到达都会打断 bridge 会话的阻塞读
         // (read 以 50ms 粒度轮询 recv_wake)。观察者随会话结束退出。
-        let session_open = Arc::new(AtomicBool::new(true));
         let recv_wake = Arc::new(AtomicBool::new(false));
         {
             let s_open = session_open.clone();
@@ -628,11 +948,101 @@ impl Daemon {
             recv_wake.store(false, Ordering::Relaxed);
             let pending: Vec<CoreToBridgeMsg> =
                 std::mem::take(&mut *self.dispatch_out.lock().unwrap());
-            for m in pending {
+            for mut m in pending {
+                let media = match &mut m {
+                    CoreToBridgeMsg::DispatchPrivateVoice { scope, request_id, timeout_ms, .. } =>
+                        Some((scope, request_id, timeout_ms, false, None)),
+                    CoreToBridgeMsg::DispatchGroupVoice { scope, request_id, timeout_ms, .. } =>
+                        Some((scope, request_id, timeout_ms, true, None)),
+                    CoreToBridgeMsg::DispatchImage {scope,request_id,timeout_ms,chat_type,..} =>
+                        Some((scope,request_id,timeout_ms,*chat_type == 2,Some(*chat_type))),
+                    _ => None,
+                };
+                if let Some((scope, request_id, timeout_ms, group, image)) = media {
+                    if scope.connection_epoch != epoch {
+                        continue;
+                    }
+                    let mut actor = self.actor.lock().unwrap();
+                    let remaining = actor.remaining_timeout_ms(request_id).unwrap_or_default();
+                    let supported = if let Some(chat_type) = image {
+                        self.query_broker.supports_image(scope,chat_type)
+                    } else if group {
+                        self.query_broker.supports_group_voice(scope)
+                    } else {
+                        self.query_broker.supports_private_voice(scope)
+                    };
+                    if remaining == 0 || !supported {
+                        let _ = actor.bridge_result(request_id, NativeResult::Failure {
+                            reason: "media expired or capability revoked before dispatch".into(),
+                        });
+                        continue;
+                    }
+                    *timeout_ms = remaining;
+                }
+                if let CoreToBridgeMsg::Query {
+                    request_id,
+                    scope,
+                    timeout_ms,
+                    ..
+                } = &mut m
+                {
+                    let Some(remaining) =
+                        self.query_broker.dispatch_timeout(epoch, request_id, scope)
+                    else {
+                        continue;
+                    };
+                    *timeout_ms = remaining;
+                }
                 send_json(&conn, &m)?;
             }
             match stream.recv_json::<BridgeMsg>(&conn, &recv_wake) {
                 Ok(msg) => match msg {
+                    BridgeMsg::QueryCapabilities {
+                        revision,
+                        scope,
+                        capabilities,
+                    } => {
+                        if !self
+                            .query_broker
+                            .advertise(epoch, revision, &scope, capabilities)
+                        {
+                            send_json(
+                                &conn,
+                                &CoreToBridgeMsg::Reject {
+                                    reason: "invalid query capability advertisement".into(),
+                                },
+                            )?;
+                        }
+                    }
+                    BridgeMsg::SendCapabilities {
+                        scope,
+                        private_text,
+                        group_text,
+                        private_voice,
+                        group_voice,
+                        private_image,
+                        group_image,
+                    } => {
+                        // A wrong-scope advertisement is ignored and cannot grant authority.
+                        let _ = self.query_broker.advertise_send(
+                            epoch,
+                            &scope,
+                            private_text,
+                            group_text,
+                            private_voice,
+                            group_voice,
+                            private_image,
+                            group_image,
+                        );
+                    }
+                    BridgeMsg::QueryResult {
+                        request_id,
+                        scope,
+                        outcome,
+                    } => {
+                        self.query_broker
+                            .complete(epoch, &request_id, &scope, outcome);
+                    }
                     BridgeMsg::NativeStarted { request_id } => {
                         let mut actor = self.actor.lock().unwrap();
                         let applied = actor.bridge_started(&request_id).is_ok();
@@ -705,7 +1115,7 @@ impl Daemon {
                         if matches!(&receipt, Ok(crate::runtime::EventReceipt::Published { .. })) {
                             // The actor journal and MessageStore append have both
                             // succeeded before any network transport sees it.
-                            self.publish_onebot_message(&accepted_event);
+                            self.publish_onebot_message(accepted_event);
                         }
                         let (seq, suppressed) = match receipt {
                             Ok(r) => match r {
@@ -951,6 +1361,7 @@ impl Daemon {
                     }
                     ControlMsg::Stop {} => {
                         self.stop.store(true, Ordering::Relaxed);
+                        self.query_broker.disconnect(self.connection_epoch());
                         send_json(&conn, &CoreToControlMsg::Stopped {})?;
                         return Ok(());
                     }
@@ -1009,6 +1420,18 @@ impl Daemon {
 }
 
 impl StoreReader for Daemon {
+    fn image_info(&self, file: &str) -> Option<caligo_model::capability::ImageInfo> {
+        self.actor.lock().ok()?.image_info(file)
+    }
+
+    fn voice_info(&self, file: &str) -> Option<caligo_model::capability::VoiceInfo> {
+        self.actor.lock().ok()?.voice_info(file)
+    }
+
+    fn voice_record(&self, file: &str) -> Option<(caligo_model::capability::VoiceInfo, HostQuery)> {
+        self.actor.lock().ok()?.voice_record(file)
+    }
+
     fn get_msg(&self, message_id: i32) -> Option<StoredMessageView> {
         self.actor.lock().ok()?.get_msg(message_id)
     }

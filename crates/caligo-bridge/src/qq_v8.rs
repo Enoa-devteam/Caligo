@@ -21,14 +21,10 @@ const NAME_ISOLATE_ENTERED_CTX: &str =
     "?GetEnteredOrMicrotaskContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ";
 const NAME_ISOLATE_INCUMBENT_CTX: &str =
     "?GetIncumbentContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ";
-const NAME_STRING_NEW_FROM_UTF8: &str =
-    "?NewFromUtf8@String@v8@@SA?AV?$MaybeLocal@VString@v8@@@2@PEAVIsolate@2@PEBDW4NewStringType@2@H@Z";
-const NAME_SCRIPT_COMPILE: &str =
-    "?Compile@Script@v8@@SA?AV?$MaybeLocal@VScript@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VString@v8@@@2@PEAVScriptOrigin@2@@Z";
-const NAME_SCRIPT_RUN: &str =
-    "?Run@Script@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VData@v8@@@2@@Z";
-const NAME_UTF8_CTOR: &str =
-    "??0Utf8Value@String@v8@@QEAA@PEAVIsolate@2@V?$Local@VValue@v8@@@2@@Z";
+const NAME_STRING_NEW_FROM_UTF8: &str = "?NewFromUtf8@String@v8@@SA?AV?$MaybeLocal@VString@v8@@@2@PEAVIsolate@2@PEBDW4NewStringType@2@H@Z";
+const NAME_SCRIPT_COMPILE: &str = "?Compile@Script@v8@@SA?AV?$MaybeLocal@VScript@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VString@v8@@@2@PEAVScriptOrigin@2@@Z";
+const NAME_SCRIPT_RUN: &str = "?Run@Script@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VData@v8@@@2@@Z";
+const NAME_UTF8_CTOR: &str = "??0Utf8Value@String@v8@@QEAA@PEAVIsolate@2@V?$Local@VValue@v8@@@2@@Z";
 const NAME_UTF8_DTOR: &str = "??1Utf8Value@String@v8@@QEAA@XZ";
 const NAME_UTF8_DEREF: &str = "??DUtf8Value@String@v8@@QEAAPEADXZ";
 const NAME_CTX_ENTER: &str = "?Enter@Context@v8@@QEAAXXZ";
@@ -36,18 +32,24 @@ const NAME_CTX_EXIT: &str = "?Exit@Context@v8@@QEAAXXZ";
 const NAME_TRYCATCH_CTOR: &str = "??0TryCatch@v8@@QEAA@PEAVIsolate@1@@Z";
 const NAME_TRYCATCH_DTOR: &str = "??1TryCatch@v8@@QEAA@XZ";
 const NAME_TRYCATCH_CAUGHT: &str = "?HasCaught@TryCatch@v8@@QEBA_NXZ";
-const NAME_TRYCATCH_EXC: &str =
-    "?Exception@TryCatch@v8@@QEBA?AV?$Local@VValue@v8@@@2@XZ";
+const NAME_TRYCATCH_EXC: &str = "?Exception@TryCatch@v8@@QEBA?AV?$Local@VValue@v8@@@2@XZ";
 
 type FnScopeCtor = unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void) -> *mut c_void;
 type FnScopeDtor = unsafe extern "C" fn(this: *mut c_void);
 type FnGetCurrent = unsafe extern "C" fn() -> *mut c_void;
 type FnIsolateCtx = unsafe extern "C" fn(isolate: *mut c_void, sret: *mut usize);
-type FnStringNewFromUtf8 =
-    unsafe extern "C" fn(sret: *mut usize, isolate: *mut c_void, data: *const u8, ty: i32, len: i32);
-type FnScriptCompile = unsafe extern "C" fn(sret: *mut usize, ctx: usize, src: usize, origin: *mut c_void);
+type FnStringNewFromUtf8 = unsafe extern "C" fn(
+    sret: *mut usize,
+    isolate: *mut c_void,
+    data: *const u8,
+    ty: i32,
+    len: i32,
+);
+type FnScriptCompile =
+    unsafe extern "C" fn(sret: *mut usize, ctx: usize, src: usize, origin: *mut c_void);
 type FnScriptRun = unsafe extern "C" fn(this: usize, sret: *mut usize, ctx: usize, data: usize);
-type FnUtf8Ctor = unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void, value: usize) -> *mut c_void;
+type FnUtf8Ctor =
+    unsafe extern "C" fn(this: *mut c_void, isolate: *mut c_void, value: usize) -> *mut c_void;
 type FnUtf8Dtor = unsafe extern "C" fn(this: *mut c_void);
 type FnUtf8Deref = unsafe extern "C" fn(this: *mut c_void) -> *const u8;
 type FnCtxEnterExit = unsafe extern "C" fn(this: *mut c_void);
@@ -83,7 +85,12 @@ impl V8Symbols {
             // SAFETY: obs::export_addr 只读导出表。
             let a = unsafe { crate::obs::export_addr(qqnt, name) };
             if a.is_none() {
-                append_stage(report, "v8_resolve", false, &format!("export missing: {name}"));
+                append_stage(
+                    report,
+                    "v8_resolve",
+                    false,
+                    &format!("export missing: {name}"),
+                );
             }
             a
         };
@@ -307,12 +314,22 @@ unsafe fn exec_in_scope(
         // ScriptOrigin(0x28 字节)零构造安全(K2-03 §12.1)。
         let mut origin = [0usize; 5];
         let mut script_local = 0usize;
-        compile(&mut script_local, ctx, src_local, origin.as_mut_ptr().cast());
+        compile(
+            &mut script_local,
+            ctx,
+            src_local,
+            origin.as_mut_ptr().cast(),
+        );
         if script_local == 0 {
             return Err(V8Error::CompileFailed);
         }
         let mut result_local = 0usize;
-        run(script_local, &mut result_local, ctx, 0 /*空 data Local*/);
+        run(
+            script_local,
+            &mut result_local,
+            ctx,
+            0, /*空 data Local*/
+        );
         if result_local == 0 {
             return Err(V8Error::RunEmpty);
         }
@@ -351,7 +368,7 @@ pub const D8_START_JS: &str = r"
 (function () {
   try {
     var G = globalThis;
-    if (G.__caligo_res) return 'ALREADY sid=' + G.__caligo_res.sid;
+    if (G.__caligo_res) { G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid; }
     var q = process._linkedBinding('QQNT');
     var S = q.NodeIQQNTWrapperSession;
     var live = null, sidName = null;
@@ -370,9 +387,24 @@ pub const D8_START_JS: &str = r"
     if (!live) return 'ERR:no live session';
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
-      rejected: 0, overflow: 0, listenerId: null, sendResults: {} };
+      rejected: 0, overflow: 0, listenerId: null, sendResults: {}, sends: {} };
+    var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
+    R.voiceAccount = voiceAccount;
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
-    var push = function (src, m) {
+    var settleSendResult = function (R, key, pending) {
+      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
+        R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
+          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+      } else if ((pending.voice || pending.image) && !push('add_send', pending.readback.record, true)) {
+        R.sendResults[key] = {status:'unknown', reason:'verified_voice_projection_rejected'};
+      } else {
+        R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
+      }
+      pending.done = true;
+      if (R.sends[key] === pending) delete R.sends[key];
+    };
+    var push = function (src, m, verifiedVoice) {
       try {
         if (!m || typeof m !== 'object' || !Array.isArray(m.elements) ||
             !m.elements.length || m.elements.length > 128) { R.rejected++; return; }
@@ -386,9 +418,47 @@ pub const D8_START_JS: &str = r"
             !Number.isInteger(m.subMsgType) || m.subMsgType < 0 ||
             (m.clientSeq !== undefined && typeof m.clientSeq !== 'string') ||
             (m.sendStatus !== undefined && !Number.isInteger(m.sendStatus))) { R.rejected++; return; }
+        // The unverified self-sent callback only feeds D9 correlation.
+        if (!verifiedVoice && (src === 'add_send' || src === 'update') && voiceAccount &&
+            m.senderUin === voiceAccount &&
+            m.elements.length === 1 && m.elements[0] && (m.elements[0].elementType === 4 || m.elements[0].elementType === 2)) {
+          correlateSend(R, m, src);
+          return;
+        }
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
+          if (e && e.elementType === 2 && voiceAccount && m.elements.length === 1 &&
+              (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
+              ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||
+               (m.chatType === 2 && m.peerUid === m.peerUin))))) {
+            var pic = e.picElement, size = pic && pic.fileSize;
+            if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
+            if (t || !pic || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
+                !/[1-9]/.test(e.elementId) || (pic.picType !== 1001 && !(verifiedVoice && pic.picType === 1000)) || pic.picSubType !== 0 ||
+                !Number.isInteger(size) || size < 33 || size > 16777216 ||
+                !Number.isInteger(pic.picWidth) || pic.picWidth < 1 || pic.picWidth > 32768 ||
+                !Number.isInteger(pic.picHeight) || pic.picHeight < 1 || pic.picHeight > 32768 ||
+                pic.picWidth * pic.picHeight > 100000000 || typeof pic.md5HexStr !== 'string' ||
+                !/^[0-9a-fA-F]{32}$/.test(pic.md5HexStr)) { R.rejected++; return; }
+            elements.push({elementType:2,image:{chat_type:m.chatType,peer_uid:m.peerUid,
+              sender_uin:m.senderUin,message_id:m.msgId,element_id:e.elementId,size:size,
+              md5:pic.md5HexStr.toLowerCase(),width:pic.picWidth,height:pic.picHeight,pic_type:pic.picType}});
+            continue;
+          }
+          if (e && e.elementType === 4 && voiceAccount && m.elements.length === 1 &&
+              (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
+                ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||
+                 (m.chatType === 2 && m.peerUid === m.peerUin))))) {
+            var ptt = e.pttElement;
+            if (t || !ptt || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
+                !/[1-9]/.test(e.elementId) || typeof ptt.fileSize !== 'string' ||
+                !/^[1-9][0-9]{0,7}$/.test(ptt.fileSize) || Number(ptt.fileSize) > 16777216 ||
+                typeof ptt.md5HexStr !== 'string' || !/^[0-9a-fA-F]{32}$/.test(ptt.md5HexStr)) { R.rejected++; return; }
+            elements.push({elementType:4, voice:{element_id:e.elementId,
+              size:Number(ptt.fileSize),md5:ptt.md5HexStr.toLowerCase()}});
+            continue;
+          }
           if (!e || e.elementType !== 1 || !t || typeof t.content !== 'string' || t.atType !== 0 ||
               (t.atUid !== undefined && t.atUid !== '') ||
               (t.atNtUid !== undefined && t.atNtUid !== '') ||
@@ -403,14 +473,109 @@ pub const D8_START_JS: &str = r"
           msgType:m.msgType, subMsgType:m.subMsgType,
           peerUid:m.peerUid, peerUin:m.peerUin, senderUid:m.senderUid, senderUin:m.senderUin,
           sendStatus:m.sendStatus, elements:elements};
+        if (!verifiedVoice && (src === 'add_send' || src === 'update')) correlateSend(R, m, src);
         var item = {source:src, observed_at_unix_ms:Date.now(), record:record};
         var bytes = utf8Bytes(JSON.stringify(item));
         if (bytes > 65536 || R.recv.length >= 128 || R.recvBytes + bytes > 393216) {
           R.overflow++; return;
         }
         R.recv.push(item); R.recvBytes += bytes;
+        return true;
       } catch (err) { R.rejected++; }
     };
+    var matchesSendElement = function (record, send) {
+      if (!record || !Array.isArray(record.elements) || record.elements.length !== 1 ||
+          !record.elements[0]) return false;
+      var element = record.elements[0];
+      if (send.image) {
+        var pic=element.picElement;
+        return element.elementType === 2 && !element.textElement && pic &&
+          typeof element.elementId === 'string' && /^[0-9]{1,128}$/.test(element.elementId) && /[1-9]/.test(element.elementId) &&
+          (pic.picType === 1000 || pic.picType === 1001) && pic.picSubType === 0 &&
+          (pic.fileSize === String(send.image.size) || pic.fileSize === send.image.size) &&
+          pic.picWidth === send.image.width && pic.picHeight === send.image.height &&
+          typeof pic.md5HexStr === 'string' && pic.md5HexStr.toLowerCase() === send.image.md5;
+      }
+      if (!send.voice) return element.textElement && element.textElement.content === send.text;
+      var ptt = element.pttElement;
+      return element.elementType === 4 && !element.textElement && ptt &&
+        typeof element.elementId === 'string' && /^[0-9]{1,128}$/.test(element.elementId) &&
+        /[1-9]/.test(element.elementId) && ptt.fileSize === String(send.voice.size) &&
+        typeof ptt.md5HexStr === 'string' && ptt.md5HexStr.toLowerCase() === send.voice.md5;
+    };
+    var correlateSend = function (R, m, src) {
+      if (R.stopped) return;
+      var keys = Object.keys(R.sends);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k], send = R.sends[key];
+        if (!send || send.done || send.failed || m.guildId !== send.cookie || m.chatType !== send.chat ||
+            m.peerUid !== send.peer || typeof m.msgId !== 'string' || !m.msgId || m.msgId === '0' ||
+            m.senderUin !== send.selfUin || !matchesSendElement(m, send) ||
+            ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
+              !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
+        if (src === 'add_send') {
+          if (send.addId && (send.addId !== m.msgId ||
+              ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
+            send.ambiguous = true;
+            send.readback = {status:'unknown', reason:'multiple_add_send_ids'};
+            R.sendResults[key] = {status:'unknown', reason:'multiple_add_send_ids'};
+            settleSendResult(R, key, send);
+          } else {
+            send.addId = m.msgId;
+            if (send.voice || send.image) send.addElementId = m.elements[0].elementId;
+          }
+        }
+        if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
+            (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
+          send.updateId = m.msgId; send.readbackStarted = true;
+          (function (key, pending, service) {
+            Promise.resolve().then(function () {
+              if (R.stopped) return null;
+              return service.getMsgsByMsgId({chatType:pending.chat, peerUid:pending.peer,
+                guildId:pending.cookie}, [pending.updateId]);
+            }).then(function (response) {
+              if (R.stopped) return;
+              var list = response && response.msgList;
+              if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
+                pending.readback = {status:'unknown', reason:'exact_query_miss'};
+              } else {
+                var record = list[0];
+                var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
+                  record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
+                  record.sendStatus === 2 && matchesSendElement(record, pending) &&
+                  (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
+                    record.elements[0].elementId === pending.addElementId));
+                var owned;
+                if (matched && (pending.voice || pending.image)) {
+                  owned = {};
+                  var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
+                    'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
+                  for (var f = 0; f < fields.length; f++) {
+                    var value = record[fields[f]];
+                    if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+                  }
+                  owned.elements = pending.image
+                    ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
+                      md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
+                      picType:record.elements[0].picElement.picType,picSubType:0}}]
+                    : [{elementType:4, elementId:pending.addElementId,
+                      pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
+                }
+                pending.readback = matched
+                    ? {status:'readback', msgId:record.msgId, record:owned}
+                    : {status:'unknown', reason:'exact_query_identity_mismatch'};
+              }
+              settleSendResult(R, key, pending);
+            }, function () {
+              if (R.stopped) return;
+              pending.readback = {status:'unknown', reason:'exact_query_rejected'};
+              settleSendResult(R, key, pending);
+            });
+          })(key, send, R.ms);
+        }
+      }
+    };
+    R.settleSendResult = settleSendResult;
     var pushList = function (src, a) {
       if (!Array.isArray(a)) { R.rejected++; return; }
       for (var i = 0; i < a.length; i++) push(src, a[i]);
@@ -418,10 +583,14 @@ pub const D8_START_JS: &str = r"
     R.listener = {
       onRecvMsg: function (a) { pushList('recv', a); },
       onMsgInfoListUpdate: function (a) { pushList('update', a); },
-      onAddSendMsg: function (m) { push('add_send', m); }
+      onAddSendMsg: function (m) { push('add_send', m); },
+      onRichMediaDownloadComplete: function (result) {
+        if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
+      }
     };
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
+    G.__caligo_d8 = R;
     return 'ARMED sid=' + sidName + ' lidRet=' + String(R.listenerId).slice(0, 40);
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -434,6 +603,15 @@ pub const D8_POLL_JS: &str = r"
     var G = globalThis;
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
+    var keys = Object.keys(R.sends || {});
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k], send = R.sends[key];
+      if (send && !send.done && !send.timedOut && Date.now() >= send.deadline) {
+        send.timedOut = true;
+        R.sendResults[key] = {status:'unknown', reason:'timeout'};
+      }
+      if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
+    }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
       sendResults:R.sendResults || {}};
     var json = JSON.stringify(out);
@@ -450,6 +628,10 @@ pub const D8_POLL_JS: &str = r"
       json = JSON.stringify(out);
     }
     R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0;
+    var resultKeys = Object.keys(R.sendResults || {});
+    for (var i = 0; i < resultKeys.length; i++) {
+      if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+    }
     return json;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -463,6 +645,7 @@ pub const D8_STOP_JS: &str = r"
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
     var r = 'no-listener';
+    R.stopped = true;
     try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); } catch (e) { r = 'ERR:' + String(e).slice(0, 100); }
     var sid = R.sid;
     delete G.__caligo_res;
@@ -522,13 +705,29 @@ pub fn listener_session() -> Option<String> {
 
 /// 注册监听器(D8_START_JS)。返回 "ARMED sid=.. lidRet=N" / "ALREADY .." / "ERR:.."。
 pub fn start_listener() -> Result<String, V8Error> {
+    start_listener_with_voice(None)
+}
+
+pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 同上。
-    let result = unsafe { exec_script(&syms, isolate_addr(), D8_START_JS) }?;
-    if let Some(session) = result.strip_prefix("ARMED sid=").and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s)) {
-        if let Ok(mut bound) = D8_SESSION.lock() { *bound = Some(session.to_owned()); }
+    let source = account.map(|account| format!(
+        "(function(caligoVoiceAccount) {{ return {}; }})({})",
+        D8_START_JS,
+        serde_json::to_string(account).expect("serializable account")
+    ));
+    let result = unsafe {
+        exec_script(&syms, isolate_addr(), source.as_deref().unwrap_or(D8_START_JS))
+    }?;
+    if let Some(session) = result
+        .strip_prefix("ARMED sid=")
+        .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))
+    {
+        if let Ok(mut bound) = D8_SESSION.lock() {
+            *bound = Some(session.to_owned());
+        }
     }
     Ok(result)
 }
@@ -652,20 +851,31 @@ const UID_MAP_SURFACE_DONE_JS: &str = r#"
 })()
 "#;
 
-// QQ 9.9.36-53644 wrapper: SnowCat's owner-thread probe exercised
-// ProfileService with the FriendsServiceImpl call source and keyed Maps.
+// QQ 9.9.36-53644 late attachment resolves nt_1 from the loaded wrapper
+// module. The QQNT linked binding's startup-session route is separate.
 const UID_MAP_PROFILE_METHODS_JS: &str = r#"
-(function () {
+function (wrapperPath) {
   var state = globalThis.__caligo_uid_map_main;
-  if (!state || state.phase !== 'service') return 'ERR:profile stage is not ready';
-  state.route = 'QQNT NodeIQQNTWrapperSession.getProfileService';
+  if (!state || state.phase !== 'binding') return 'ERR:profile stage is not ready';
+  state.route = 'wrapper.node nt_1 NodeIQQNTWrapperSession.getProfileService';
   function unavailable(status) {
     state.status = status;
     state.phase = 'done';
     return 'SURFACE_DONE';
   }
   try {
-    var session = state.Sessions.getNTWrapperSession(state.sessionName);
+    var main = typeof process === 'object' && process && process.mainModule;
+    var load = typeof globalThis.require === 'function' ? globalThis.require :
+      (main && typeof main.require === 'function' ? main.require.bind(main) : null);
+    if (!load) return unavailable('profile_require_missing');
+    var wrapper;
+    try { wrapper = load(wrapperPath); }
+    catch (_) { return unavailable('profile_wrapper_require_failed'); }
+    var sessions = wrapper && wrapper.NodeIQQNTWrapperSession;
+    if (!sessions || typeof sessions.getNTWrapperSession !== 'function') {
+      return unavailable('profile_wrapper_accessor_missing');
+    }
+    var session = sessions.getNTWrapperSession('nt_1');
     if (!session || typeof session.getProfileService !== 'function') {
       return unavailable('profile_service_accessor_missing');
     }
@@ -689,7 +899,7 @@ const UID_MAP_PROFILE_METHODS_JS: &str = r#"
     delete globalThis.__caligo_uid_map_main;
     return 'ERR:profile service acquisition failed';
   }
-})()
+}
 "#;
 
 fn build_profile_uid_map_query_js(uin: &str) -> String {
@@ -744,11 +954,13 @@ function (uin) {
 }
 "#;
 
-pub(crate) fn start_uid_map_profile() -> Result<String, V8Error> {
+pub(crate) fn start_uid_map_profile(wrapper_path: &str) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
-    unsafe { exec_script(&syms, isolate_addr(), UID_MAP_PROFILE_METHODS_JS) }
+    let argument = serde_json::to_string(wrapper_path).expect("string serialization is infallible");
+    let source = format!("({UID_MAP_PROFILE_METHODS_JS})({argument})");
+    unsafe { exec_script(&syms, isolate_addr(), &source) }
 }
 
 pub(crate) fn query_uid_map_profile(uin: &str) -> Result<String, V8Error> {
@@ -756,6 +968,131 @@ pub(crate) fn query_uid_map_profile(uin: &str) -> Result<String, V8Error> {
         return Err(V8Error::NoCurrentContext);
     };
     unsafe { exec_script(&syms, isolate_addr(), &build_profile_uid_map_query_js(uin)) }
+}
+
+const CURRENT_LOGIN_START_JS: &str = r#"
+(function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state || state.phase !== 'profile_ready') return 'ERR:profile stage is not ready';
+  state.route = 'wrapper.node nt_1 NodeIKernelProfileService.getSelfStatus';
+  function fail(status) {
+    state.status = status;
+    state.phase = 'done';
+  }
+  try {
+    var id = state.session.getSessionId();
+    if (!((typeof id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(id) && id !== '0') ||
+          (Number.isSafeInteger(id) && id > 0))) {
+      fail('current_session_id_invalid');
+      return 'SURFACE_DONE';
+    }
+    state.sessionId = id;
+    if (typeof state.profile.getSelfStatus !== 'function' ||
+        typeof state.profile.addKernelProfileListener !== 'function' ||
+        typeof state.profile.removeKernelProfileListener !== 'function') {
+      fail('self_status_listener_surface_missing');
+      return 'SURFACE_DONE';
+    }
+    var listener = new Proxy({
+      onSelfStatusChanged: function (info) {
+        if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_status_pending') return;
+        try {
+          if (!info || typeof info.uid !== 'string' || !/^u_[A-Za-z0-9_-]{1,125}$/.test(info.uid) ||
+              typeof info.uin !== 'string' || !/^[1-9][0-9]{4,12}$/.test(info.uin) ||
+              !Number.isSafeInteger(info.status) || info.status <= 0 || info.status === 20) return;
+          var prior = state.selfStatus;
+          if (prior && (prior.uid !== info.uid || prior.uin !== info.uin)) {
+            fail('self_status_conflict');
+            return;
+          }
+          state.selfStatus = {uid: info.uid, uin: info.uin, status: info.status};
+        } catch (_) { fail('self_status_event_invalid'); }
+      }
+    }, {
+      get: function (target, key) {
+        if (typeof key !== 'string') return undefined;
+        return key === 'onSelfStatusChanged' ? target[key] : function () {};
+      }
+    });
+    // This build returns a decimal string from the native add wrapper.
+    state.listener = listener;
+    state.listenerRegistration = 'unknown';
+    var listenerId = state.profile.addKernelProfileListener(listener);
+    if (typeof listenerId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(listenerId)) {
+      fail('self_status_listener_id_invalid');
+      return 'SURFACE_DONE';
+    }
+    state.listenerId = listenerId;
+    state.listenerRegistration = 'registered';
+    state.phase = 'self_status_pending';
+    state.apiCallAttempted = true;
+    Promise.resolve(state.profile.getSelfStatus()).then(function (value) {
+      if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_status_pending') return;
+      if (!value || !Number.isSafeInteger(value.result)) {
+        fail('self_status_ack_invalid');
+      } else {
+        state.selfStatusResult = value.result;
+        if (value.result !== 0) fail('self_status_ack_failed');
+      }
+    }, function () {
+      if (globalThis.__caligo_uid_map_main === state && state.phase === 'self_status_pending') {
+        fail('self_status_rejected');
+      }
+    });
+  } catch (_) {
+    fail('self_status_threw');
+    if (!state.apiCallAttempted) return 'SURFACE_DONE';
+  }
+  return 'DISPATCHED';
+})()
+"#;
+
+// Promise handlers only record settlement. QQ calls and result extraction stay
+// in the owner tick, so timeout/cancel never dispatch a late mapping query.
+const CURRENT_LOGIN_FINISH_JS: &str = r#"
+(function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state) return 'ERR:no current-login state';
+  if (state.phase !== 'self_status_pending' || state.selfStatusResult !== 0 || !state.selfStatus) {
+    return 'POLL';
+  }
+  function finish(status) {
+    state.status = status;
+    state.phase = 'done';
+    delete state.selfStatus;
+    return 'POLL';
+  }
+  try {
+    var identity = state.selfStatus;
+    var uin = identity.uin, uid = identity.uid;
+    if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+    var mapped = state.forwardMethod.call(state.profile, 'FriendsServiceImpl', [uin]);
+    if (Object.prototype.toString.call(mapped) !== '[object Map]') {
+      Promise.resolve(mapped).catch(function () {});
+      return finish('self_forward_not_map');
+    }
+    if (Map.prototype.get.call(mapped, uin) !== uid) return finish('self_forward_mismatch');
+    var reverse = state.reverseMethod.call(state.profile, 'FriendsServiceImpl', [uid]);
+    if (Object.prototype.toString.call(reverse) !== '[object Map]') {
+      Promise.resolve(reverse).catch(function () {});
+      return finish('self_reverse_not_map');
+    }
+    if (Map.prototype.get.call(reverse, uid) !== uin) return finish('self_reverse_mismatch');
+    if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+    state.currentLogin = {uin: uin, uid: uid, status: identity.status, session_id: state.sessionId};
+    return finish('current_login_match');
+  } catch (_) { return finish('current_login_check_failed'); }
+})()
+"#;
+
+pub(crate) fn start_current_login_probe() -> Result<String, V8Error> {
+    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+    unsafe { exec_script(&syms, isolate_addr(), CURRENT_LOGIN_START_JS) }
+}
+
+pub(crate) fn finish_current_login_probe() -> Result<String, V8Error> {
+    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+    unsafe { exec_script(&syms, isolate_addr(), CURRENT_LOGIN_FINISH_JS) }
 }
 
 pub fn build_uid_map_methods_js(uin: &str) -> String {
@@ -893,6 +1230,17 @@ const UID_MAP_POLL_JS: &str = r#"
     var G = globalThis, S = G.__caligo_uid_map_main;
     if (!S) return 'ERR:no uid-map state';
     if (S.phase !== 'done') return 'PENDING';
+    if (S.listenerRegistration === 'registered') {
+      S.listenerRegistration = 'remove_unknown';
+      try {
+        S.profile.removeKernelProfileListener(S.listenerId);
+        S.listenerRegistration = 'remove_returned';
+      } catch (_) {}
+    }
+    if (S.listenerRegistration && S.listenerRegistration !== 'remove_returned') {
+      S.status = 'self_status_listener_cleanup_unverified';
+      delete S.currentLogin;
+    }
     var done = {
       status: S.status,
       route: S.route,
@@ -903,7 +1251,10 @@ const UID_MAP_POLL_JS: &str = r#"
       reverseUinValues: S.reverseUinValues || [],
       forward: S.forward,
       reverse: S.reverse,
-      error: S.error
+      error: S.error,
+      currentLogin: S.currentLogin,
+      selfStatusResult: S.selfStatusResult,
+      listenerRegistration: S.listenerRegistration
     };
     delete G.__caligo_uid_map_main;
     return JSON.stringify(done);
@@ -913,8 +1264,20 @@ const UID_MAP_POLL_JS: &str = r#"
 
 const UID_MAP_CANCEL_JS: &str = r#"
 (function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (state) {
+    state.phase = 'cancelled';
+    if (state.listenerRegistration === 'registered') {
+      state.listenerRegistration = 'remove_unknown';
+      try {
+        state.profile.removeKernelProfileListener(state.listenerId);
+        state.listenerRegistration = 'remove_returned';
+      } catch (_) {}
+    }
+  }
   delete globalThis.__caligo_uid_map_main;
-  return 'CANCELLED';
+  return state && state.listenerRegistration && state.listenerRegistration !== 'remove_returned'
+    ? 'CLEANUP_UNKNOWN' : 'CANCELLED';
 })()
 "#;
 
@@ -998,7 +1361,7 @@ pub fn cancel_uid_map_probe() -> Result<String, V8Error> {
 
 #[cfg(test)]
 mod exec_script_lab_tests {
-    use super::{exec_script, V8Error, V8Symbols};
+    use super::{V8Error, V8Symbols, exec_script};
     use core::ffi::c_void;
     use std::cell::{Cell, RefCell};
 
@@ -1194,11 +1557,130 @@ mod exec_script_lab_tests {
 #[cfg(test)]
 mod uid_map_script_tests {
     use super::{
-        build_profile_uid_map_query_js, build_uid_map_methods_js, UID_MAP_BINDING_JS,
-        UID_MAP_GROUP_JS, UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS, UID_MAP_QUERY_JS,
-        UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS, UID_MAP_SURFACE_DONE_JS,
-        UID_MAP_WRAPPERS_JS,
+        CURRENT_LOGIN_FINISH_JS, CURRENT_LOGIN_START_JS, UID_MAP_BINDING_JS, UID_MAP_CANCEL_JS, UID_MAP_GROUP_JS,
+        UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS,
+        UID_MAP_QUERY_JS, UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS,
+        UID_MAP_SURFACE_DONE_JS, UID_MAP_WRAPPERS_JS, build_profile_uid_map_query_js,
+        build_uid_map_methods_js,
     };
+
+    #[test]
+    fn current_login_uses_host_identity_and_rejects_drift_or_late_settlement() {
+        let start = serde_json::to_string(CURRENT_LOGIN_START_JS).unwrap();
+        let finish = serde_json::to_string(CURRENT_LOGIN_FINISH_JS).unwrap();
+        let poll = serde_json::to_string(UID_MAP_POLL_JS).unwrap();
+        let cancel = serde_json::to_string(UID_MAP_CANCEL_JS).unwrap();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const uin = '1234567890', uid = 'u_synthetic';
+const selfStatus = {uin, uid, status: 10};
+let sessionId = 'nt_1', mappings = 0, reverseUin = uin, listener, removed = 0;
+function prepare(getSelfStatus) {
+  const profile = {
+    getSelfStatus,
+    addKernelProfileListener(value) {
+      assert.equal(typeof value.onProfileDetailInfoChanged, 'function');
+      listener = value;
+      return '9007199254740993';
+    },
+    removeKernelProfileListener(id) {
+      assert.equal(id, '9007199254740993');
+      removed++;
+    }
+  };
+  const state = {
+    phase: 'profile_ready', profile, session: {getSessionId: () => sessionId},
+    forwardMethod(source, keys) {
+      assert.equal(this, profile);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uin]);
+      mappings++;
+      return new Map([[uin, uid]]);
+    },
+    reverseMethod(source, keys) {
+      assert.equal(this, profile);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uid]);
+      mappings++;
+      return new Map([[uid, reverseUin]]);
+    }
+  };
+  globalThis.__caligo_uid_map_main = state;
+  return state;
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+async function run(event, result = 0, eventFirst = true) {
+  prepare(function () {
+    assert.equal(arguments.length, 0);
+    if (eventFirst && event) listener.onSelfStatusChanged(event);
+    return Promise.resolve({result, errMsg: ''});
+  });
+  assert.equal(eval(start), 'DISPATCHED');
+  assert.equal(eval(finish), 'POLL');
+  assert.equal(eval(poll), 'PENDING');
+  await tick();
+  if (!eventFirst && event) listener.onSelfStatusChanged(event);
+  assert.equal(eval(finish), 'POLL');
+  return JSON.parse(eval(poll));
+}
+(async () => {
+  let result = await run(selfStatus);
+  assert.equal(result.status, 'current_login_match');
+  assert.deepEqual(result.currentLogin, {...selfStatus, session_id: 'nt_1'});
+  assert.equal(result.listenerRegistration, 'remove_returned');
+  assert.equal(mappings, 2);
+  assert.equal((await run(selfStatus, 0, false)).status, 'current_login_match');
+  assert.equal((await run(selfStatus, 1)).status, 'self_status_ack_failed');
+  assert.equal(mappings, 4);
+  reverseUin = '1234567891';
+  result = await run(selfStatus);
+  assert.equal(result.status, 'self_reverse_mismatch');
+  assert.equal(result.currentLogin, undefined);
+  let resolveStatus;
+  const old = prepare(() => new Promise(resolve => {resolveStatus = resolve;}));
+  assert.equal(eval(start), 'DISPATCHED');
+  listener.onSelfStatusChanged(selfStatus);
+  sessionId = 'nt_2';
+  resolveStatus({result: 0});
+  await tick();
+  eval(finish);
+  assert.equal(JSON.parse(eval(poll)).status, 'current_session_changed');
+  assert.equal(mappings, 6);
+  const cancelled = prepare(() => new Promise(resolve => {resolveStatus = resolve;}));
+  assert.equal(eval(start), 'DISPATCHED');
+  const late = listener;
+  assert.equal(eval(cancel), 'CANCELLED');
+  const newer = prepare(() => selfStatus);
+  late.onSelfStatusChanged(selfStatus);
+  resolveStatus({result: 0});
+  await tick();
+  assert.equal(cancelled.phase, 'cancelled');
+  assert.equal(cancelled.selfStatus, undefined);
+  assert.equal(newer.phase, 'profile_ready');
+  assert.equal(old.currentLogin, undefined);
+  assert.equal(mappings, 6);
+  assert.equal(removed, 6);
+  prepare(() => Promise.resolve({result: 0}));
+  assert.equal(eval(start), 'DISPATCHED');
+  await tick();
+  eval(finish);
+  assert.equal(eval(poll), 'PENDING');
+  assert.equal(eval(cancel), 'CANCELLED');
+  assert.equal(removed, 7);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+        let script =
+            format!("const start = {start}, finish = {finish}, poll = {poll}, cancel = {cancel};\n{fixture}");
+        let output = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .expect("Node.js is required for the research JavaScript fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn uid_map_probe_uses_the_direct_qqnt_wrapper_surface_and_two_fixed_methods() {
@@ -1246,6 +1728,72 @@ mod uid_map_script_tests {
     }
 
     #[test]
+    fn profile_uid_map_uses_the_loaded_wrapper_and_reference_session_key() {
+        let surface = serde_json::to_string(UID_MAP_PROFILE_METHODS_JS).unwrap();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const path = String.raw`D:\QQ NT\wrapper.node`;
+const calls = [];
+const profile = {
+  getUidByUin() { assert.fail('surface must not dispatch a resolver'); },
+  getUinByUid() { assert.fail('surface must not dispatch a resolver'); }
+};
+const session = { getProfileService() { assert.equal(this, session); return profile; } };
+const sessions = {
+  getNTWrapperSession(key) {
+    assert.equal(this, sessions);
+    calls.push(key);
+    return session;
+  }
+};
+const host = {
+  __caligo_uid_map_main: {phase: 'binding'},
+  process: {
+    _linkedBinding() { assert.fail('ProfileService must not use the startup wrapper'); },
+    mainModule: {
+      require(candidate) {
+        assert.equal(this, host.process.mainModule);
+        calls.push(candidate);
+        return { NodeIQQNTWrapperSession: sessions };
+      }
+    }
+  }
+};
+const run = () => vm.runInNewContext('(' + surface + ')(' + JSON.stringify(path) + ')', host);
+assert.equal(run(), 'PROFILE_READY');
+assert.deepEqual(calls, [path, 'nt_1']);
+assert.equal(host.__caligo_uid_map_main.session, session);
+assert.equal(host.__caligo_uid_map_main.profile, profile);
+
+host.__caligo_uid_map_main = {phase: 'binding'};
+host.require = candidate => {
+  assert.equal(candidate, path);
+  return {};
+};
+assert.equal(run(), 'SURFACE_DONE');
+assert.equal(host.__caligo_uid_map_main.status, 'profile_wrapper_accessor_missing');
+assert.equal(host.__caligo_uid_map_main.apiCallAttempted, undefined);
+
+host.__caligo_uid_map_main = {phase: 'binding'};
+delete host.require;
+delete host.process.mainModule;
+assert.equal(run(), 'SURFACE_DONE');
+assert.equal(host.__caligo_uid_map_main.status, 'profile_require_missing');
+"#;
+        let script = format!("const surface = {surface};\n{fixture}");
+        let output = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .expect("Node.js is required for the research JavaScript fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn profile_uid_map_checks_exact_keys_and_rejects_unexpected_results() {
         let surface = serde_json::to_string(UID_MAP_PROFILE_METHODS_JS).unwrap();
         let query =
@@ -1256,17 +1804,27 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const uin = '9007199254740993';
 const uid = 'u_synthetic-uid';
+const wrapperPath = String.raw`D:\QQ NT\wrapper.node`;
+function acquire(getSession) {
+  globalThis.__caligo_uid_map_main = { phase: 'binding' };
+  const sandbox = {
+    __caligo_uid_map_main: globalThis.__caligo_uid_map_main,
+    require(path) {
+      assert.equal(path, wrapperPath);
+      return { NodeIQQNTWrapperSession: { getNTWrapperSession: getSession } };
+    }
+  };
+  const result = vm.runInNewContext('(' + surface + ')(' + JSON.stringify(wrapperPath) + ')', sandbox);
+  if (sandbox.__caligo_uid_map_main === undefined) delete globalThis.__caligo_uid_map_main;
+  return result;
+}
 
 function prepare(service) {
   const session = { getProfileService: () => service };
-  globalThis.__caligo_uid_map_main = {
-    phase: 'service', sessionName: 'fixture',
-    Sessions: { getNTWrapperSession(name) {
-      assert.equal(name, 'fixture');
-      return session;
-    } }
-  };
-  const outcome = eval(surface);
+  const outcome = acquire(name => {
+    assert.equal(name, 'nt_1');
+    return session;
+  });
   if (outcome === 'PROFILE_READY') {
     assert.equal(globalThis.__caligo_uid_map_main.session, session);
     assert.equal(globalThis.__caligo_uid_map_main.profile, service);
@@ -1333,11 +1891,7 @@ verify(found, () => vm.runInNewContext('Promise.reject(new Error("foreign reject
 verify(found, () => ({ then(resolve, reject) { setImmediate(() => reject(new Error('late rejection'))); } }), 'reverse_result_not_map', true);
 
 function acquisitionThrows(getSession) {
-  globalThis.__caligo_uid_map_main = {
-    phase: 'service', sessionName: 'fixture',
-    Sessions: { getNTWrapperSession: getSession }
-  };
-  assert.equal(eval(surface), 'ERR:profile service acquisition failed');
+  assert.equal(acquire(getSession), 'ERR:profile service acquisition failed');
   assert.equal(globalThis.__caligo_uid_map_main, undefined);
   // A failed acquisition must not poison the next state's BUSY guard.
   assert.equal(prepare({ getUidByUin() {}, getUinByUid() {} }), 'PROFILE_READY');
@@ -1372,12 +1926,72 @@ for (const name of ['getUidByUin', 'getUinByUid']) {
     }
 }
 
-/// D9 发送模板:占位 {chat}(数字)、{peer}/{text}(JSON 字符串)。
-/// fired 后 Promise 结果写入 R.sendResults[mid](done 带结果 / rejected 带错误),
-/// 由轮询回收 —— §6.6:fired 非终态,mid 为 receipt 第一分类(候选 ID)。
-pub fn build_send_js(chat_type: u32, peer_uid: &str, text: &str) -> String {
+/// D9 voice submission consumes owned bytes. Its caller must use the exact
+/// profile gate when arming the listener and the durable send path for dispatch.
+pub fn build_voice_send_js(
+    chat_type: u32,
+    account: &str,
+    peer_uin: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+    silk: &[u8],
+) -> Option<String> {
+    if !caligo_model::voice::validate_short_tencent_silk(silk) {
+        return None;
+    }
+    let mut hex = String::with_capacity(silk.len() * 2);
+    use std::fmt::Write;
+    for byte in silk {
+        write!(hex, "{byte:02x}").expect("writing to String is infallible");
+    }
+    let args = serde_json::json!({
+        "chatType": chat_type, "account": account, "peerUin": peer_uin, "requestId": request_id,
+        "wireSeq": wire_seq, "timeoutMs": timeout_ms, "silk": hex
+    });
+    Some(format!("({})({args})", include_str!("qq_voice_send.js")))
+}
+
+/// Fixed PNG preparation/submission contract used by scoped durable image dispatch.
+pub fn build_image_send_js(
+    chat_type: u32, account: &str, peer_uin: &str, request_id: &str,
+    wire_seq: u32, timeout_ms: u64, png: &[u8],
+) -> Option<String> {
+    let (width,height) = caligo_model::png::dimensions(png)?;
+    let mut hex = String::with_capacity(png.len()*2);
+    use std::fmt::Write;
+    for byte in png { write!(hex,"{byte:02x}").ok()?; }
+    let args = serde_json::json!({"chatType":chat_type,"account":account,"peerUin":peer_uin,
+        "requestId":request_id,"wireSeq":wire_seq,"timeoutMs":timeout_ms,"png":hex,"width":width,"height":height});
+    Some(format!("({})({args})",include_str!("qq_image_send.js")))
+}
+
+/// D9 fixed wrapper text send. Correlation stays local; a native ID is returned
+/// only after exact event identity and getMsgsByMsgId readback agree.
+pub fn build_send_js(
+    chat_type: u32,
+    peer_uid: &str,
+    text: &str,
+    account: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+) -> String {
     let peer_json = serde_json::to_string(peer_uid).unwrap_or_default();
     let text_json = serde_json::to_string(text).unwrap_or_default();
+    let request_json = serde_json::to_string(request_id).unwrap_or_default();
+    let account_json = serde_json::to_string(account).unwrap_or_default();
+    let settle = r#"function(R,key,pending){
+      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
+        R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
+          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+      } else {
+        R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
+      }
+      pending.done = true;
+      if (R.sends[key] === pending) delete R.sends[key];
+    }"#;
     let mut js = String::with_capacity(2048);
     js.push_str("(function () {\n");
     js.push_str("  try {\n");
@@ -1391,41 +2005,80 @@ pub fn build_send_js(chat_type: u32, peer_uid: &str, text: &str) -> String {
     js.push_str("    var peerUid = ");
     js.push_str(&peer_json);
     js.push_str(";\n");
-    js.push_str("    var sv = 0;\n");
-    js.push_str("    try { sv = R.session.getMSFService().getServerTime(); } catch (e) {}\n");
-    js.push_str("    var mid = String(R.ms.generateMsgUniqueId(chat, sv));\n");
-    js.push_str("    var peer = { chatType: chat, guildId: mid, peerUid: peerUid };\n");
+    js.push_str("    var sv; try { sv = R.session.getMSFService().getServerTime(); } catch (e) { return JSON.stringify({err:'server_time_unavailable'}); }\n");
+    js.push_str("    if (typeof sv !== 'string' || !sv || sv === '0') return JSON.stringify({err:'server_time_unavailable'});\n");
+    js.push_str("    var cookie = R.ms.generateMsgUniqueId(chat, sv);\n");
+    js.push_str(
+        "    if (typeof cookie !== 'string' || !cookie || cookie === '0') return JSON.stringify({err:'invalid_cookie'});\n",
+    );
+    js.push_str("    var selfUin = ");
+    js.push_str(&account_json);
+    js.push_str(";\n");
+    js.push_str("    var targetUin = peerUid;\n");
+    js.push_str("    if (chat === 1) {\n");
+    js.push_str("      if (!/^[1-9][0-9]{0,19}$/.test(targetUin)) return JSON.stringify({err:'private_target_uin_invalid'});\n");
+    js.push_str("      var profile = R.session.getProfileService();\n");
+    js.push_str("      if (!profile || typeof profile.getUidByUin !== 'function') return JSON.stringify({err:'private_uid_mapping_unavailable'});\n");
+    js.push_str("      var mapped = profile.getUidByUin('FriendsServiceImpl', [targetUin]);\n");
+    js.push_str("      if (!(mapped instanceof Map) || !Map.prototype.has.call(mapped, targetUin)) return JSON.stringify({err:'private_uid_mapping_missing'});\n");
+    js.push_str("      peerUid = Map.prototype.get.call(mapped, targetUin);\n");
+    js.push_str("      if (typeof peerUid !== 'string' || !/^u_[A-Za-z0-9_-]{1,128}$/.test(peerUid)) return JSON.stringify({err:'private_uid_mapping_invalid'});\n");
+    js.push_str("    }\n");
+    js.push_str("    var peer = { chatType: chat, guildId: cookie, peerUid: peerUid };\n");
     js.push_str("    var elems = [{ elementType: 1, textElement: { content: ");
     js.push_str(&text_json);
     js.push_str(" } }];\n");
-    js.push_str("    var pr = R.ms.sendMsg('0', peer, elems, new Map());\n");
-    js.push_str("    R.sendResults[mid] = { status: 'pending', ts: Date.now() };\n");
-    js.push_str("    if (pr && typeof pr.then === 'function') {\n");
-    js.push_str("      pr.then(function (res) {\n");
-    js.push_str("        try {\n");
-    js.push_str("          var rec = JSON.parse(JSON.stringify(res));\n");
-    js.push_str("          var nid = '';\n");
-    js.push_str("          try { nid = String(rec.msgId || (rec.msgList && rec.msgList[0] && rec.msgList[0].msgId) || ''); } catch (e) {}\n");
-    js.push_str("          R.sendResults[mid] = { status: 'done', msgId: nid, result: JSON.stringify(rec).slice(0, 2000) };\n");
-    js.push_str("        } catch (e) { R.sendResults[mid] = { status: 'done-raw' }; }\n");
-    js.push_str("      }, function (err) {\n");
-        js.push_str("        R.sendResults[mid] = { status: 'rejected', error: String(err).slice(0, 300) };\n");
-    js.push_str("      });\n");
-    js.push_str("    } else {\n");
-    js.push_str("      R.sendResults[mid] = { status: 'done-raw' };\n");
-    js.push_str("    }\n");
-    js.push_str("    return JSON.stringify({ fired: true, mid: mid });\n");
+    js.push_str("    var settleSendResult = ");
+    js.push_str(settle);
+    js.push_str(";\n");
+    js.push_str("    var key = ");
+    js.push_str(&request_json);
+    js.push_str(";\n");
+    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.keys(R.sends).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    js.push_str("    var pending = {cookie:cookie, chat:chat, peer:peerUid, text:");
+    js.push_str(&text_json);
+    js.push_str(", selfUin:selfUin, wireSeq:");
+    js.push_str(&wire_seq.to_string());
+    js.push_str(", deadline:Date.now()+");
+    js.push_str(&timeout_ms.to_string());
+    js.push_str(", addId:null, updateId:null, done:false};\n");
+    js.push_str("    R.sends[key] = pending; R.sendResults[key] = {status:'pending'};\n");
+    js.push_str("    var pr; try { pr = R.ms.sendMsg('0', peer, elems, new Map()); } catch (e) { delete R.sends[key]; delete R.sendResults[key]; throw e; }\n");
+    js.push_str("    Promise.resolve(pr).then(function (res) {\n");
+    js.push_str("      pending.promiseDone = true;\n");
+    js.push_str("      if (res && res.result === 0) { pending.promiseStatus = 'accepted'; R.sendResults[key] = {status:'accepted'}; }\n");
+    js.push_str("      else { pending.promiseStatus = 'rejected'; pending.failed = true; R.sendResults[key] = {status:'rejected', error:'send result=' + String(res && res.result)}; }\n");
+    js.push_str("      settleSendResult(R, key, pending);\n");
+    js.push_str("    }, function (err) { pending.promiseDone=true; pending.promiseStatus='rejected'; pending.failed=true; R.sendResults[key] = {status:'rejected', error:String(err).slice(0,300)}; settleSendResult(R,key,pending); });\n");
+    js.push_str("    return JSON.stringify({fired:true, mid:key});\n");
     js.push_str("  } catch (e) { return JSON.stringify({ err: String(e).slice(0, 300) }); }\n");
     js.push_str("})()\n");
     js
 }
 
-/// D9 发送:返回原始输出(fired JSON / NOT_ARMED JSON / ERR JSON)。
-pub fn send_text(chat_type: u32, peer_uid: &str, text: &str) -> Result<String, V8Error> {
+pub fn run_fixed_query_script(js: &str) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
-    let js = build_send_js(chat_type, peer_uid, text);
+    unsafe { exec_script(&syms, isolate_addr(), js) }
+}
+
+/// D9 发送:返回原始输出(fired JSON / NOT_ARMED JSON / ERR JSON)。
+pub fn send_text(
+    chat_type: u32,
+    peer_uid: &str,
+    text: &str,
+    account: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+) -> Result<String, V8Error> {
+    let Some(syms) = symbols() else {
+        return Err(V8Error::NoCurrentContext);
+    };
+    let js = build_send_js(
+        chat_type, peer_uid, text, account, request_id, wire_seq, timeout_ms,
+    );
     // SAFETY: 阶梯自管全部检查;调用方保证 owner 线程。
     unsafe { exec_script(&syms, isolate_addr(), &js) }
 }

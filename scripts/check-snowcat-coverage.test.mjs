@@ -11,13 +11,13 @@ const inventory = JSON.parse(inventoryBytes);
 const artifact = JSON.parse(readFileSync(path.join(ROOT, MAP_PATH), 'utf8'));
 // Unit tests use the recorded structural registry; they never pretend to run Rust.
 // The final integration test invokes the real exporter when COVERAGE_RUN_RUST=1.
-const registry = artifact.registry.entries.map(({ name, canonical, permission, handler }) => ({ name, canonical, permission, handler }));
+const registry = artifact.registry.entries.map(({ name, canonical, permission, handler }) => ({
+  name, canonical, permission, handler,
+}));
 const raw = JSON.stringify(registry);
 function fixture() {
-  const map = structuredClone(artifact);
-  map.registry.semantic_sha256 = registryDigest(raw);
-  map.counts = summarize(map);
-  return { map, dump: { raw, registry, command: 'unit-test structural registry fixture' } };
+  const dump = { raw, registry, command: 'unit-test structural registry fixture' };
+  return { map: buildMap(inventory, dump, artifact), dump };
 }
 function check(map, dump) { return validateMap(inventory, map, dump, { checkSources: false }); }
 function row(map, id) { return map.entries.find(e => e.reference_id === id); }
@@ -43,18 +43,18 @@ test('registry token digest preserves u64 integer literals and ignores formattin
 
 test('base and alias support come from independent actual registry keys', () => {
   const { map } = fixture();
-  assert.equal(map.counts.registry_declared_keys, 10);
-  assert.equal(map.counts.registry_base_keys, 7);
+  assert.equal(map.counts.registry_declared_keys, 17);
+  assert.equal(map.counts.registry_base_keys, 14);
   assert.equal(map.counts.registry_alias_keys, 3);
   assert.equal(row(map, 'onebot.action.get_status').status, 'wired_offline');
   assert.equal(row(map, 'onebot.alias.get_status_async').status, 'missing');
   assert.equal(row(map, 'onebot.alias.send_group_msg_async').status, 'partial_offline');
   assert.equal(row(map, 'onebot.alias.send_group_msg_rate_limited').status, 'missing');
-  assert.equal(row(map, 'onebot.action.send_private_msg').status, 'registered_backend_blocked');
+  assert.equal(row(map, 'onebot.action.send_private_msg').status, 'partial_offline');
   for (const name of ['get_group_info', 'get_group_list', 'get_friend_list']) {
     const entry = row(map, `onebot.action.${name}`);
-    assert.equal(entry.status, 'missing');
-    assert.equal(entry.assessment, 'directory_missing');
+    assert.equal(entry.status, 'implemented_pending_validation');
+    assert.equal(entry.assessment, 'directory_pending');
   }
 });
 
@@ -104,7 +104,7 @@ test('checker refuses false rate_limited/private/directory backend credit', () =
     const { map, dump } = fixture();
     Object.assign(row(map, id), { assessment: profile, status: map.assessments[profile].status });
     map.counts = summarize(map);
-    assert.throws(() => check(map, dump), /Registry\/mapping|falsely credited|rate_limited/);
+    assert.throws(() => check(map, dump), /Reference mapping does not match current evidence/);
   }
 });
 
@@ -129,17 +129,23 @@ test('checker rejects stale counts and positive mappings without entry/permissio
   assert.throws(() => check(map, dump), /normal entry/);
 });
 
-test('refresh is additive and preserves manual mapping and reviewed assessments', () => {
+test('refresh regenerates derived rows and preserves manual reviews', () => {
   const { map, dump } = fixture();
   const id = 'onebot.action.get_status';
   row(map, id).review = { reason: 'Reviewed manually: daemon state must be ready.', reviewer_note: 'Keep this exact reviewed note.' };
-  map.assessments.query.reason = 'Reviewed query limitations must survive refresh.';
+  Object.assign(map.assessments.query, {
+    reviewed: true,
+    reason: 'Reviewed query limitations must survive refresh.',
+  });
+  const privateSend = row(map, 'onebot.action.send_private_msg');
+  privateSend.status = 'registered_backend_blocked';
   const target = map.entries.find(e => e.status === 'missing');
   map.entries = map.entries.filter(e => e !== target);
   const refreshed = buildMap(inventory, dump, map);
   assert.equal(refreshed.entries.length, 5711);
   assert.equal(row(refreshed, id).review.reviewer_note, 'Keep this exact reviewed note.');
   assert.equal(refreshed.assessments.query.reason, 'Reviewed query limitations must survive refresh.');
+  assert.equal(row(refreshed, privateSend.reference_id).status, 'partial_offline');
   assert.doesNotThrow(() => check(refreshed, dump));
 });
 

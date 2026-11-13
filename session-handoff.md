@@ -4,7 +4,29 @@
 
 当前用户目标是执行 [SnowCat 分阶段计划](docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)，分支 `codex/snowcat-capability-integration`，[Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。已提交 `ef238e1` ProfileService 基线修复、`c1b5b1a` 统一动作 registry、`ca29fd4` 主线整合与目录拒绝语义、`929b914` 固定参考清单。最新证据统一见 [整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)。
 
-本轮 A0 固定注册分母与 Caligo mapping 已提交，`4f90fb0` 接通 A1 typed wrapper 消息至 journal，`65ea2fe` 先行接通 A3 共享 SSE/MCP。最终串行 default/research 全仓、并行 research 全仓、固定参考 6 项和覆盖 12 项检查通过；中间失败和测试修正均保留在执行记录。完整 A1/A2、WebUI/多账号/其余动作、候选冻结和 B1–B3 均未完成。先完成离线接线与验收，不能恢复旧交接中“先现场 ProfileService”的顺序。A0–A4 不启动 QQ；B2 再指定新鲜双账号和精确 profile。历史 unknown 和序号继续保留。下一工作块为 A1/A2 D9：传递 core request_id/wire_seq/remaining timeout，原生调用前登记关联，按 add/update/精确回读建立强身份；同时明确更新修订去重和 OneBot real_id/font/sub_type 合同。不要从 Promise result 或本地 correlation 直接制造成功。缺口和可重跑命令从 mapping 与执行记录进入。
+本轮 A0 固定注册分母与 Caligo mapping 已提交，`4f90fb0` 接通 A1 typed wrapper 消息至 journal，`65ea2fe` 先行接通 A3 共享 SSE/MCP。最终串行 default/research 全仓、并行 research 全仓、固定参考 6 项和覆盖 12 项检查通过；中间失败和测试修正均保留在执行记录。完整 A1/A2、WebUI/多账号/其余动作、候选冻结和 B1–B3 均未完成。先完成离线接线与验收，不能恢复旧交接中“先现场 ProfileService”的顺序。A0–A4 不启动 QQ；B2 再指定新鲜双账号和精确 profile。历史 unknown 和序号继续保留。后续 `65e7e6c` 已接入 D9 请求关联/精确回读、只读查询、13-key 动作表、显式私聊能力门和 wrapper 同 ID 修订；`8e4583b` 已接入双账号管理/WebUI/媒体工具正常入口。最终 all 与并行 research 通过，浏览器配置/启停/关闭通过，详情见[后续执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)。下一工作块按覆盖清单处理：绑定当前登录结果及昵称、明确 typed wrapper subtype 与事件 fanout 的兼容合同；随后原生媒体上传/下载和 SSO、消息段/管理通知及扩展动作、CLI/SDK/便携部署。不能把仅有工具转换当 QQ 媒体贯通，不能从配置 account 猜登录成功，也不能将本地 correlation 当 native ID。完整候选未冻结，B1–B3 未开始。
+
+恢复执行已完成按连接代次的能力声明、覆盖清单刷新和普通私聊/群聊入站事件接线。下一步先离线核对已登录实例可用的当前身份来源和宿主绑定，再接 `LoginInfo`；若固定参考无可用合同，保持拒绝并推进独立的媒体、SSO 或扩展动作能力。详见[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a1a2-普通私聊与群聊的事件接线)。
+
+语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
+
+语音持久化检查点 `e1b4420` 已接当前 profile 的单个私聊入站元素。`318e46d` 的共享事件和 `get_record` 使用同一账号限定文件标识。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
+
+`3ddb47d` 接通可选 WAV/OGG。私聊 `record` 发送已有 scoped IPC、owner 提交、精确回读与 OneBot 持久消息 ID。下一工作块核对群语音和其他媒体的宿主文件、关联与资源寿命，再推进 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。候选冻结前继续离线。[OneBot 私聊语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-私聊语音发送)
+
+群入站、已发送私聊语音和群语音发送已接入。普通单 PNG 的 `ImageInfo` / `ImageDownload` 已接固定 profile 的 scoped 查询，合成宿主和真实命名管道验证见[图片查询证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)。普通入站 PNG 的持久身份、D8、共享事件和 `get_image` 已接，见[OneBot 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)。当前用户明确要求先完成所有整合任务、再统一验收；保持 A0–A4 不启动 QQ。PNG 私聊/群聊发送已接 HostOp/OwnedRequest、独立 scoped image 能力与 IPC、core 持久派发和共享 OneBot；精确自发回读入库后才返回公开 ID，旧声明缺能力默认拒绝。另修复 query broker 9 项上限拒绝当前 11 项声明的真实阻塞。见[图片发送接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片发送接线)。新回归覆盖真实 worker/管道、scope/撤销/超时/重复、unknown 与重连不重发、持久 ID/恢复；当前只接受 128 KiB 普通 PNG，非完整像素解码验收。下一步继续核对固定参考中的登录结果、SSO 二进制与其他媒体/扩展动作可实现合同；有源合同的继续离线接线，缺原生合同的明确拒绝和列出最小 QQ 取证需求。不能将已登录配置或 Profile 映射当当前身份，不猜 ABI，不因单项缺口提前开始集中 QQ 验收。候选未冻结，历史 unknown 不重发、未证寿命不热卸载。
+
+最新离线块继续接入群成员列表/指定成员，使用强类型 GroupMembers 和精确 pilot 的完整 Map 快照；正常共享动作经真实 pipe 回归，错 scope 和重连清权覆盖。见[群成员接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群成员查询接线)。后续继续固定源合同可实现的其他媒体/资料动作与部署任务；LoginInfo 仍缺已登录会话的当前身份来源，SSO 仍缺自有二进制转换合同。不能用配置账号或本地历史列表合成成功，集中 QQ 验收仍待候选。
+
+原生合同停止点见[下一原生合同门](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#下一原生合同门)：当前登录身份、强制资料刷新回调及自有 SSO bytes 不能从 TypeScript 类型或配置补出成功。需要新指定 QQ/profile 的有界只读合同证据时再进入独立研究；这不是已准入 B2。其他格式/文件视频/扩展动作/CLI SDK 部署仍有离线工作，不能概括成全计划只差 QQ。历史 unknown、未证寿命和 feat-005/006 blocked 保留。
+
+2026-11-14 已在用户指定的两现有登录实例完成首轮有界 ProfileService 取证。两边均 `profile_service_missing`，resolver 零派发，owner pump 已关，bridge 仍映射。先核对固定参考直接交付的 session 和 Caligo 通过 `nt` 重取的 wrapper，再核实 D8 的 `nt_*` 选择及当前账号归属。一次性入口须在新的干净目标代次验证，当前两个 PID 不重复加载或热卸载。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-双账号-profileservice-现场探针)
+
+已按固定归档晚接入实现修正 research mode 2 的 session 来源，下一轮在干净的已登录根用相同 `qq-entry --uid-map-profile-service` 入口核对加载状态、ProfileService 和精确往返。仅在获得独立当前身份来源后绑定 session，资料刷新 listener 与 SSO 继续按各自合同取证。[修正与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-会话来源修正)
+
+新版已在重启后的 A（PID 35864）完成 `roundtrip_match`，owner pump 已关且 bridge 仍映射。后续先验证宿主提供的当前 UIN/UID 与 `nt_1`/host nonce 的绑定，再按独立合同验证资料刷新回调。现有探针输入来自本机资料卡记录，不能将往返值直接当 LoginInfo。[现场复验](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-修正后现场复验)
+
+当前身份研究已在 A（PID 50100）无 UIN 输入取得 `nt_1` 的 `onSelfStatusChanged` 身份，精确映射及独立对照匹配，owner pump 正常关闭。下一工作块补已证 UID 的昵称、生产 host nonce/会话代次绑定和失效合同，再决定接入 LoginInfo。资料刷新及 SSO 各自留待受控合同。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-当前登录身份通知现场复验)
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

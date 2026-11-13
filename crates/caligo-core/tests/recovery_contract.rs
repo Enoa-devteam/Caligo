@@ -180,9 +180,19 @@ fn received_projection_is_indexed_and_get_msg_id_survives_actor_reopen() {
         caligo_core::runtime::EventReceipt::Published { .. }
     ));
     assert!(matches!(
-        actor.on_event(incoming).unwrap(),
+        actor.on_event(incoming.clone()).unwrap(),
         caligo_core::runtime::EventReceipt::DuplicateSuppressed
     ));
+    let mut update = incoming.clone();
+    update.source = EventSource::Update;
+    update.text = "revised text".into();
+    update.observed_at_unix_ms += 100;
+    update.onebot_projection.as_mut().unwrap().time += 1;
+    assert!(matches!(
+        actor.on_event(update.clone()).unwrap(),
+        caligo_core::runtime::EventReceipt::Published { .. }
+    ));
+    assert_eq!(actor.on_event(update).unwrap(), caligo_core::runtime::EventReceipt::DuplicateSuppressed);
     let first = actor
         .get_msg(1)
         .expect("first OneBot ID is queryable")
@@ -192,14 +202,15 @@ fn received_projection_is_indexed_and_get_msg_id_survives_actor_reopen() {
         first.sender["user_id"], 10002,
         "opaque sender is not parsed"
     );
-    assert_eq!(first.time, 1_791_641_234);
+    assert_eq!(first.time, 1_791_641_235);
+    assert_eq!(first.message, serde_json::Value::String("revised text".into()));
     drop(actor);
 
     let store = MessageStore::open(&store_path, 10001, None).unwrap();
     let (reopened, report) =
         AccountActor::open_with_message_store(&journal_path, RuntimeConfig::default(), store)
             .unwrap();
-    assert_eq!(report.recovered_events, 1);
+    assert_eq!(report.recovered_events, 2);
     let recovered = reopened.get_msg(1).expect("message ID remains stable");
     assert_eq!(recovered.message_id, first.message_id);
     assert_eq!(recovered.real_id, first.real_id);

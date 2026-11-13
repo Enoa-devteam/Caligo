@@ -6,8 +6,17 @@ use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};
 use caligo_bridge::resident::{Resident, ResidentLimits};
 use caligo_core::daemon::{BridgeClient, ControlClient, Daemon, DaemonConfig};
 use caligo_core::ipc::{BridgeMsg, ControlMsg, CoreToBridgeMsg, CoreToControlMsg};
+use caligo_core::media_tool::{
+    LicenseDeclaration, MediaError, MediaProcessRunner, MediaTool, MediaToolConfig,
+    ProcessResult, StopToken, ToolDeclaration,
+};
 use caligo_core::runtime::{AccountActor, RuntimeConfig};
+use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::WrapperBinding;
+use sha2::{Digest, Sha256};
+use std::ffi::OsString;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 struct OfflineHost;
@@ -33,6 +42,73 @@ impl HostAdapter for OfflineHost {
     }
 }
 
+struct OfflineVoiceTools;
+
+impl MediaProcessRunner for OfflineVoiceTools {
+    fn run(
+        &self,
+        executable: &Path,
+        args: &[OsString],
+        _cwd: &Path,
+        _timeout: Duration,
+        _output_limit: u64,
+        stop: &StopToken,
+    ) -> Result<ProcessResult, MediaError> {
+        assert!(!stop.is_stopped());
+        let output = Path::new(args.last().unwrap());
+        let bytes: &[u8] = match output.extension().unwrap().to_str().unwrap() {
+            "pcm" => {
+                assert_eq!(executable.file_name().unwrap(), "silk.exe");
+                let input = std::fs::read(&args[2]).unwrap();
+                assert_eq!(input.len(), 1073);
+                assert!(input.starts_with(b"\x02#!SILK_V3"));
+                &[0, 1, 2, 3]
+            }
+            "wav" => b"RIFFfakeWAVE",
+            "ogg" => b"OggSfixture",
+            _ => panic!("unexpected media output"),
+        };
+        std::fs::write(output, bytes).unwrap();
+        Ok(ProcessResult {
+            success: true,
+            code: Some(0),
+            stdout: vec![],
+            stderr: vec![],
+        })
+    }
+}
+
+fn offline_voice_tools(dir: &Path) -> MediaTool {
+    let declare = |name: &str| {
+        let executable = dir.join(name);
+        std::fs::write(&executable, name).unwrap();
+        ToolDeclaration {
+            executable,
+            sha256: format!("{:x}", Sha256::digest(name.as_bytes())),
+            version: "test-only".into(),
+            license: LicenseDeclaration {
+                name: "test-only".into(),
+                source: "offline fixture".into(),
+                path: None,
+            },
+        }
+    };
+    MediaTool::with_runner_for_tests(
+        MediaToolConfig {
+            ffmpeg: declare("ffmpeg.exe"),
+            ffprobe: declare("ffprobe.exe"),
+            silk_decoder: Some(declare("silk.exe")),
+            work_root: dir.join("media-jobs"),
+            timeout_ms: 100,
+            max_stdout_stderr_bytes: 1024,
+            max_input_bytes: 4096,
+            max_output_bytes: 4096,
+        },
+        Arc::new(OfflineVoiceTools),
+    )
+    .unwrap()
+}
+
 fn script_batch() -> String {
     let start = serde_json::to_string(caligo_bridge::qq_v8::D8_START_JS).unwrap();
     let poll = serde_json::to_string(caligo_bridge::qq_v8::D8_POLL_JS).unwrap();
@@ -43,6 +119,7 @@ const service = {sendMsg() { throw Error('must not send'); },
   addKernelMsgListener(value) { listener = value; return 1; }};
 const session = {getSessionId: () => '1', getMsgService: () => service};
 process._linkedBinding = name => ({NodeIQQNTWrapperSession:{getNTWrapperSession: () => session}});
+const caligoVoiceAccount = '10001';
 assert.ok(eval(start).startsWith('ARMED'));
 function record(id) { return {msgId:id, msgSeq:'9007199254740993', msgRandom:'18446744073709551615',
   msgTime:'1794567890', clientSeq:'9007199254740995', guildId:'', chatType:1, msgType:2, subMsgType:0,
@@ -57,8 +134,18 @@ self.sendStatus=1; listener.onAddSendMsg(self);
 self.sendStatus=2; listener.onMsgInfoListUpdate([self]);
 // Present-but-invalid identity is counted by the Rust decoder, without blocking the next row.
 const empty = record('6'); empty.senderUin=''; listener.onRecvMsg([empty,record('90071992547409931236')]);
+// An identical native ID in a different conversation is a separate identity.
+const group = record('90071992547409931236');
+group.chatType=2; group.peerUid='30003'; group.peerUin='30003';
+listener.onRecvMsg([group]);
+const voice = record('90071992547409931237');
+voice.elements = [{elementType:4, elementId:'90071992547409931238',
+  pttElement:{fileSize:'1073',md5HexStr:'0123456789ABCDEF0123456789ABCDEF',filePath:'private-silk'}}];
+const wrongVoice = {...voice, msgId:'12', senderUid:'u_other'};
+listener.onRecvMsg([wrongVoice, voice]);
 const first = JSON.parse(eval(poll));
-assert.equal(first.rejected,2); assert.equal(first.overflow,1);
+assert.equal(first.rejected,3); assert.equal(first.overflow,1);
+assert.ok(!JSON.stringify(first).includes('private-silk'));
 assert.equal(JSON.parse(eval(poll)).items.length,0);
 // Item limit is explicit, not truncation; retain all admitted records byte-for-byte.
 for(let i=0;i<130;i++) { const r=record(String(100+i)); r.elements[0].textElement.content='small'; listener.onRecvMsg([r]); }
@@ -79,7 +166,7 @@ process.stdout.write(JSON.stringify(first));
 }
 
 #[test]
-fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_audited() {
+fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     let json = script_batch();
     let resident = Resident::new(OfflineHost, ResidentLimits::default());
     resident.bootstrap().unwrap();
@@ -90,12 +177,12 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
         wrapper_session: "nt_0".into(),
     };
     let batch = resident.ingest_wrapper_batch(&json, &binding).unwrap();
-    assert_eq!(batch.stats.rejected, 3);
+    assert_eq!(batch.stats.rejected, 4);
     assert_eq!(batch.stats.overflow, 1);
-    assert_eq!(resident.counters().wrapper_records_rejected, 3);
+    assert_eq!(resident.counters().wrapper_records_rejected, 4);
     assert_eq!(resident.counters().wrapper_records_overflow, 1);
     let events = resident.take_events();
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 6);
     assert_ne!(
         events[1].source, events[2].source,
         "add and update occupy independent dedup classes"
@@ -117,7 +204,7 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
     std::fs::create_dir_all(&dir).unwrap();
     let journal = dir.join("journal.log");
     let prefix = format!("\\\\.\\pipe\\caligo-wrapper-{}-{nonce}", std::process::id());
-    let daemon = Daemon::start(DaemonConfig {
+    let config = DaemonConfig {
         pipe_prefix: prefix.clone(),
         journal_path: journal.clone(),
         module_baseline: "lab-wrapper".into(),
@@ -127,8 +214,10 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
         runtime: RuntimeConfig::default(),
         test_fault_break_bridge_after_hello: false,
         test_fault_break_bridge_after_result: false,
-    })
-    .unwrap();
+    };
+    let daemon = Daemon::start_with_voice_media(config, Some(offline_voice_tools(&dir))).unwrap();
+    let (_, ws_events) = daemon.subscribe_onebot_events("wrapper-ws");
+    let (_, sse_events) = daemon.subscribe_onebot_events("wrapper-sse");
     let run = daemon.clone();
     let runner = std::thread::spawn(move || run.run());
     let (bridge_name, control_name) = daemon.pipe_names();
@@ -159,6 +248,7 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
     };
     let mut current = cfg.clone();
     current.session_generation = 2;
+    let mut repeated_payload = None;
     for (i, ev) in events.iter().enumerate() {
         // Reject cross-account/host/generation rebinding before wire emission.
         assert!(event_payload(&current, ev, 1).is_err());
@@ -185,19 +275,202 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
                 .session_generation = 2;
             payload = event_payload(&current, &fresh, (i + 1) as u64).unwrap();
         }
+        if i == 3 {
+            repeated_payload = Some(payload.clone());
+        }
         bridge.send(&BridgeMsg::Event { event: payload }).unwrap();
         assert!(matches!(
             bridge.recv().unwrap(),
             CoreToBridgeMsg::EventAck { .. }
         ));
     }
+    bridge
+        .send(&BridgeMsg::Event {
+            event: repeated_payload.unwrap(),
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::EventAck {
+            suppressed: true,
+            ..
+        }
+    ));
+    let mut ids = Vec::new();
+    for (kind, subtype, peer) in [
+        ("private", "friend", None),
+        ("group", "normal", Some(30003)),
+    ] {
+        let raw = ws_events
+            .recv_timeout(Duration::from_secs(1))
+            .expect("persisted receive event");
+        assert_eq!(
+            sse_events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            raw
+        );
+        let event: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(event["message_type"], kind);
+        assert_eq!(event["sub_type"], subtype);
+        assert_eq!(
+            event.get("group_id").and_then(serde_json::Value::as_u64),
+            peer
+        );
+        assert_eq!(event["user_id"], 20002);
+        assert_eq!(event["self_id"], 10001);
+        assert_eq!(event["time"], 1794567890);
+        assert_eq!(event["font"], 14);
+        let id = i32::try_from(event["message_id"].as_i64().unwrap()).unwrap();
+        ids.push(id);
+        let stored = daemon
+            .get_msg(id)
+            .expect("event ID must be readable before fanout");
+        assert_eq!(stored.message, event["raw_message"]);
+    }
+    assert_ne!(ids[0], ids[1]);
+    let raw = ws_events.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        sse_events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        raw
+    );
+    let event: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let voice_id = event["message_id"].as_i64().unwrap() as i32;
+    let file = event["message"][0]["data"]["file"].as_str().unwrap();
+    assert_eq!(event["message"][0]["type"], "record");
+    assert_eq!(daemon.get_msg(voice_id).unwrap().message, event["message"]);
+    let handler = caligo_core::onebot_server::action_handler(daemon.clone());
+    let args = serde_json::json!({"file":file});
+    assert_eq!(
+        handler("get_record", &args, serde_json::Value::Null).retcode,
+        1404
+    );
+    assert_eq!(
+        handler(
+            "get_record",
+            &serde_json::json!({"file":file,"out_format":"mp3"}),
+            serde_json::Value::Null
+        )
+        .retcode,
+        1404
+    );
+    assert_eq!(
+        handler(
+            "get_record",
+            &serde_json::json!({"file":"caligo-voice:30003:4"}),
+            serde_json::Value::Null
+        )
+        .retcode,
+        1440
+    );
+    let scope = caligo_model::capability::QueryScope {
+        account: "10001".into(),
+        host_nonce: 9,
+        session_generation: 2,
+        connection_epoch: daemon.connection_epoch(),
+    };
+    bridge
+        .send(&BridgeMsg::QueryCapabilities {
+            revision: caligo_model::ipc_v3::CAPABILITY_QUERY_REVISION,
+            scope: scope.clone(),
+            capabilities: vec![caligo_model::capability::QueryCapability::VoiceDownload],
+        })
+        .unwrap();
+    bridge
+        .send(&BridgeMsg::Health {
+            ingress_pending: 0,
+            native_ops_total: 0,
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::HealthAck {}
+    ));
+    let info = daemon.voice_info(file).unwrap();
+    // A valid wire shape still fails if its fingerprint disagrees with the journal.
+    for (format, md5, code) in [
+        (Some("wav"), "ffffffffffffffffffffffffffffffff", 1440),
+        (None, info.md5.as_str(), 0),
+        (Some("wav"), info.md5.as_str(), 0),
+        (Some("ogg"), info.md5.as_str(), 0),
+        (Some("wav"), info.md5.as_str(), 1502),
+    ] {
+        if code == 1502 {
+            std::fs::write(dir.join("silk.exe"), b"replaced fixture executable").unwrap();
+        }
+        let handler = handler.clone();
+        let args = match format {
+            Some(format) => serde_json::json!({"file_id":file,"out_format":format}),
+            None => args.clone(),
+        };
+        let waiter =
+            std::thread::spawn(move || handler("get_record", &args, serde_json::json!("record")));
+        let CoreToBridgeMsg::Query {
+            request_id,
+            scope: actual_scope,
+            query,
+            ..
+        } = bridge.recv().unwrap()
+        else {
+            panic!("expected download query");
+        };
+        assert_eq!(actual_scope, scope);
+        assert_eq!(
+            query,
+            caligo_model::capability::HostQuery::VoiceDownload {
+                peer_uid: info.peer_uid.clone(),
+                message_id: info.message_id.clone(),
+                element_id: info.element_id.clone(),
+            }
+        );
+        let mut response_info = info.clone();
+        response_info.md5 = md5.into();
+        let silk_hex = format!(
+            "02232153494c4b5f5633{}",
+            "00".repeat(info.size as usize - 10)
+        );
+        bridge
+            .send(&BridgeMsg::QueryResult {
+                request_id,
+                scope: scope.clone(),
+                outcome: caligo_model::capability::QueryOutcome::Success(
+                    caligo_model::capability::QueryData::VoiceDownload(
+                        caligo_model::capability::VoiceDownload {
+                            info: response_info,
+                            silk_hex,
+                        },
+                    ),
+                ),
+            })
+            .unwrap();
+        let result = waiter.join().unwrap();
+        assert_eq!(result.retcode, code);
+        assert_eq!(result.echo, "record");
+        if code == 0 {
+            let (name, size, base64_prefix) = match format {
+                Some("wav") => ("voice.wav", "12", "UklGRmZha2VXQVZF"),
+                Some("ogg") => ("voice.ogg", "11", "T2dnU2ZpeHR1cmU="),
+                None => ("voice.silk", "1073", "AiMhU0lMS19WMw"),
+                _ => unreachable!(),
+            };
+            assert_eq!(result.data["file_name"], name);
+            assert_eq!(result.data["file_size"], size);
+            assert!(result.data["base64"].as_str().unwrap().starts_with(base64_prefix));
+            assert!(result.data.get("file").is_none());
+        } else {
+            assert!(result.data.is_null());
+        }
+    }
+    assert_eq!(std::fs::read_dir(dir.join("media-jobs")).unwrap().count(), 0);
+    assert!(
+        ws_events.try_recv().is_err(),
+        "old-generation, sent, updated, and replayed events must not fan out"
+    );
     let mut control = ControlClient::connect(&control_name, &auth, "lab").unwrap();
     match control
         .request(ControlMsg::DrainEvents { max: 10 })
         .unwrap()
     {
         CoreToControlMsg::EventsBatch { events } => {
-            assert_eq!(events.len(), 3, "old generation is audit-only");
+            assert_eq!(events.len(), 5, "old generation and replay are excluded");
             assert!(events.iter().all(|e| e.onebot_projection.is_none()));
             assert_eq!(events[0].direction, "self_sent");
         }
@@ -241,13 +514,44 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
         observed_at_unix_ms: 1,
         source: caligo_model::EventSource::Recv,
     };
+    let mut wrong_host = event.clone();
+    wrong_host
+        .wrapper_message
+        .as_mut()
+        .unwrap()
+        .binding
+        .host_nonce += 1;
+    assert_eq!(
+        budget_actor.on_event(wrong_host),
+        Err(caligo_model::RejectReason::SessionStale)
+    );
     assert!(event.queue_bytes() > events[0].text.len() + 1024);
     assert!(matches!(
         budget_actor.on_event(event),
         Err(caligo_model::RejectReason::CapacityExhausted { .. })
     ));
     let (_, report) = AccountActor::open(&journal, RuntimeConfig::default()).unwrap();
-    assert_eq!(report.recovered_events, 4);
+    assert_eq!(report.recovered_events, 6);
+    let store = caligo_core::message_store::MessageStore::open(
+        journal.with_extension("messages.jsonl"),
+        10001,
+        None,
+    )
+    .unwrap();
+    let (mut reopened, _) =
+        AccountActor::open_with_message_store(&journal, RuntimeConfig::default(), store).unwrap();
+    let mut session = budget_actor.session().unwrap().clone();
+    session.session_generation = 2;
+    reopened.attach_session(session).unwrap();
+    assert_eq!(
+        reopened.onebot_message_id(
+            &caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002"),
+            &events[0].native_id,
+        ),
+        None,
+        "old-generation audit must not create a public ID on restart"
+    );
+    assert!(ids.iter().all(|id| reopened.get_msg(*id).is_some()));
     let (_, recovered) = caligo_core::journal::Journal::open(
         &journal,
         16 * 1024 * 1024,
@@ -262,8 +566,10 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
             _ => None,
         })
         .collect();
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 6);
     assert!(records.iter().all(|e| e.onebot_projection.is_none()));
+    assert!(records[0].audit_only);
+    assert!(records[1..].iter().all(|e| !e.audit_only));
     let raw = records[0].wrapper_message.as_ref().unwrap();
     assert_eq!(raw.record.msg_id, "90071992547409931234");
     assert_eq!(raw.record.client_seq.as_deref(), Some("9007199254740995"));
@@ -271,4 +577,65 @@ fn d8_owned_records_reach_journal_without_projection_and_old_generations_are_aud
     assert_eq!(raw.record.msg_time, "1794567890");
     assert_eq!(raw.text().unwrap(), events[0].text);
     assert_eq!(records[0].session_generation, 1);
+    let voice_id = reopened
+        .onebot_message_id(
+            &caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002"),
+            &events[5].native_id,
+        )
+        .unwrap();
+    let token = format!("caligo-voice:10001:{voice_id}");
+    assert_eq!(
+        reopened.get_msg(voice_id).unwrap().message,
+        serde_json::json!([{"type":"record","data":{"file":token}}])
+    );
+    let voice = records[5]
+        .wrapper_message
+        .as_ref()
+        .unwrap()
+        .voice()
+        .unwrap();
+    assert_eq!(voice.element_id, "90071992547409931238");
+    assert_eq!(voice.size, 1073);
+    assert_eq!(
+        reopened.voice_info(&token).unwrap().element_id,
+        voice.element_id
+    );
+    let recovered_update = &records[2];
+    let replayed_update = caligo_model::MsgEvent {
+        event_seq: 0,
+        session_generation: 2,
+        session: caligo_model::SessionKey::new(
+            "10001",
+            caligo_model::SessionKind::Private,
+            "20002",
+        ),
+        direction: caligo_model::Direction::SelfSent,
+        sender: recovered_update.sender.clone(),
+        native_id: caligo_model::NativeMessageId(recovered_update.native_id.clone()),
+        text: recovered_update.text.clone(),
+        platform_time: recovered_update.platform_time,
+        wrapper_message: recovered_update.wrapper_message.clone(),
+        onebot_projection: None,
+        observed_at_unix_ms: recovered_update.observed_at_unix_ms + 100,
+        source: caligo_model::EventSource::Update,
+    };
+    let mut newer_update = replayed_update.clone();
+    newer_update.text = "revised self message".into();
+    let raw = &mut newer_update.wrapper_message.as_mut().unwrap().record;
+    raw.elements[0].text_element.as_mut().unwrap().content = newer_update.text.clone();
+    assert!(matches!(
+        reopened.on_event(newer_update).unwrap(),
+        caligo_core::runtime::EventReceipt::Published { .. }
+    ));
+    let sent_id = reopened
+        .onebot_message_id(&replayed_update.session, &replayed_update.native_id.0)
+        .unwrap();
+    assert_eq!(
+        reopened.on_event(replayed_update).unwrap(),
+        caligo_core::runtime::EventReceipt::DuplicateSuppressed
+    );
+    assert_eq!(
+        reopened.get_msg(sent_id).unwrap().message,
+        "revised self message"
+    );
 }
