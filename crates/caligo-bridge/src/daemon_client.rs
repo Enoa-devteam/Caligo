@@ -864,6 +864,8 @@ fn capability_messages<A: crate::host_adapter::HostAdapter>(
             group_text,
             private_voice: resident.supports_private_voice(),
             group_voice: resident.supports_group_voice(),
+            private_image: resident.supports_image(1),
+            group_image: resident.supports_image(2),
         },
     ]
 }
@@ -1138,6 +1140,20 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                     wake();
                 }
                 heartbeat_misses = 0;
+            }
+            Ok(CoreToBridgeMsg::DispatchImage { scope,request_id,wire_seq,timeout_ms,chat_type,peer_uin,png }) => {
+                c.dispatches += 1;
+                let valid=scope == query_scope && wire_seq > 0 && (1..=30_000).contains(&timeout_ms)
+                    && matches!(chat_type, 1 | 2) && resident.supports_image(chat_type) && caligo_model::capability::positive_decimal(&peer_uin)
+                    && (chat_type == 2 || peer_uin != cfg.account)
+                    && caligo_model::png::dimensions(&png).is_some();
+                if valid && resident.submit(crate::resident::OwnedRequest::SendImage {
+                    request_id:request_id.clone(),wire_seq,scope,peer_uin,chat_type,png,
+                    deadline:Instant::now()+Duration::from_millis(timeout_ms),
+                }) == crate::resident::SubmitVerdict::Accepted { wake(); }
+                else if send_json(conn,&BridgeMsg::SendResult {request_id,
+                    outcome:OutcomePayload::Failure {reason:"image dispatch rejected before submission".into()},
+                }).is_err() {return SessionEnd::Broken;}
             }
             Ok(message @ (CoreToBridgeMsg::DispatchPrivateVoice { .. } | CoreToBridgeMsg::DispatchGroupVoice { .. })) => {
                 c.dispatches += 1;
@@ -1430,7 +1446,7 @@ mod tests {
             );
             let [
                 BridgeMsg::QueryCapabilities { revision, scope: query_scope, capabilities },
-                BridgeMsg::SendCapabilities { scope: send_scope, private_text, group_text, private_voice: false, group_voice: false },
+                BridgeMsg::SendCapabilities { scope: send_scope, private_text, group_text, private_voice: false, group_voice: false, private_image: false, group_image: false },
             ] = capability_messages(&resident, &expected_scope) else {
                 panic!("query and send capability announcements missing");
             };

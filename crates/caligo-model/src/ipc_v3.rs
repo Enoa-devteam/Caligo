@@ -69,6 +69,15 @@ pub enum CoreToBridgeMsg {
         group_id: String,
         silk: Vec<u8>,
     },
+    DispatchImage {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        chat_type: u32,
+        peer_uin: String,
+        png: Vec<u8>,
+    },
     Query {
         request_id: String,
         scope: QueryScope,
@@ -141,6 +150,10 @@ pub enum BridgeMsg {
         private_voice: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         group_voice: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_image: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        group_image: bool,
     },
     QueryResult {
         request_id: String,
@@ -255,6 +268,8 @@ mod tests {
             group_text: false,
             private_voice: false,
             group_voice: false,
+            private_image: false,
+            group_image: false,
         };
         assert_eq!(
             serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&send_capabilities).unwrap())
@@ -264,6 +279,13 @@ mod tests {
         let legacy = serde_json::to_value(&send_capabilities).unwrap();
         assert!(legacy["d"].get("group_voice").is_none());
         assert!(legacy["d"].get("private_voice").is_none());
+        assert!(legacy["d"].get("private_image").is_none());
+        assert!(legacy["d"].get("group_image").is_none());
+        assert!(matches!(serde_json::from_value::<BridgeMsg>(legacy.clone()).unwrap(),
+            BridgeMsg::SendCapabilities {private_image:false,group_image:false,..}));
+        let image = CoreToBridgeMsg::DispatchImage {scope:scope.clone(),request_id:"image-lab".into(),
+            wire_seq:9,timeout_ms:1000,chat_type:2,peer_uin:"30003".into(),png:vec![1,2,3]};
+        assert_eq!(serde_json::from_value::<CoreToBridgeMsg>(serde_json::to_value(&image).unwrap()).unwrap(),image);
         let mut group = legacy;
         group["d"]["group_voice"] = serde_json::json!(true);
         assert!(matches!(

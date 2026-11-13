@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-13 A2 PNG 发送接线：单 PNG 已经共享 OneBot、持久请求、scoped IPC、owner 和 D9 精确回读贯通；私聊/群聊独立能力，成功 ID 等待消息入库，unknown 不重发。修复查询能力 9 项上限拒绝当前 11 项声明的问题。串行 default/research 和独立并行 research 全仓、覆盖 12/12 通过；并发端口及 PID 复用导致的旧测试隔离问题已修正，继续排除离线阻塞，未启动 QQ。[PNG 发送接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片发送接线)
+
 2026-11-13 A2 PNG 发送合同：完成有界 PNG framing/CRC 验证、自有宿主缓存构造和 D9 精确自发回读合同。合成宿主覆盖私聊/群聊、文件冲突、错回读、歧义、超时和停止；scoped IPC/core/OneBot 图片发送尚未接入，不声明发送能力。继续先整合全部任务再集中 QQ 验收。[PNG 发送合同](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-png-发送构造与-d9-合同)
 
 2026-11-13 A2 OneBot 图片：固定 profile 的普通入站 PNG 已接 D8、持久消息、共享私聊/群聊事件和 `get_image`。事件/get_msg/下载使用同一账号限定文件标识，重启保留 ID 与元数据。上传、自发图片、其他格式、其余任务及统一 QQ 验收仍未完成。[OneBot PNG 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)

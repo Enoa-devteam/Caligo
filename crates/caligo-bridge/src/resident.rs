@@ -72,12 +72,21 @@ pub enum OwnedRequest {
         chat_type: u32,
         silk: Vec<u8>,
     },
+    SendImage {
+        request_id: String,
+        wire_seq: u32,
+        deadline: std::time::Instant,
+        scope: QueryScope,
+        peer_uin: String,
+        chat_type: u32,
+        png: Vec<u8>,
+    },
 }
 
 impl OwnedRequest {
     fn send_id(&self) -> Option<&String> {
         match self {
-            Self::SendText { request_id, .. } | Self::SendVoice { request_id, .. } => {
+            Self::SendText { request_id, .. } | Self::SendVoice { request_id, .. } | Self::SendImage { request_id, .. } => {
                 Some(request_id)
             }
             Self::Probe { .. } => None,
@@ -158,6 +167,7 @@ enum ResidentState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitVerdict {
     Accepted,
+    Invalid,
     /// 未初始化。
     NotReady,
     /// 关闭/隔离中,拒绝新提交。
@@ -358,6 +368,10 @@ impl<A: HostAdapter> Resident<A> {
         self.adapter.lock().unwrap().supports_group_voice()
     }
 
+    pub fn supports_image(&self, chat_type: u32) -> bool {
+        self.adapter.lock().unwrap().supports_image(chat_type)
+    }
+
     pub fn set_bridge_scope(&self, scope: Option<QueryScope>) {
         let _adapter = self.adapter.lock().unwrap();
         self.core.lock().unwrap().bridge_scope = scope;
@@ -427,6 +441,9 @@ impl<A: HostAdapter> Resident<A> {
 
     /// 任意线程提交 owned 动作(TSFN 语义:跨线程只入队,不执行)。
     pub fn submit(&self, req: OwnedRequest) -> SubmitVerdict {
+        if let OwnedRequest::SendImage { png, .. } = &req {
+            if caligo_model::png::dimensions(png).is_none() { return SubmitVerdict::Invalid; }
+        }
         let mut c = self.core.lock().unwrap();
         c.counters.submitted_total += 1;
         match c.state {
@@ -541,6 +558,16 @@ impl<A: HostAdapter> Resident<A> {
                             silk: silk.clone(),
                         }
                     }
+                    OwnedRequest::SendImage { request_id, wire_seq, deadline, peer_uin, chat_type, png, .. } => {
+                        HostOp::SendImage {
+                            request_id: request_id.clone(),
+                            wire_seq: *wire_seq,
+                            timeout_ms: deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u64,
+                            peer_uin: peer_uin.clone(),
+                            chat_type: *chat_type,
+                            png: png.clone(),
+                        }
+                    }
                 };
                 (req, op)
             }; // core 锁释放:native 调用期间回调可重入。
@@ -564,15 +591,20 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     break;
                 }
-                if let OwnedRequest::SendVoice { deadline, scope, chat_type, .. } = &req {
+                if let OwnedRequest::SendVoice { deadline, scope, chat_type, .. }
+                    | OwnedRequest::SendImage { deadline, scope, chat_type, .. } = &req {
                     let core = self.core.lock().unwrap();
                     let current = core.state == ResidentState::Ready && core.bridge_scope.as_ref() == Some(scope);
                     drop(core);
-                    let supported = match chat_type {
+                    let supported = if let OwnedRequest::SendImage { png, peer_uin, .. } = &req {
+                        matches!(chat_type, 1 | 2) && adapter.supports_image(*chat_type) && caligo_model::png::dimensions(png).is_some()
+                            && caligo_model::capability::positive_decimal(peer_uin)
+                            && (*chat_type == 2 || peer_uin != &scope.account)
+                    } else { match chat_type {
                         1 => adapter.supports_private_voice(),
                         2 => adapter.supports_group_voice(),
                         _ => false,
-                    };
+                    }};
                     if !current || *deadline <= std::time::Instant::now() || !supported {
                         Err(HostError::Native { code: 3 })
                     } else {

@@ -1597,8 +1597,7 @@ pub fn build_voice_send_js(
     Some(format!("({})({args})", include_str!("qq_voice_send.js")))
 }
 
-/// Fixed PNG preparation/submission contract. Public IPC capability remains closed
-/// until its durable dispatch integration is installed.
+/// Fixed PNG preparation/submission contract used by scoped durable image dispatch.
 pub fn build_image_send_js(
     chat_type: u32, account: &str, peer_uin: &str, request_id: &str,
     wire_seq: u32, timeout_ms: u64, png: &[u8],

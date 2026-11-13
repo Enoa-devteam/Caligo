@@ -190,3 +190,19 @@ GitNexus 初次增量索引出现异常 target UID 与同名合并，按 UNKNOWN
 实际检查：PNG framing unit 1/1；research 新 `wrapper_image_send` 1/1、原 `wrapper_send` 2/2、`wrapper_image_contract` 4/4 通过。新发送场景覆盖两种会话、缓存冲突/错路径、重复、Promise 与精确回读先后、元素/消息歧义、超时及 stop，并将成功的两条自发记录送入生产 Rust D8 decoder，核对同一 native/element/MD5/尺寸。新增自发 picType=1000 下载回归也通过，继续返回真实 PNG owned bytes。
 
 串行 `init.ps1 -Mode all` 与默认并发 research 全仓均退出 0，覆盖检查含实际 exporter 12/12。日志在 ignored `local-evidence/snowcat-png-send-contract.log`、`snowcat-png-send-all.log`、`snowcat-png-send-parallel.log`、`snowcat-png-send-download.log` 和 `snowcat-png-send-coverage.log`。docs PASS（15 live docs / 262 local links / 35 historical entries / 10 features）；Windows diff 检查通过。GitNexus 按实际变更重新 force/index-only/PDG 刷新；字符串脚本与方法匹配 UNKNOWN 由源码补证，完整 staged/all 报告保留本机，未将缺失图边当作无影响。没有新增公开 action、image 发送 capability 或现场准入，候选仍未冻结。
+
+
+## A2 OneBot PNG 图片发送接线
+
+从 `a35463f` 接通普通单 PNG 的正常发送路径：共享 OneBot `image` 段 → Daemon 持久请求 → 绑定账号/host nonce/session generation/connection epoch 的 `DispatchImage` → bridge worker → Resident owner → 固定 profile 的缓存构造与 D9 精确回读。私聊和群聊使用独立 image 能力位；旧声明缺字段时默认 false。只接受不超过 128 KiB 的 Base64 普通 PNG，拒绝路径、URL、坏 framing/CRC、混合段和错账号；请求账本不保存媒体原文，unknown 不重发。native 回执本身不产生公开消息 ID，精确自发图片入库后才返回 ID；get_msg/get_image 与重启恢复沿用同一账号限定标识。
+
+本轮同时修复真实阻塞：broker 的查询能力上限停在 9，而当前固定 profile 声明 11 项，整份声明因此被拒绝。上限改由 `QueryCapability::ALL` 的 12 个强类型变体派生；全部声明可通过，重复声明继续拒绝并清空权限。
+
+GitNexus 绑定仓库/工作目录 `E:/stella/Caligo`，起点索引/HEAD `a35463f`。共享 send_payload 为 CRITICAL（22 symbols），已预警并覆盖共用动作层和真实管道；其余 owner、能力和 registry 影响分析保留 ignored `local-evidence/snowcat-png-wire*-impact.log`。字符串构造与动态 trait 分派由源码补证。
+
+定向检查：research `resident_lifecycle` 22/22，包含 scope 失效、能力撤销、过期、坏 PNG 和重复提交零额外原生调用；真实 worker 的 `daemon_client_lab` 7/7，包含私聊/群聊 PNG 字节、owner 与回执接线；`onebot_private_send_lab` 5/5，包含独立能力、坏输入、等待持久回读、get_msg 和重启；查询 LAB 最终 13/13（包含 image unknown/reconnect 不重发）。原失败日志保留：能力测试第二次故意发送重复声明却误期待 HealthAck；图片测试误用 UTF-8 读取带二进制 framing 的 journal；均已修正测试，未改业务条件。串行 all 首轮因 Windows PowerShell 5 对 native stderr 的重定向行为提前退出；改为由外层 shell 捕获原始 stdout/stderr 后，串行 default/research 全仓通过。覆盖检查含实际 exporter 12/12，无 skipped。首次并行 research 在 manager_smoke 发生 1 PASS / 2 FAIL：各 fixture 的 free_port 立即释放，Windows 可复用同一个端口，导致多端口配置重复或监听冲突；已给合成 fixture 共享端口去重集合，并补配置失败 stderr，定向烟测 3/3。这里只修测试端口分配，不放宽生产唯一性和绑定拒绝。原失败和最终报告分别保留 ignored `snowcat-png-wire-parallel.log`、`snowcat-manager-ports-final.log`，最终全仓/图检查在本节追加。没有启动 QQ，完整候选仍未冻结，产品 NOT READY。
+
+
+后续顺序复核保留两项新增失败：一次 default/research 在同一 target-dir 重叠执行，默认 gate 读到被 research 覆盖的可执行文件，结果作废并改为顺序运行；之后 research 的 daemon_client_lab 首项发现旧 fixture 目录仅含 PID，Windows PID 复用会读到历史 `R1` 成功，尚未派发便满足旧成功条件，引发 dispatch 计数失败和后续 Mutex poison。已按每次 fixture 的 PID、时钟和进程序号隔离 journal，保持生产恢复语义不变。失败原报告为 ignored `snowcat-png-wire-all-verified.log`、`snowcat-png-wire-all-sequential-final.log`。不将失败隐藏为通过。
+
+最终验证：`snowcat-png-wire-all-isolated-final.log` 的顺序 default/research 全仓退出 0，随后独立默认并发 research 全仓 `snowcat-png-wire-parallel-isolated-final.log` 退出 0。覆盖含真实 registry exporter 12/12，无 skipped；docs 和 Windows diff 检查通过。提交前 force/index-only/PDG 重建并对 staged/all 分别做结构化 detect，完整报告保存在 ignored `snowcat-png-wire-detect-*.json`；前轮两个 scope 均完整返回 98 symbols / 18 flows、CRITICAL，后续 fixture 隔离也纳入最终检查。图仍有 FTS 不可用及 PDG 召回限制，未凭缺边降低风险。

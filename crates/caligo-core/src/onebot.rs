@@ -148,7 +148,7 @@ impl ActionInputSchema {
             ]
         });
         if matches!(self, Self::GroupMessage | Self::PrivateMessage | Self::Message) {
-            message["description"] = Value::from("Literal text, text segments, or one record segment containing Tencent SILK v3 Base64");
+            message["description"] = Value::from("Literal text, text segments, one Tencent SILK v3 record, or one ordinary PNG image in Base64");
             message["anyOf"].as_array_mut().unwrap().push(serde_json::json!({
                 "type":"array", "minItems":1, "maxItems":1, "items":{
                     "type":"object", "required":["type","data"],
@@ -159,6 +159,13 @@ impl ActionInputSchema {
                     }}
                 }
             }));
+        }
+        if matches!(self, Self::GroupMessage | Self::PrivateMessage | Self::Message) {
+            let mut image = message["anyOf"][2].clone();
+            image["items"]["properties"]["type"]["const"] = Value::from("image");
+            image["items"]["properties"]["data"]["properties"]["file"]["maxLength"] =
+                Value::from(9 + 4*caligo_model::png::MAX_SEND_BYTES.div_ceil(3));
+            message["anyOf"].as_array_mut().unwrap().push(image);
         }
         let mut schema = serde_json::json!({"type":"object", "properties":{}});
         match self {
@@ -480,6 +487,16 @@ fn send_payload(
         }
     };
     if let Some([item]) = params.get("message").and_then(Value::as_array).map(Vec::as_slice) {
+        if item.get("type").and_then(Value::as_str) == Some("image") {
+            let Some(png)=item.get("data").and_then(|data|data.get("file")).and_then(Value::as_str)
+                .and_then(|file|file.strip_prefix("base64://"))
+                .filter(|encoded|encoded.len() <= 4*caligo_model::png::MAX_SEND_BYTES.div_ceil(3))
+                .and_then(|encoded|STANDARD.decode(encoded).ok())
+                .filter(|bytes|caligo_model::png::dimensions(bytes).is_some()) else {
+                return ActionResponse::failed(RET_BAD_PARAMS,"图片 file 须为有界普通 PNG Base64",echo);
+            };
+            return dispatch_send(echo,sink.send_image(target,png),allow_async);
+        }
         if item.get("type").and_then(Value::as_str) == Some("record") {
             let Some(silk) = item.get("data").and_then(|data| data.get("file"))
                 .and_then(Value::as_str).and_then(|file| file.strip_prefix("base64://"))

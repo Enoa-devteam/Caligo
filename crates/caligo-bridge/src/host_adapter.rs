@@ -41,6 +41,14 @@ pub enum HostOp {
         chat_type: u32,
         silk: Vec<u8>,
     },
+    SendImage {
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        peer_uin: String,
+        chat_type: u32,
+        png: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +125,9 @@ pub trait HostAdapter {
         false
     }
     fn supports_group_voice(&self) -> bool {
+        false
+    }
+    fn supports_image(&self, _chat_type: u32) -> bool {
         false
     }
     /// Cancel a pending wrapper query on the owner thread.

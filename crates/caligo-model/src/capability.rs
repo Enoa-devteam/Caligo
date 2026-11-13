@@ -28,6 +28,24 @@ pub enum QueryCapability {
     ImageDownload,
 }
 
+impl QueryCapability {
+    /// Single authority for the broker's bounded advertisement size.
+    pub const ALL: &'static [Self] = &[
+        Self::LoginInfo,
+        Self::FriendList,
+        Self::GroupList,
+        Self::GroupInfo,
+        Self::UinToUid,
+        Self::UidToUin,
+        Self::MessagesById,
+        Self::VoiceInfo,
+        Self::VoiceDownload,
+        Self::ExactVoiceDownload,
+        Self::ImageInfo,
+        Self::ImageDownload,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryScope {

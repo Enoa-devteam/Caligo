@@ -49,7 +49,7 @@ impl HostAdapter for LabHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
-            HostOp::SendVoice { .. } => panic!("fixture does not send voice"),
+            HostOp::SendVoice { .. } | HostOp::SendImage { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { .. } => {
                 let n = LAB_SENDS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -107,7 +107,14 @@ fn start_daemon_faults(
     Arc<Daemon>,
     impl FnOnce() -> std::thread::JoinHandle<Result<(), caligo_core::daemon::SessionError>>,
 ) {
-    let dir = std::env::temp_dir().join(format!("caligo-dcl-{}", std::process::id()));
+    // Neither a reused Windows PID nor another fixture may recover this
+    // test's request IDs from an unrelated journal.
+    static JOURNAL_SEQ: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "caligo-dcl-{}-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        JOURNAL_SEQ.fetch_add(1, Ordering::Relaxed),
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let config = DaemonConfig {
         pipe_prefix: prefix.to_string(),
@@ -860,4 +867,122 @@ fn reconnect_requires_same_host_and_advances_epoch() {
         .request(caligo_core::ipc::ControlMsg::Stop {})
         .unwrap();
     runner.join().unwrap().unwrap();
+}
+
+#[test]
+fn private_and_group_png_traverse_real_worker_and_owner_without_retry() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    struct ImageHost(Arc<std::sync::Mutex<Vec<(u32, String, Vec<u8>)>>>);
+    impl HostAdapter for ImageHost {
+        fn owner_thread_id(&self) -> u64 {
+            lab_tid()
+        }
+        fn current_thread_id(&self) -> u64 {
+            lab_tid()
+        }
+        fn env_valid(&self) -> bool {
+            true
+        }
+        fn current_context_ok(&self) -> bool {
+            true
+        }
+        fn supports_image(&self, chat: u32) -> bool {
+            matches!(chat, 1 | 2)
+        }
+        fn native_op(
+            &mut self,
+            op: HostOp,
+        ) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            Ok(match op {
+                HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
+                HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+                HostOp::SendImage {
+                    chat_type,
+                    peer_uin,
+                    png,
+                    ..
+                } => {
+                    self.0.lock().unwrap().push((chat_type, peer_uin, png));
+                    HostOpResult::Sent {
+                        native_id: Some(format!("90071992547409931{chat_type}")),
+                    }
+                }
+                _ => panic!("image-only fixture"),
+            })
+        }
+    }
+    let png_hex="89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63105432fe0f000214016604e0de7f0000000049454e44ae426082";
+    let png: Vec<u8> = png_hex
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|v| u8::from_str_radix(std::str::from_utf8(v).unwrap(), 16).unwrap())
+        .collect();
+    let prefix = unique_prefix("image");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let resident = Arc::new(Resident::new(
+        ImageHost(calls.clone()),
+        ResidentLimits::default(),
+    ));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let (w_tx, w_rx) = mpsc::channel();
+    let cfg = worker_config(&prefix, &auth);
+    let worker_resident = resident.clone();
+    let worker_stop = stop.clone();
+    std::thread::spawn(move || {
+        w_tx.send(run_worker(
+            cfg,
+            worker_resident,
+            &wake_true,
+            rx,
+            _ev_placeholder(),
+            worker_stop,
+        ))
+        .unwrap();
+    });
+    let until = Instant::now() + Duration::from_secs(5);
+    while !daemon.supports_image(1) || !daemon.supports_image(2) {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for (chat, kind, peer) in [
+        (1, caligo_model::SessionKind::Private, "20002"),
+        (2, caligo_model::SessionKind::Group, "30003"),
+    ] {
+        let id = daemon.submit_image(kind, peer, png.clone(), 5000).unwrap();
+        let target = caligo_model::SessionKey::new("10001", kind, peer);
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            resident.drain().unwrap();
+            for notice in resident.take_results() {
+                tx.send(notice).unwrap();
+            }
+            if matches!(
+                daemon.onebot_text_status(&id, &target),
+                Some((caligo_model::ActionState::ConfirmedSuccess { .. }, None))
+            ) {
+                break;
+            }
+            assert!(Instant::now() < until, "image {chat} did not finish");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![(1, "20002".into(), png.clone()), (2, "30003".into(), png)]
+    );
+    let mut control =
+        ControlClient::connect(&pipe_names_from_prefix(&prefix).1, &auth, "image-lab").unwrap();
+    control
+        .request(caligo_core::ipc::ControlMsg::Stop {})
+        .unwrap();
+    let (counters, exit) = w_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    runner.join().unwrap().unwrap();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.dispatches, 2);
+    assert_eq!(counters.bootstraps_attempted, 0);
 }

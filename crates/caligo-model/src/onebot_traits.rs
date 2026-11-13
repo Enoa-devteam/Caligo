@@ -34,6 +34,9 @@ pub enum SendDisposition {
 pub trait SendSink {
     /// Dispatch once. A queued result is not a successful standard OneBot send.
     fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String>;
+    fn send_image(&mut self, _target: SendTarget, _png: Vec<u8>) -> Result<SendDisposition, String> {
+        Ok(SendDisposition::Unsupported {reason:"当前宿主未支持图片发送".into()})
+    }
     fn send_private_voice(&mut self, _user_id: u64, _silk: Vec<u8>) -> Result<SendDisposition, String> {
         Ok(SendDisposition::Unsupported {
             reason: "当前宿主未支持私聊语音发送".into(),

@@ -93,6 +93,8 @@ fn advertise(bridge: &mut BridgeClient, scope: QueryScope, private_voice: bool) 
             group_text: true,
             private_voice,
             group_voice: false,
+            private_image: false,
+            group_image: false,
         })
         .unwrap();
     bridge
@@ -418,7 +420,9 @@ fn group_record_requires_group_capability_and_exact_group_projection() {
     assert_eq!(handler("send_group_msg", &params, Value::Null).retcode, RET_UNSUPPORTED);
     bridge.send(&BridgeMsg::SendCapabilities {
         scope: scope.clone(), private_text: false, group_text: false, private_voice: false, group_voice: true,
-    }).unwrap();
+
+            private_image: false, group_image: false,
+        }).unwrap();
     bridge.send(&BridgeMsg::Health { ingress_pending: 0, native_ops_total: 0 }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}));
     assert_eq!(handler("send_private_msg", &json!({"user_id":30003,"message":message}), Value::Null).retcode, RET_UNSUPPORTED);
@@ -475,4 +479,195 @@ fn group_record_requires_group_capability_and_exact_group_projection() {
         message_id: native_id.into(),
         element_id: "90071992547409931235".into(),
     });
+}
+
+#[test]
+fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use caligo_model::capability::ImageInfo;
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==").unwrap();
+    for chat_type in [1, 2] {
+        let lab = Lab::new();
+        let (mut bridge, scope) = lab.connect();
+        let handler = action_handler(lab.daemon.clone());
+        let message =
+            json!([{"type":"image","data":{"file":format!("base64://{}",STANDARD.encode(&png))}}]);
+        let params = if chat_type == 1 {
+            json!({"user_id":20002,"message":message})
+        } else {
+            json!({"group_id":30003,"message":message})
+        };
+        let action = if chat_type == 1 {
+            "send_private_msg"
+        } else {
+            "send_group_msg"
+        };
+        assert_eq!(
+            handler(action, &params, Value::Null).retcode,
+            RET_UNSUPPORTED
+        );
+        // Grant only the opposite route: media and chat capabilities are independent.
+        for enabled in [false, true] {
+            bridge
+                .send(&BridgeMsg::SendCapabilities {
+                    scope: scope.clone(),
+                    private_text: true,
+                    group_text: true,
+                    private_voice: true,
+                    group_voice: true,
+                    private_image: if enabled {
+                        chat_type == 1
+                    } else {
+                        chat_type == 2
+                    },
+                    group_image: if enabled {
+                        chat_type == 2
+                    } else {
+                        chat_type == 1
+                    },
+                })
+                .unwrap();
+            bridge
+                .send(&BridgeMsg::Health {
+                    ingress_pending: 0,
+                    native_ops_total: 0,
+                })
+                .unwrap();
+            assert!(matches!(
+                bridge.recv().unwrap(),
+                CoreToBridgeMsg::HealthAck {}
+            ));
+            if !enabled {
+                assert_eq!(
+                    handler(action, &params, Value::Null).retcode,
+                    RET_UNSUPPORTED
+                );
+            }
+        }
+        for file in [
+            "https://example.invalid/image.png",
+            "C:/image.png",
+            "base64://not-png",
+            "base64://",
+        ] {
+            let mut bad = params.clone();
+            bad["message"][0]["data"]["file"] = json!(file);
+            assert_eq!(handler(action, &bad, Value::Null).retcode, RET_BAD_PARAMS);
+        }
+        let mut mixed = params.clone();
+        mixed["message"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"text","data":{"text":"mixed"}}));
+        assert_eq!(handler(action, &mixed, Value::Null).retcode, RET_BAD_PARAMS);
+        let call = handler.clone();
+        let task = std::thread::spawn(move || call("send_msg", &params, json!("image")));
+        let CoreToBridgeMsg::DispatchImage {
+            request_id,
+            scope: dispatch_scope,
+            wire_seq,
+            peer_uin,
+            chat_type: dispatched_chat,
+            png: bytes,
+            timeout_ms,
+        } = bridge.recv().unwrap()
+        else {
+            panic!("expected image dispatch")
+        };
+        assert_eq!(dispatch_scope, scope);
+        assert_eq!(dispatched_chat, chat_type);
+        assert_eq!(peer_uin, if chat_type == 1 { "20002" } else { "30003" });
+        assert_eq!(bytes, png);
+        assert!(wire_seq > 0 && (1..=30_000).contains(&timeout_ms));
+        bridge
+            .send(&BridgeMsg::NativeStarted {
+                request_id: request_id.clone(),
+            })
+            .unwrap();
+        assert!(matches!(
+            bridge.recv().unwrap(),
+            CoreToBridgeMsg::NativeStartedAck { .. }
+        ));
+        let native_id = "90071992547409931234";
+        bridge
+            .send(&BridgeMsg::SendResult {
+                request_id,
+                outcome: OutcomePayload::Success {
+                    native_id: native_id.into(),
+                },
+            })
+            .unwrap();
+        assert!(matches!(
+            bridge.recv().unwrap(),
+            CoreToBridgeMsg::SendResultAck { terminal: true, .. }
+        ));
+        assert!(
+            !task.is_finished(),
+            "native receipt alone cannot mint a public ID"
+        );
+        let mut readback = event(native_id);
+        readback.text.clear();
+        if chat_type == 2 {
+            readback.session = json!({"account":"10001","kind":"group","peer":"30003"});
+        }
+        let wrapper = readback.wrapper_message.as_mut().unwrap();
+        wrapper.record.chat_type = chat_type;
+        if chat_type == 2 {
+            wrapper.record.peer_uid = "30003".into();
+            wrapper.record.peer_uin = "30003".into();
+        }
+        wrapper.record.elements = vec![WrapperElement {
+            element_type: 2,
+            text_element: None,
+            voice: None,
+            image: Some(ImageInfo {
+                chat_type,
+                peer_uid: wrapper.record.peer_uid.clone(),
+                sender_uin: "10001".into(),
+                message_id: native_id.into(),
+                element_id: "90071992547409931235".into(),
+                md5: "e605ef58c3bb5f33463782ab90d58295".into(),
+                size: png.len() as u32,
+                width: 1,
+                height: 1,
+                pic_type: 1000,
+            }),
+        }];
+        bridge.send(&BridgeMsg::Event { event: readback }).unwrap();
+        assert!(matches!(
+            bridge.recv().unwrap(),
+            CoreToBridgeMsg::EventAck {
+                suppressed: false,
+                ..
+            }
+        ));
+        let result = task.join().unwrap();
+        assert_eq!(result.retcode, 0, "{result:?}");
+        assert_eq!(result.echo, "image");
+        let id = result.data["message_id"].as_i64().unwrap() as i32;
+        let token = format!("caligo-image:10001:{id}");
+        let expected = json!([{"type":"image","data":{"file":token}}]);
+        assert_eq!(
+            handler("get_msg", &json!({"message_id":id}), Value::Null).data["message"],
+            expected
+        );
+        assert_eq!(
+            handler("get_image", &json!({"file":token}), Value::Null).retcode,
+            RET_UNSUPPORTED
+        );
+        let reopened = caligo_core::message_store::MessageStore::open(
+            lab.dir.join("journal.messages.jsonl"),
+            10001,
+            None,
+        )
+        .unwrap();
+        assert_eq!(reopened.get_msg(id).unwrap().message, expected);
+        let bytes = std::fs::read(lab.dir.join("journal.log")).unwrap();
+        assert!(!bytes.windows(png.len()).any(|chunk| chunk == png));
+        let journal = String::from_utf8_lossy(&bytes);
+        assert!(
+            !journal.contains(&STANDARD.encode(&png)),
+            "journal must not retain payload bytes"
+        );
+    }
 }

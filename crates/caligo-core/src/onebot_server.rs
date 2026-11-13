@@ -141,6 +141,24 @@ impl SendSink for DaemonSendSink {
         self.wait_for_receipt(&request_id, &target)
     }
 
+    fn send_image(&mut self, target: SendTarget, png: Vec<u8>) -> Result<SendDisposition, String> {
+        let (kind, peer, chat_type) = match target {
+            SendTarget::Private { user_id } => (SessionKind::Private, user_id, 1),
+            SendTarget::Group { group_id } => (SessionKind::Group, group_id, 2),
+        };
+        if !self.daemon.supports_image(chat_type) {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的图片发送能力".into(),
+            });
+        }
+        let peer = peer.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, kind, &peer);
+        let request_id = self
+            .daemon
+            .submit_image(kind, &peer, png, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
+    }
+
     fn send_private_voice(&mut self, user_id: u64, silk: Vec<u8>) -> Result<SendDisposition, String> {
         if !self.daemon.supports_private_voice() {
             return Ok(SendDisposition::Unsupported {

@@ -851,6 +851,7 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
         op: crate::host_adapter::HostOp,
     ) -> Result<crate::host_adapter::HostOpResult, crate::host_adapter::HostError> {
         use crate::host_adapter::{HostError, HostOp, HostOpResult};
+        let image = matches!(&op, HostOp::SendImage { .. });
         match op {
             HostOp::Probe => {
                 if !self.env_valid() {
@@ -898,13 +899,16 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
             },
             // D9:参数化发送(K3 验证脚本经 V8 阶梯;fired 非终态,
             // Promise 结果经轮询 sendResults 回收 —— 见 daemon pump 钩子)。
-            HostOp::SendVoice { request_id, wire_seq, timeout_ms, peer_uin, chat_type, silk } => {
+            HostOp::SendVoice { request_id, wire_seq, timeout_ms, peer_uin, chat_type, silk }
+            | HostOp::SendImage { request_id, wire_seq, timeout_ms, peer_uin, chat_type, png: silk } => {
                 if !self.voice_profile {
                     return Err(HostError::NoProvenRoute);
                 }
-                let script = crate::qq_v8::build_voice_send_js(
+                let script = if image { crate::qq_v8::build_image_send_js(
                     chat_type, &self.account, &peer_uin, &request_id, wire_seq, timeout_ms, &silk,
-                ).ok_or(HostError::Native { code: 3 })?;
+                ) } else { crate::qq_v8::build_voice_send_js(
+                    chat_type, &self.account, &peer_uin, &request_id, wire_seq, timeout_ms, &silk,
+                ) }.ok_or(HostError::Native { code: 3 })?;
                 let output = crate::qq_v8::run_fixed_query_script(&script).map_err(|error| {
                     match error {
                         crate::qq_v8::V8Error::NoCurrentContext => HostError::NoCurrentContext,
@@ -978,6 +982,8 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
     fn supports_private_voice(&self) -> bool {
         self.voice_profile
     }
+
+    fn supports_image(&self, chat_type: u32) -> bool { self.voice_profile && matches!(chat_type,1|2) }
 
     fn supports_group_voice(&self) -> bool {
         self.voice_profile

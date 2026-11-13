@@ -1580,7 +1580,7 @@
             "symbol": "fn image_download_binds_callback_file_scope_integrity_and_lifetime()"
           }
         ],
-        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming PNG also uses shared get_image. Upload, other image formats, and Caligo QQ field acceptance remain open."
+        "limits": "Private and group Silk; ordinary PNG images only through Rust host-query API. Incoming and verified self PNG use shared get_image; scoped PNG sends are wired. Other image formats and Caligo QQ field acceptance remain open."
       }
     },
     "record": {
@@ -1718,7 +1718,7 @@
     },
     "image": {
       "status": "partial_offline",
-      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
@@ -1771,6 +1771,20 @@
               "symbol": "function startMediaDownload("
             }
           ]
+        },
+        {
+          "name": "Scoped private/group PNG send with exact native readback and durable public ID",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "pub fn submit_image("
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_v8.rs",
+              "symbol": "pub fn build_image_send_js("
+            }
+          ]
         }
       ],
       "supported_versions": {
@@ -1791,6 +1805,14 @@
         "evidence": [
           {
             "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 OneBot PNG 图片发送接线"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_private_send_lab.rs",
+            "symbol": "fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback()"
+          },
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
             "symbol": "A2 OneBot PNG 图片读取"
           },
           {
@@ -1798,7 +1820,7 @@
             "symbol": "fn png_identity_events_get_image_and_restart_share_the_same_account_token()"
           }
         ],
-        "limits": "Only incoming ordinary PNG is admitted. get_image returns bounded Base64, file_size and file_name, without local paths or media credentials. Upload, self-sent images, other formats, mixed segments and QQ field acceptance remain open."
+        "limits": "Only ordinary PNG is admitted, with at most 128 KiB send/download bytes. get_image returns Base64, file_size and file_name without local paths or media credentials. Other formats, mixed segments and QQ field acceptance remain open."
       }
     }
   },
@@ -2493,7 +2515,7 @@
       "reference_id": "onebot.action.get_image",
       "category": "actions",
       "status": "partial_offline",
-      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
       "assessment": "image"
     },
     {
@@ -6441,7 +6463,7 @@
       "reference_id": "message_segment.image",
       "category": "message_segments",
       "status": "partial_offline",
-      "reason": "Ordinary single incoming PNG images have durable account-scoped identity, shared message events/get_msg and bounded get_image download through the current host scope.",
+      "reason": "Ordinary single PNG images have durable account-scoped identity, shared message events/get_msg, bounded get_image and private/group Base64 sends through the current host scope.",
       "assessment": "image"
     },
     {
@@ -41808,7 +41830,7 @@
     }
   ],
   "registry": {
-    "semantic_sha256": "92aa723d2d469ad51a86850d968970c85eea32b85d4dd15b7ac125e9264a97ec",
+    "semantic_sha256": "dec4fa56647da0127c8266f764dfc5863b195744a37b47700a50f152d502e86f",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {

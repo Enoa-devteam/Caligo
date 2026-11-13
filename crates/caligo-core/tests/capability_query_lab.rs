@@ -152,6 +152,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
     let lab = Lab::new();
     let (mut bridge, scope) = lab.bridge();
     assert!(!lab.daemon.supports_private_text());
+    assert!(!lab.daemon.supports_image(1) && !lab.daemon.supports_image(2));
 
     // A mismatched advertisement must not grant support and is intentionally ignored.
     let mut wrong_scope = scope.clone();
@@ -163,6 +164,8 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             group_text: true,
             private_voice: false,
             group_voice: false,
+            private_image: true,
+            group_image: true,
         })
         .unwrap();
     bridge
@@ -176,6 +179,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
         CoreToBridgeMsg::HealthAck {}
     ));
     assert!(!lab.daemon.supports_private_text());
+    assert!(!lab.daemon.supports_image(1) && !lab.daemon.supports_image(2));
 
     bridge
         .send(&BridgeMsg::SendCapabilities {
@@ -184,6 +188,8 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             group_text: false,
             private_voice: false,
             group_voice: false,
+            private_image: true,
+            group_image: true,
         })
         .unwrap();
     bridge
@@ -197,11 +203,14 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
         CoreToBridgeMsg::HealthAck {}
     ));
     assert!(lab.daemon.supports_private_text());
+    assert!(lab.daemon.supports_image(1) && lab.daemon.supports_image(2));
+    assert!(!lab.daemon.supports_image(3));
 
     drop(bridge);
     let (_reconnected, new_scope) = lab.bridge();
     assert_ne!(scope.connection_epoch, new_scope.connection_epoch);
     assert!(!lab.daemon.supports_private_text());
+    assert!(!lab.daemon.supports_image(1) && !lab.daemon.supports_image(2));
 }
 
 #[test]
@@ -214,7 +223,7 @@ fn private_voice_dispatch_requires_current_advertisement_and_is_never_replayed()
     assert!(submit().is_err());
     let advertise_voice = |bridge: &mut BridgeClient, scope: QueryScope| {
         bridge.send(&BridgeMsg::SendCapabilities {
-            scope, private_text: false, group_text: false, private_voice: true, group_voice: false,
+            scope, private_text: false, group_text: false, private_voice: true, group_voice: false, private_image: false, group_image: false,
         }).unwrap();
         bridge.send(&BridgeMsg::Health { ingress_pending: 0, native_ops_total: 0 }).unwrap();
         assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}));
@@ -579,4 +588,145 @@ fn image_queries_require_advertised_scope_and_exact_png_response() {
     let result = QueryOutcome::Success(QueryData::ImageInfo(good.info));
     reply(&bridge, id, scope, result.clone());
     assert_eq!(waiter.join().unwrap(), result);
+}
+
+#[test]
+fn full_query_declaration_is_accepted_without_a_stale_capacity_limit() {
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.bridge();
+    advertise(&mut bridge, &scope, QueryCapability::ALL.to_vec());
+    let task = lab.query(Duration::from_secs(2));
+    let (id, actual_scope) = request(&mut bridge);
+    assert_eq!(actual_scope, scope);
+    reply(&bridge, id, scope.clone(), empty());
+    assert_eq!(task.join().unwrap(), empty());
+    let mut duplicate = QueryCapability::ALL.to_vec();
+    duplicate.push(QueryCapability::FriendList);
+    bridge
+        .send(&BridgeMsg::QueryCapabilities {
+            revision: CAPABILITY_QUERY_REVISION,
+            scope: scope.clone(),
+            capabilities: duplicate,
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::Reject { .. }
+    ));
+    assert_eq!(
+        lab.query(Duration::from_secs(1)).join().unwrap(),
+        QueryOutcome::Unsupported
+    );
+}
+
+#[test]
+fn image_dispatch_requires_current_advertisement_and_is_never_replayed() {
+    use caligo_model::ipc_v3::OutcomePayload;
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.bridge();
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==").unwrap();
+    let submit = || {
+        lab.daemon.submit_image(
+            caligo_model::SessionKind::Private,
+            "20002",
+            png.clone(),
+            10_000,
+        )
+    };
+    assert!(submit().is_err());
+    let advertise_voice = |bridge: &mut BridgeClient, scope: QueryScope| {
+        bridge
+            .send(&BridgeMsg::SendCapabilities {
+                scope,
+                private_text: false,
+                group_text: false,
+                private_voice: false,
+                group_voice: false,
+                private_image: true,
+                group_image: false,
+            })
+            .unwrap();
+        bridge
+            .send(&BridgeMsg::Health {
+                ingress_pending: 0,
+                native_ops_total: 0,
+            })
+            .unwrap();
+        assert!(matches!(
+            bridge.recv().unwrap(),
+            CoreToBridgeMsg::HealthAck {}
+        ));
+    };
+    let mut stale = scope.clone();
+    stale.connection_epoch -= 1;
+    advertise_voice(&mut bridge, stale);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, scope.clone());
+    assert!(!lab.daemon.supports_private_text());
+    assert!(lab
+        .daemon
+        .submit_image(caligo_model::SessionKind::Private, "20002", vec![0], 10_000)
+        .is_err());
+    let request_id = submit().unwrap();
+    let CoreToBridgeMsg::DispatchImage {
+        request_id: actual,
+        scope: actual_scope,
+        wire_seq,
+        timeout_ms,
+        peer_uin,
+        png: audio,
+        chat_type,
+    } = bridge.recv().unwrap()
+    else {
+        panic!("expected typed voice dispatch")
+    };
+    assert_eq!(actual, request_id);
+    assert_eq!(actual_scope, scope);
+    assert_eq!(peer_uin, "20002");
+    assert_eq!(audio, png);
+    assert_eq!(chat_type, 1);
+    assert!(wire_seq > 0 && (1..=10_000).contains(&timeout_ms));
+    bridge
+        .send(&BridgeMsg::NativeStarted {
+            request_id: request_id.clone(),
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::NativeStartedAck { .. }
+    ));
+    bridge
+        .send(&BridgeMsg::SendResult {
+            request_id: request_id.clone(),
+            outcome: OutcomePayload::Unknown {
+                reason: Some("image_submit_unknown".into()),
+            },
+        })
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().unwrap(),
+        CoreToBridgeMsg::SendResultAck { .. }
+    ));
+    let target =
+        caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002");
+    assert_eq!(
+        lab.daemon.onebot_text_status(&request_id, &target),
+        Some((caligo_model::ActionState::DeliveryUnknown, None))
+    );
+    let journal = std::fs::read(lab.dir.join("journal.log")).unwrap();
+    let journal = String::from_utf8_lossy(&journal);
+    assert!(journal.contains(&request_id));
+    assert!(!journal.contains(&STANDARD.encode(&png)));
+    drop(bridge);
+    let (mut bridge, new_scope) = lab.bridge();
+    assert_ne!(new_scope.connection_epoch, scope.connection_epoch);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, scope);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, new_scope);
+    assert_eq!(
+        lab.daemon.onebot_text_status(&request_id, &target),
+        Some((caligo_model::ActionState::DeliveryUnknown, None))
+    );
 }

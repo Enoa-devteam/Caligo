@@ -89,7 +89,7 @@
       "plan_steps": ["N6a", "N6b", "N6c"],
       "dependencies": ["feat-006"],
       "status": "in-progress",
-      "evidence": "N 台账（三十九）保留 legacy-path @ 1006501/无 ack 结果。2026-11-13 SnowCat A2 已接入固定 profile 的私聊语音收发和合成宿主验证。普通 PNG 的固定 profile 精确回读及有界下载已接 scoped Rust 宿主查询，合成宿主/管道覆盖身份、文件完整性和迟到回调；普通入站 PNG 已接 D8、持久 ID、共享事件和 get_image，真实管道及重启恢复通过；PNG 发送构造/缓存/D9 合同有合成覆盖，但 HostOp/scoped IPC/core/OneBot 发送仍未接；其他格式及真实 QQ 待验收。",
+      "evidence": "N 台账（三十九）保留 legacy-path @ 1006501/无 ack 结果。2026-11-13 SnowCat A2 已接入固定 profile 的私聊语音收发和合成宿主验证。普通 PNG 的固定 profile 精确回读及有界下载已接 scoped Rust 宿主查询，合成宿主/管道覆盖身份、文件完整性和迟到回调；普通入站 PNG 已接 D8、持久 ID、共享事件和 get_image，真实管道及重启恢复通过；PNG 私聊/群聊发送已接独立 scoped 能力、HostOp/IPC/core/共享 OneBot，精确自发回读持久化后返回 ID，真实 worker/管道、拒绝/撤销/重连不重发及重启读取有离线覆盖；其他格式及真实 QQ 待验收。",
       "evidence_paths": ["docs/execution/2026-10-09-snowluma-parity/ledger.md", "docs/plans/2026-10-09-gitnexus-plan-caligo-snowluma-capability-parity.md", "docs/execution/2026-11-13-snowcat-capability-integration-continued.md"],
       "done_criteria": ["@/reply 目标正确、真实渲染且回执关联", "媒体上传/发送/资源寿命分别验收", "每项不支持能力显式拒绝，不丢段假成功"]
     },

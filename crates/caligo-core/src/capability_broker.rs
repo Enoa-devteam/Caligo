@@ -15,7 +15,7 @@ use caligo_model::capability::{
 use caligo_model::ipc_v3::{CoreToBridgeMsg, CAPABILITY_QUERY_REVISION};
 
 pub const QUERY_CAPACITY: usize = 32;
-const MAX_CAPABILITIES: usize = 9;
+const MAX_CAPABILITIES: usize = QueryCapability::ALL.len();
 const MAX_REASON_BYTES: usize = 4096;
 
 #[derive(Default)]
@@ -27,6 +27,8 @@ struct State {
     send_group_text: bool,
     send_private_voice: bool,
     send_group_voice: bool,
+    send_private_image: bool,
+    send_group_image: bool,
     pending: HashMap<String, Pending>,
     stale_results: u64,
 }
@@ -54,6 +56,8 @@ impl CapabilityBroker {
         state.send_group_text = false;
         state.send_private_voice = false;
         state.send_group_voice = false;
+        state.send_private_image = false;
+        state.send_group_image = false;
     }
 
     pub(crate) fn bind(&self, scope: QueryScope) {
@@ -65,6 +69,8 @@ impl CapabilityBroker {
             state.send_group_text = false;
             state.send_private_voice = false;
             state.send_group_voice = false;
+            state.send_private_image = false;
+            state.send_group_image = false;
         }
     }
 
@@ -76,6 +82,8 @@ impl CapabilityBroker {
         group_text: bool,
         private_voice: bool,
         group_voice: bool,
+        private_image: bool,
+        group_image: bool,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
         if epoch != state.epoch || state.scope.as_ref() != Some(scope) || scope.validate().is_err()
@@ -86,6 +94,8 @@ impl CapabilityBroker {
         state.send_group_text = group_text;
         state.send_private_voice = private_voice;
         state.send_group_voice = group_voice;
+        state.send_private_image = private_image;
+        state.send_group_image = group_image;
         true
     }
 
@@ -102,6 +112,13 @@ impl CapabilityBroker {
     pub(crate) fn supports_group_voice(&self, scope: &QueryScope) -> bool {
         let state = self.state.lock().unwrap();
         state.scope.as_ref() == Some(scope) && state.send_group_voice
+    }
+
+    pub(crate) fn supports_image(&self, scope: &QueryScope, chat_type: u32) -> bool {
+        let state = self.state.lock().unwrap();
+        state.scope.as_ref() == Some(scope) && match chat_type {
+            1 => state.send_private_image, 2 => state.send_group_image, _ => false,
+        }
     }
 
     pub(crate) fn advertise(
@@ -253,6 +270,8 @@ impl CapabilityBroker {
             state.send_group_text = false;
             state.send_private_voice = false;
             state.send_group_voice = false;
+            state.send_private_image = false;
+            state.send_group_image = false;
             Self::drain(&mut state);
         }
     }

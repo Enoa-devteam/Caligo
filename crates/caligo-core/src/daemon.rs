@@ -347,6 +347,10 @@ impl Daemon {
         self.current_send_scope().is_some_and(|scope| self.query_broker.supports_group_voice(&scope))
     }
 
+    pub fn supports_image(&self, chat_type: u32) -> bool {
+        self.current_send_scope().is_some_and(|scope| self.query_broker.supports_image(&scope,chat_type))
+    }
+
     fn current_send_scope(&self) -> Option<QueryScope> {
         let Ok(actor) = self.actor.lock() else {
             return None;
@@ -503,6 +507,91 @@ impl Daemon {
             }
         };
         self.dispatch_out.lock().map_err(|_| "dispatch queue lock poisoned")?.push(dispatch);
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        Ok(request_id)
+    }
+
+    pub fn submit_image(
+        &self,
+        kind: caligo_model::SessionKind,
+        peer_uin: &str,
+        png: Vec<u8>,
+        deadline_ms: u64,
+    ) -> Result<String, String> {
+        let group = kind == caligo_model::SessionKind::Group;
+        if !positive_decimal(peer_uin)
+            || (!group && peer_uin == self.config.account)
+            || !(1..=30_000).contains(&deadline_ms)
+            || caligo_model::png::dimensions(&png).is_none()
+        {
+            return Err("invalid image request".into());
+        }
+        let mut actor = self
+            .actor
+            .lock()
+            .map_err(|_| "account actor lock poisoned")?;
+        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+            return Err("no active QQ session".into());
+        };
+        let scope = QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        };
+        let supported = if group {
+            self.query_broker.supports_image(&scope, 2)
+        } else {
+            self.query_broker.supports_image(&scope, 1)
+        };
+        if !supported {
+            return Err("current bridge did not advertise this image send".into());
+        }
+        let sequence = self
+            .api_request_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map_err(|_| "request ID sequence exhausted")?;
+        let request_id = format!("image-{:016x}-{sequence}", self.core_nonce);
+        let target = caligo_model::SessionKey::new(&scope.account, kind, peer_uin);
+        // Reuse the ledger's hashed submission envelope without retaining media bytes.
+        use sha2::{Digest, Sha256};
+        let digest = format!("image:{:x}", Sha256::digest(&png));
+        let payload_hash = SendTextRequest::compute_payload_hash(
+            scope.session_generation,
+            &target,
+            &digest,
+            deadline_ms,
+        );
+        let request = SendTextRequest {
+            request_id: request_id.clone(),
+            session_identity: session.clone(),
+            target,
+            text: digest,
+            payload_hash,
+            deadline_ms,
+        };
+        actor
+            .submit_send(request)
+            .map_err(|error| format!("image request rejected: {error:?}"))?;
+        let wire_seq = actor
+            .dispatch_begin(&request_id)
+            .map_err(|error| format!("image dispatch preparation failed: {error:?}"))?;
+        let timeout_ms = actor.remaining_timeout_ms(&request_id).unwrap_or_default();
+        let dispatch = CoreToBridgeMsg::DispatchImage {
+            scope,
+            request_id: request_id.clone(),
+            wire_seq,
+            timeout_ms,
+            chat_type: if group { 2 } else { 1 },
+            peer_uin: peer_uin.into(),
+            png,
+        };
+        self.dispatch_out
+            .lock()
+            .map_err(|_| "dispatch queue lock poisoned")?
+            .push(dispatch);
         self.bridge_wake.store(true, Ordering::Relaxed);
         Ok(request_id)
     }
@@ -860,27 +949,31 @@ impl Daemon {
             let pending: Vec<CoreToBridgeMsg> =
                 std::mem::take(&mut *self.dispatch_out.lock().unwrap());
             for mut m in pending {
-                let voice = match &mut m {
+                let media = match &mut m {
                     CoreToBridgeMsg::DispatchPrivateVoice { scope, request_id, timeout_ms, .. } =>
-                        Some((scope, request_id, timeout_ms, false)),
+                        Some((scope, request_id, timeout_ms, false, None)),
                     CoreToBridgeMsg::DispatchGroupVoice { scope, request_id, timeout_ms, .. } =>
-                        Some((scope, request_id, timeout_ms, true)),
+                        Some((scope, request_id, timeout_ms, true, None)),
+                    CoreToBridgeMsg::DispatchImage {scope,request_id,timeout_ms,chat_type,..} =>
+                        Some((scope,request_id,timeout_ms,*chat_type == 2,Some(*chat_type))),
                     _ => None,
                 };
-                if let Some((scope, request_id, timeout_ms, group)) = voice {
+                if let Some((scope, request_id, timeout_ms, group, image)) = media {
                     if scope.connection_epoch != epoch {
                         continue;
                     }
                     let mut actor = self.actor.lock().unwrap();
                     let remaining = actor.remaining_timeout_ms(request_id).unwrap_or_default();
-                    let supported = if group {
+                    let supported = if let Some(chat_type) = image {
+                        self.query_broker.supports_image(scope,chat_type)
+                    } else if group {
                         self.query_broker.supports_group_voice(scope)
                     } else {
                         self.query_broker.supports_private_voice(scope)
                     };
                     if remaining == 0 || !supported {
                         let _ = actor.bridge_result(request_id, NativeResult::Failure {
-                            reason: "voice expired or capability revoked before dispatch".into(),
+                            reason: "media expired or capability revoked before dispatch".into(),
                         });
                         continue;
                     }
@@ -927,6 +1020,8 @@ impl Daemon {
                         group_text,
                         private_voice,
                         group_voice,
+                        private_image,
+                        group_image,
                     } => {
                         // A wrong-scope advertisement is ignored and cannot grant authority.
                         let _ = self.query_broker.advertise_send(
@@ -936,6 +1031,8 @@ impl Daemon {
                             group_text,
                             private_voice,
                             group_voice,
+                            private_image,
+                            group_image,
                         );
                     }
                     BridgeMsg::QueryResult {

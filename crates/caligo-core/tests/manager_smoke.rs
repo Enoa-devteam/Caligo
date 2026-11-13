@@ -55,11 +55,20 @@ fn unique_tag() -> String {
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("free port")
-        .local_addr()
-        .expect("port address")
-        .port()
+    // Windows can immediately reissue a released ephemeral port. Keep a
+    // process-wide set so parallel fixtures and one multi-port config never
+    // select the same port before their child listeners have bound it.
+    static PORTS: std::sync::Mutex<std::collections::BTreeSet<u16>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut used = PORTS.lock().unwrap();
+    for _ in 0..256 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("free port");
+        let port = listener.local_addr().expect("port address").port();
+        if used.insert(port) {
+            return port;
+        }
+    }
+    panic!("could not allocate a distinct smoke-test port");
 }
 
 fn request_version(address: &str, token: &str) -> Value {
@@ -418,7 +427,7 @@ fn manager_binary_runs_two_accounts_and_persists_config() {
         .args(["--root", root.to_str().unwrap(), "--set-config", config_input.to_str().unwrap()])
         .output()
         .expect("config edit command");
-    assert!(check.status.success(), "config edit failed: {:?}", check.status);
+    assert!(check.status.success(), "config edit failed: {:?}; {}", check.status, String::from_utf8_lossy(&check.stderr));
     let persisted: Value = serde_json::from_slice(
         &std::fs::read(root.join("accounts.json")).expect("persisted config"),
     )
