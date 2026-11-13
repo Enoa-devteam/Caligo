@@ -113,3 +113,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 固定参考 `7cf025f` 的 `live-testing/business-message/probe.cjs` 和 `packages/snowcat-core/apis/file.ts` 表明，`getRichMediaFilePathForGuild` 返回宿主缓存路径。私聊语音通过 wrapper 的 `sendMsg` 提交，稳定消息 ID 由发送事件和 `getMsgsByMsgId` 回读提供。参考样本还在接收端匹配消息指纹并核对下载 SHA-256。见[固定参考的双账号验收](https://github.com/Eternal-Wanderer-Vegetable/Napcat-Snowluma-research/blob/7cf025fe1e7f9c609e02a8643c6e6398eeec0d64/research/native-reconstruction/live-testing/business-message/RESULTS.md)。
 
 新增 research 内部脚本构造器，输入限于有界的腾讯前缀 SILK v3 短样本。桥在绑定账号上解析目标 UIN，独占写入宿主分配的缓存路径。若缓存已存在，仅在文件身份和 SHA-256 一致时复用。发送前登记请求，Promise 受理、同一消息与元素的发送事件、终态更新和精确回读均匹配时才产出 native ID。提交抛异常或结果冲突保留 unknown。宿主缓存文件交由宿主生命周期管理。该检查点的合成宿主用例覆盖错误账号、损坏帧、缓存冲突、错指纹、错元素、歧义、超时和停止。语音发送仍待接入 scoped IPC、持久请求和 OneBot。
+
+## A2 私聊语音发送 IPC 与账本
+
+`79a53bd` 的宿主合同接入 `Daemon::submit_private_voice` 和正常 bridge owner drain。私聊语音独立声明发送能力，core 与 bridge 分别核对当前账号、连接和会话代次。旧能力声明缺少语音字段时继续按禁用处理。core 先持久化请求身份、指纹和派发序号，再经有界 IPC 传递音频。音频字节只用于内存队列和宿主缓存。过期、断链后的未派发旧代次以及不支持的 adapter 不触发 native 提交，未知结果保留原请求，重连后不重放。此次还修正了精确语音 profile 宣告八个查询能力时 core 上限为七导致整组拒绝的问题。
+
+离线回归用真实命名管道覆盖能力缺失、错代次、类型与内容、unknown 和重连。resident 用例覆盖 owner 前二次检查、过期和重复请求。首轮测试把二进制 journal 当 UTF-8 文本读，已更正。最终串行 `init.ps1 -Mode all` 通过默认和 research 全仓。下一步把确认的语音消息投影持久化，再接入 OneBot `record` 发送。

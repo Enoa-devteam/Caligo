@@ -18,6 +18,61 @@ use caligo_bridge::resident::{
     CloseReport, OwnedEvent, OwnedRequest, Resident, ResidentLimits, SendOutcome, SubmitVerdict,
 };
 
+#[test]
+fn private_voice_queue_rechecks_scope_deadline_and_deduplicates_before_owner_call() {
+    use caligo_model::capability::QueryScope;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::{Duration, Instant};
+    struct VoiceHost(Arc<AtomicUsize>);
+    impl HostAdapter for VoiceHost {
+        fn owner_thread_id(&self) -> u64 { 1 }
+        fn current_thread_id(&self) -> u64 { 1 }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn supports_private_voice(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerAdded { token: 1 }),
+                HostOp::ListenerRemove { .. } => Ok(HostOpResult::ListenerRemoved),
+                HostOp::SendPrivateVoice { request_id, wire_seq, peer_uin, timeout_ms, silk } => {
+                    assert_eq!(wire_seq, 7);
+                    assert_eq!(peer_uin, "20002");
+                    assert!((1..=5000).contains(&timeout_ms));
+                    assert!(caligo_model::voice::validate_short_tencent_silk(&silk));
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                }
+                _ => panic!("fixture is voice-only"),
+            }
+        }
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let resident = Resident::new(VoiceHost(calls.clone()), ResidentLimits::default());
+    resident.bootstrap().unwrap();
+    let scope = QueryScope {
+        account: "10001".into(), host_nonce: 1, session_generation: 1, connection_epoch: 2,
+    };
+    let request = |id: &str, deadline| OwnedRequest::SendPrivateVoice {
+        request_id: id.into(), wire_seq: 7, deadline, scope: scope.clone(),
+        peer_uin: "20002".into(), silk: b"\x02#!SILK_V3\x01\x00\x42".to_vec(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    resident.set_bridge_scope(Some(scope.clone()));
+    assert_eq!(resident.submit(request("stale", deadline)), SubmitVerdict::Accepted);
+    resident.set_bridge_scope(None);
+    resident.drain().unwrap();
+    resident.set_bridge_scope(Some(scope.clone()));
+    assert_eq!(resident.submit(request("expired", Instant::now())), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    let sent = request("one", deadline);
+    assert_eq!(resident.submit(sent.clone()), SubmitVerdict::Accepted);
+    assert_eq!(resident.submit(sent), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    resident.close().unwrap();
+}
+
 // ---- 计数分配器(L17:分配不随调度次数增长 / 关闭后回基线) ----
 
 struct AllocationStats {
@@ -234,6 +289,7 @@ impl HostAdapter for SharedMockHost {
                 inner.listener = None;
                 Ok(HostOpResult::ListenerRemoved)
             }
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => Ok(HostOpResult::ProbeDone),
             HostOp::SendText { text, .. } if text == "accepted-without-id" => {
                 Ok(HostOpResult::Sent { native_id: None })
@@ -274,6 +330,7 @@ impl HostAdapter for CorrelationHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { request_id, .. } => {
                 *self.pending.lock().unwrap() = Some(request_id);
@@ -325,6 +382,7 @@ impl HostAdapter for LateReceiptHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { .. } => HostOpResult::SendFired {
                 mid: "MID-late".into(),
@@ -1072,6 +1130,7 @@ impl HostAdapter for ReentrantHost {
         use caligo_bridge::host_adapter::HostError;
         let r = self.resident.get().expect("resident slot set");
         match op {
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::SendText { .. } => {
                 // 重入点 1:token()(core 锁);重入点 2:deliver_callback(core 锁)。
                 let tok = r.token();
@@ -1206,6 +1265,7 @@ fn send_pending_classified_unknown_on_close() {
             Ok(match op {
                 HostOp::ListenerAdd => HostOpResult::ListenerAdded { token: 1 },
                 HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+                HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
                 HostOp::Probe => HostOpResult::ProbeDone,
                 HostOp::SendText { .. } => HostOpResult::SendFired {
                     mid: "MID-1".into(),

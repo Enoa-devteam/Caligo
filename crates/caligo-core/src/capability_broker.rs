@@ -15,7 +15,7 @@ use caligo_model::capability::{
 use caligo_model::ipc_v3::{CoreToBridgeMsg, CAPABILITY_QUERY_REVISION};
 
 pub const QUERY_CAPACITY: usize = 32;
-const MAX_CAPABILITIES: usize = 7;
+const MAX_CAPABILITIES: usize = 8;
 const MAX_REASON_BYTES: usize = 4096;
 
 #[derive(Default)]
@@ -25,6 +25,7 @@ struct State {
     capabilities: HashSet<QueryCapability>,
     send_private_text: bool,
     send_group_text: bool,
+    send_private_voice: bool,
     pending: HashMap<String, Pending>,
     stale_results: u64,
 }
@@ -50,6 +51,7 @@ impl CapabilityBroker {
         state.capabilities.clear();
         state.send_private_text = false;
         state.send_group_text = false;
+        state.send_private_voice = false;
     }
 
     pub(crate) fn bind(&self, scope: QueryScope) {
@@ -59,6 +61,7 @@ impl CapabilityBroker {
             state.capabilities.clear();
             state.send_private_text = false;
             state.send_group_text = false;
+            state.send_private_voice = false;
         }
     }
 
@@ -68,6 +71,7 @@ impl CapabilityBroker {
         scope: &QueryScope,
         private_text: bool,
         group_text: bool,
+        private_voice: bool,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
         if epoch != state.epoch || state.scope.as_ref() != Some(scope) || scope.validate().is_err()
@@ -76,12 +80,18 @@ impl CapabilityBroker {
         }
         state.send_private_text = private_text;
         state.send_group_text = group_text;
+        state.send_private_voice = private_voice;
         true
     }
 
     pub(crate) fn supports_private_text(&self, scope: &QueryScope) -> bool {
         let state = self.state.lock().unwrap();
         state.scope.as_ref() == Some(scope) && state.send_private_text
+    }
+
+    pub(crate) fn supports_private_voice(&self, scope: &QueryScope) -> bool {
+        let state = self.state.lock().unwrap();
+        state.scope.as_ref() == Some(scope) && state.send_private_voice
     }
 
     pub(crate) fn advertise(
@@ -231,6 +241,7 @@ impl CapabilityBroker {
             state.capabilities.clear();
             state.send_private_text = false;
             state.send_group_text = false;
+            state.send_private_voice = false;
             Self::drain(&mut state);
         }
     }

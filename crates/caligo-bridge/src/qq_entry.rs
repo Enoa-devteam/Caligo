@@ -898,6 +898,31 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
             },
             // D9:参数化发送(K3 验证脚本经 V8 阶梯;fired 非终态,
             // Promise 结果经轮询 sendResults 回收 —— 见 daemon pump 钩子)。
+            HostOp::SendPrivateVoice { request_id, wire_seq, timeout_ms, peer_uin, silk } => {
+                if !self.voice_profile {
+                    return Err(HostError::NoProvenRoute);
+                }
+                let script = crate::qq_v8::build_voice_send_js(
+                    &self.account, &peer_uin, &request_id, wire_seq, timeout_ms, &silk,
+                ).ok_or(HostError::Native { code: 3 })?;
+                let output = crate::qq_v8::run_fixed_query_script(&script).map_err(|error| {
+                    match error {
+                        crate::qq_v8::V8Error::NoCurrentContext => HostError::NoCurrentContext,
+                        _ => HostError::EnvInvalid,
+                    }
+                })?;
+                let value: serde_json::Value =
+                    serde_json::from_str(&output).map_err(|_| HostError::EnvInvalid)?;
+                if value.get("fired").and_then(|v| v.as_bool()) == Some(true)
+                    && value.get("mid").and_then(|v| v.as_str()) == Some(&request_id)
+                {
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                } else if value.get("err").and_then(|v| v.as_str()).is_some() {
+                    Err(HostError::Native { code: 3 })
+                } else {
+                    Err(HostError::EnvInvalid)
+                }
+            }
             HostOp::SendText {
                 request_id,
                 wire_seq,
@@ -948,6 +973,10 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
 
     fn send_capabilities(&self) -> (bool, bool) {
         (true, true)
+    }
+
+    fn supports_private_voice(&self) -> bool {
+        self.voice_profile
     }
 
     fn cancel_query(&mut self, request_id: &str, scope: &caligo_model::capability::QueryScope) {

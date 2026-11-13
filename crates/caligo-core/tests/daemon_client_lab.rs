@@ -49,6 +49,7 @@ impl HostAdapter for LabHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { .. } => {
                 let n = LAB_SENDS.fetch_add(1, Ordering::Relaxed) + 1;

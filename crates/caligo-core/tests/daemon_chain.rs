@@ -46,6 +46,7 @@ impl HostAdapter for ChainHost {
         Ok(match op {
             HostOp::ListenerAdd => HostOpResult::ListenerAdded { token: 1 },
             HostOp::ListenerRemove { .. } => HostOpResult::ListenerRemoved,
+            HostOp::SendPrivateVoice { .. } => panic!("fixture does not send voice"),
             HostOp::Probe => HostOpResult::ProbeDone,
             HostOp::SendText { .. } => {
                 let n = self.send_ids.fetch_add(1, Ordering::Relaxed) + 1;
@@ -158,6 +159,7 @@ fn spawn_bridge_agent(
             }
             // 泵:通知 core 有事件?(本测试无入站事件泵;仅应答 Dispatch。)
             match bridge.recv() {
+                Ok(CoreToBridgeMsg::DispatchPrivateVoice { .. }) => panic!("text-only fixture"),
                 Ok(CoreToBridgeMsg::Dispatch {
                     request_id,
                     wire_seq,

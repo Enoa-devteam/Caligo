@@ -28,7 +28,7 @@ use crate::runtime::{host_identity, AccountActor, NativeResult, RuntimeConfig};
 use crate::transport::{
     connect_client, generate_token, token_hex, PipeConnection, PipeServer, TransportError,
 };
-use caligo_model::capability::{HostQuery, QueryOutcome, QueryScope};
+use caligo_model::capability::{positive_decimal, HostQuery, QueryOutcome, QueryScope};
 use caligo_model::{
     Direction, EventSource, MsgEvent, NativeMessageId, SendTextRequest, SessionIdentity,
 };
@@ -416,6 +416,65 @@ impl Daemon {
         Ok(request_id)
     }
 
+    /// Submit an owned private voice through the same durable send ledger.
+    /// The audio stays in the bounded dispatch queue and is never journaled.
+    pub fn submit_private_voice(
+        &self,
+        peer_uin: &str,
+        silk: Vec<u8>,
+        deadline_ms: u64,
+    ) -> Result<String, String> {
+        if !positive_decimal(peer_uin) || peer_uin == self.config.account
+            || !(1..=30_000).contains(&deadline_ms)
+            || !caligo_model::voice::validate_short_tencent_silk(&silk)
+        {
+            return Err("invalid private voice request".into());
+        }
+        let mut actor = self.actor.lock().map_err(|_| "account actor lock poisoned")?;
+        let (Some(session), Some(connection)) = (actor.session(), actor.connection()) else {
+            return Err("no active QQ session".into());
+        };
+        let scope = QueryScope {
+            account: session.account.0.clone(),
+            host_nonce: session.host.host_nonce,
+            session_generation: session.session_generation,
+            connection_epoch: connection.connection_epoch,
+        };
+        if !self.query_broker.supports_private_voice(&scope) {
+            return Err("current bridge did not advertise private voice send".into());
+        }
+        let sequence = self.api_request_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+            .map_err(|_| "request ID sequence exhausted")?;
+        let request_id = format!("voice-{:016x}-{sequence}", self.core_nonce);
+        let target = caligo_model::SessionKey::new(&scope.account, caligo_model::SessionKind::Private, peer_uin);
+        // Reuse the ledger's hashed submission envelope without retaining media bytes.
+        use sha2::{Digest, Sha256};
+        let digest = format!("private-voice:{:x}", Sha256::digest(&silk));
+        let payload_hash = SendTextRequest::compute_payload_hash(
+            scope.session_generation, &target, &digest, deadline_ms,
+        );
+        let request = SendTextRequest {
+            request_id: request_id.clone(),
+            session_identity: session.clone(),
+            target,
+            text: digest,
+            payload_hash,
+            deadline_ms,
+        };
+        actor.submit_send(request).map_err(|error| format!("voice request rejected: {error:?}"))?;
+        let wire_seq = actor.dispatch_begin(&request_id)
+            .map_err(|error| format!("voice dispatch preparation failed: {error:?}"))?;
+        let timeout_ms = actor.remaining_timeout_ms(&request_id).unwrap_or_default();
+        self.dispatch_out.lock().map_err(|_| "dispatch queue lock poisoned")?
+            .push(CoreToBridgeMsg::DispatchPrivateVoice {
+                scope, request_id: request_id.clone(), wire_seq, timeout_ms,
+                peer_uin: peer_uin.into(), silk,
+            });
+        self.bridge_wake.store(true, Ordering::Relaxed);
+        Ok(request_id)
+    }
+
     /// State for the same OneBot request, plus a durable public ID if its
     /// matching projected event has reached MessageStore.
     pub fn onebot_text_status(
@@ -769,6 +828,20 @@ impl Daemon {
             let pending: Vec<CoreToBridgeMsg> =
                 std::mem::take(&mut *self.dispatch_out.lock().unwrap());
             for mut m in pending {
+                if let CoreToBridgeMsg::DispatchPrivateVoice { scope, request_id, timeout_ms, .. } = &mut m {
+                    if scope.connection_epoch != epoch {
+                        continue;
+                    }
+                    let mut actor = self.actor.lock().unwrap();
+                    let remaining = actor.remaining_timeout_ms(request_id).unwrap_or_default();
+                    if remaining == 0 || !self.query_broker.supports_private_voice(scope) {
+                        let _ = actor.bridge_result(request_id, NativeResult::Failure {
+                            reason: "private voice expired or capability revoked before dispatch".into(),
+                        });
+                        continue;
+                    }
+                    *timeout_ms = remaining;
+                }
                 if let CoreToBridgeMsg::Query {
                     request_id,
                     scope,
@@ -808,6 +881,7 @@ impl Daemon {
                         scope,
                         private_text,
                         group_text,
+                        private_voice,
                     } => {
                         // A wrong-scope advertisement is ignored and cannot grant authority.
                         let _ = self.query_broker.advertise_send(
@@ -815,6 +889,7 @@ impl Daemon {
                             &scope,
                             private_text,
                             group_text,
+                            private_voice,
                         );
                     }
                     BridgeMsg::QueryResult {

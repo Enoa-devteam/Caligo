@@ -161,6 +161,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             scope: wrong_scope,
             private_text: true,
             group_text: true,
+            private_voice: false,
         })
         .unwrap();
     bridge
@@ -180,6 +181,7 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
             scope: scope.clone(),
             private_text: true,
             group_text: false,
+            private_voice: false,
         })
         .unwrap();
     bridge
@@ -198,6 +200,66 @@ fn send_capabilities_are_scoped_and_cleared_on_reconnect() {
     let (_reconnected, new_scope) = lab.bridge();
     assert_ne!(scope.connection_epoch, new_scope.connection_epoch);
     assert!(!lab.daemon.supports_private_text());
+}
+
+#[test]
+fn private_voice_dispatch_requires_current_advertisement_and_is_never_replayed() {
+    use caligo_model::ipc_v3::OutcomePayload;
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.bridge();
+    let silk = b"\x02#!SILK_V3\x03\x00\x44\x55\x66".to_vec();
+    let submit = || lab.daemon.submit_private_voice("20002", silk.clone(), 10_000);
+    assert!(submit().is_err());
+    let advertise_voice = |bridge: &mut BridgeClient, scope: QueryScope| {
+        bridge.send(&BridgeMsg::SendCapabilities {
+            scope, private_text: false, group_text: false, private_voice: true,
+        }).unwrap();
+        bridge.send(&BridgeMsg::Health { ingress_pending: 0, native_ops_total: 0 }).unwrap();
+        assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::HealthAck {}));
+    };
+    let mut stale = scope.clone();
+    stale.connection_epoch -= 1;
+    advertise_voice(&mut bridge, stale);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, scope.clone());
+    assert!(!lab.daemon.supports_private_text());
+    assert!(lab.daemon.submit_private_voice("20002", vec![0], 10_000).is_err());
+    let request_id = submit().unwrap();
+    let CoreToBridgeMsg::DispatchPrivateVoice {
+        request_id: actual, scope: actual_scope, wire_seq, timeout_ms, peer_uin, silk: audio,
+    } = bridge.recv().unwrap() else { panic!("expected typed voice dispatch") };
+    assert_eq!(actual, request_id);
+    assert_eq!(actual_scope, scope);
+    assert_eq!(peer_uin, "20002");
+    assert_eq!(audio, silk);
+    assert!(wire_seq > 0 && (1..=10_000).contains(&timeout_ms));
+    bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
+    bridge.send(&BridgeMsg::SendResult {
+        request_id: request_id.clone(),
+        outcome: OutcomePayload::Unknown { reason: Some("voice_submit_unknown".into()) },
+    }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { .. }));
+    let target = caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002");
+    assert_eq!(
+        lab.daemon.onebot_text_status(&request_id, &target),
+        Some((caligo_model::ActionState::DeliveryUnknown, None))
+    );
+    let journal = std::fs::read(lab.dir.join("journal.log")).unwrap();
+    let journal = String::from_utf8_lossy(&journal);
+    assert!(journal.contains(&request_id));
+    assert!(!journal.contains("SILK_V3") && !journal.contains("private-voice:"));
+    drop(bridge);
+    let (mut bridge, new_scope) = lab.bridge();
+    assert_ne!(new_scope.connection_epoch, scope.connection_epoch);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, scope);
+    assert!(submit().is_err());
+    advertise_voice(&mut bridge, new_scope);
+    assert_eq!(
+        lab.daemon.onebot_text_status(&request_id, &target),
+        Some((caligo_model::ActionState::DeliveryUnknown, None))
+    );
 }
 
 #[test]

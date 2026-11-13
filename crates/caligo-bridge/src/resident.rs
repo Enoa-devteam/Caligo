@@ -63,6 +63,25 @@ pub enum OwnedRequest {
         peer_uid: String,
         text: String,
     },
+    SendPrivateVoice {
+        request_id: String,
+        wire_seq: u32,
+        deadline: std::time::Instant,
+        scope: QueryScope,
+        peer_uin: String,
+        silk: Vec<u8>,
+    },
+}
+
+impl OwnedRequest {
+    fn send_id(&self) -> Option<&String> {
+        match self {
+            Self::SendText { request_id, .. } | Self::SendPrivateVoice { request_id, .. } => {
+                Some(request_id)
+            }
+            Self::Probe { .. } => None,
+        }
+    }
 }
 
 /// 事件来源回调(D8 去重语义依赖:onRecvMsg=接收,onMsgInfoListUpdate=更新)。
@@ -242,6 +261,7 @@ struct Core<A: HostAdapter> {
     results_out: VecDeque<ResidentNotice>,
     pending_notice_slots: usize,
     listener_token: Option<u64>,
+    bridge_scope: Option<QueryScope>,
     counters: ResidentCounters,
     late_rejections: usize,
 }
@@ -285,6 +305,7 @@ impl<A: HostAdapter> Resident<A> {
                 results_out: VecDeque::new(),
                 pending_notice_slots: 0,
                 listener_token: None,
+                bridge_scope: None,
                 counters: ResidentCounters::default(),
                 late_rejections: 0,
             }),
@@ -326,6 +347,15 @@ impl<A: HostAdapter> Resident<A> {
     pub fn capability_metadata(&self) -> (Vec<caligo_model::capability::QueryCapability>, (bool, bool)) {
         let adapter = self.adapter.lock().unwrap();
         (adapter.query_capabilities().to_vec(), adapter.send_capabilities())
+    }
+
+    pub fn supports_private_voice(&self) -> bool {
+        self.adapter.lock().unwrap().supports_private_voice()
+    }
+
+    pub fn set_bridge_scope(&self, scope: Option<QueryScope>) {
+        let _adapter = self.adapter.lock().unwrap();
+        self.core.lock().unwrap().bridge_scope = scope;
     }
 
     /// Queue one authenticated fixed query; execution stays on the owner drain.
@@ -403,7 +433,7 @@ impl<A: HostAdapter> Resident<A> {
             }
         }
         // 先做所有容量检查,避免 QueueFull 留下不可重试的 request 记录。
-        if let OwnedRequest::SendText { request_id, .. } = &req {
+        if let Some(request_id) = req.send_id() {
             if c.requests.contains_key(request_id) {
                 return SubmitVerdict::Accepted; // 查询语义:不重复入队
             }
@@ -411,13 +441,13 @@ impl<A: HostAdapter> Resident<A> {
         if c.ingress.len() >= c.limits.ingress_max {
             return SubmitVerdict::QueueFull;
         }
-        let is_send = matches!(&req, OwnedRequest::SendText { .. });
+        let is_send = req.send_id().is_some();
         if is_send && c.pending_notice_slots.saturating_add(2) > c.limits.results_max {
             return SubmitVerdict::QueueFull;
         }
         // 已见请求防重复派发(计划 §6.6:相同 ID 不再次执行)。两个通知槽
         // 从 submit 起一直保留到 core 分别 ACK,使 worker 的断线 outbox 有界。
-        if let OwnedRequest::SendText { request_id, .. } = &req {
+        if let Some(request_id) = req.send_id() {
             c.requests.insert(
                 request_id.clone(),
                 ReqRecord {
@@ -496,6 +526,15 @@ impl<A: HostAdapter> Resident<A> {
                         peer_uid: peer_uid.clone(),
                         text: text.clone(),
                     },
+                    OwnedRequest::SendPrivateVoice { request_id, wire_seq, deadline, peer_uin, silk, .. } => {
+                        HostOp::SendPrivateVoice {
+                            request_id: request_id.clone(),
+                            wire_seq: *wire_seq,
+                            timeout_ms: deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u64,
+                            peer_uin: peer_uin.clone(),
+                            silk: silk.clone(),
+                        }
+                    }
                 };
                 (req, op)
             }; // core 锁释放:native 调用期间回调可重入。
@@ -519,7 +558,18 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     break;
                 }
-                adapter.native_op(op)
+                if let OwnedRequest::SendPrivateVoice { deadline, scope, .. } = &req {
+                    let core = self.core.lock().unwrap();
+                    let current = core.state == ResidentState::Ready && core.bridge_scope.as_ref() == Some(scope);
+                    drop(core);
+                    if !current || *deadline <= std::time::Instant::now() || !adapter.supports_private_voice() {
+                        Err(HostError::Native { code: 3 })
+                    } else {
+                        adapter.native_op(op)
+                    }
+                } else {
+                    adapter.native_op(op)
+                }
             };
             // ---- complete(core 锁):落账 + 独立完成通道 ----
             {
@@ -530,7 +580,7 @@ impl<A: HostAdapter> Resident<A> {
                     Ok(HostOpResult::Sent { .. } | HostOpResult::SendFired { .. })
                 );
                 if started {
-                    if let OwnedRequest::SendText { request_id, .. } = &req {
+                    if let Some(request_id) = req.send_id() {
                         if let Some(rec) = c.requests.get_mut(request_id) {
                             rec.state = ReqState::NativeStarted;
                         }
@@ -540,14 +590,14 @@ impl<A: HostAdapter> Resident<A> {
                     }
                 }
                 if !started {
-                    if let OwnedRequest::SendText { request_id, .. } = &req {
+                    if let Some(request_id) = req.send_id() {
                         release_notice_slot(&mut c, request_id, 0b01);
                     }
                 }
                 match &r {
                     Ok(HostOpResult::Sent { native_id }) => {
                         c.counters.dispatched_total += 1;
-                        if let OwnedRequest::SendText { request_id, .. } = &req {
+                        if let Some(request_id) = req.send_id() {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::Done;
                             }
@@ -571,7 +621,7 @@ impl<A: HostAdapter> Resident<A> {
                     // fired 非终态:mid 挂账,Promise 结果经 poll sendResults 回收。
                     Ok(HostOpResult::SendFired { mid: _ }) => {
                         c.counters.dispatched_total += 1;
-                        if let OwnedRequest::SendText { request_id, .. } = &req {
+                        if let Some(request_id) = req.send_id() {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::SendPending;
                                 rec.pending_mid = Some(request_id.clone());
@@ -580,7 +630,7 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     Ok(_) => {
                         c.counters.dispatched_total += 1;
-                        if let OwnedRequest::SendText { request_id, .. } = &req {
+                        if let Some(request_id) = req.send_id() {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::DeliveryUnknown;
                             }
@@ -595,7 +645,7 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     Err(HostError::Native { code }) => {
                         // 宿主明确报错:执行了但失败(Failure),不是 unknown。
-                        if let OwnedRequest::SendText { request_id, .. } = &req {
+                        if let Some(request_id) = req.send_id() {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::Done;
                             }
@@ -609,7 +659,7 @@ impl<A: HostAdapter> Resident<A> {
                     }
                     Err(_) => {
                         // env 失效/线程/上下文问题:执行与否不确定。
-                        if let OwnedRequest::SendText { request_id, .. } = &req {
+                        if let Some(request_id) = req.send_id() {
                             if let Some(rec) = c.requests.get_mut(request_id) {
                                 rec.state = ReqState::DeliveryUnknown;
                             }
@@ -992,7 +1042,7 @@ impl<A: HostAdapter> Resident<A> {
         c.state = ResidentState::Stopping;
         // 1) 取消从未执行的入站项(可证明未派发)。
         while let Some((req, _)) = c.ingress.pop_front() {
-            if let OwnedRequest::SendText { request_id, .. } = &req {
+            if let Some(request_id) = req.send_id() {
                 if let Some(rec) = c.requests.get_mut(request_id) {
                     if rec.state == ReqState::Queued {
                         rec.state = ReqState::CancelledUnsent;

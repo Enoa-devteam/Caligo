@@ -1531,23 +1531,8 @@ pub fn build_voice_send_js(
     timeout_ms: u64,
     silk: &[u8],
 ) -> Option<String> {
-    const MAX_SILK_BYTES: usize = 128 * 1024;
-    const MAX_PACKETS: usize = 50;
-    let mut packets = silk.strip_prefix(b"\x02#!SILK_V3")?;
-    if silk.len() > MAX_SILK_BYTES || packets.is_empty() {
+    if !caligo_model::voice::validate_short_tencent_silk(silk) {
         return None;
-    }
-    // Fixed reference envelope for a short Tencent SILK v3 voice message.
-    // Validate framing here; decoding and codec errors belong to media tooling.
-    let mut count = 0;
-    while !packets.is_empty() {
-        let (len, rest) = packets.split_first_chunk::<2>()?;
-        let size = i16::from_le_bytes(*len);
-        count += 1;
-        if size <= 0 || count > MAX_PACKETS {
-            return None;
-        }
-        packets = rest.get(size as usize..)?;
     }
     let mut hex = String::with_capacity(silk.len() * 2);
     use std::fmt::Write;

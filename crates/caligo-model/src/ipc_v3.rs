@@ -53,6 +53,14 @@ pub enum CoreToBridgeMsg {
         target: serde_json::Value,
         text: String,
     },
+    DispatchPrivateVoice {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        peer_uin: String,
+        silk: Vec<u8>,
+    },
     Query {
         request_id: String,
         scope: QueryScope,
@@ -121,6 +129,8 @@ pub enum BridgeMsg {
         scope: QueryScope,
         private_text: bool,
         group_text: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_voice: bool,
     },
     QueryResult {
         request_id: String,
@@ -233,6 +243,7 @@ mod tests {
             scope: scope.clone(),
             private_text: true,
             group_text: false,
+            private_voice: false,
         };
         assert_eq!(
             serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&send_capabilities).unwrap())

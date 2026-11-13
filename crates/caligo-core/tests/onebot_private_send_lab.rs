@@ -90,6 +90,7 @@ fn advertise(bridge: &mut BridgeClient, scope: QueryScope) {
             scope,
             private_text: true,
             group_text: true,
+            private_voice: false,
         })
         .unwrap();
     bridge

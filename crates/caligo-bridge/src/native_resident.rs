@@ -512,6 +512,7 @@ impl HostAdapter for NativeHostAdapter {
             HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
             // 延迟模式下 resident 不持有监听器 token,不会到达;到达即如实确认。
             HostOp::ListenerRemove { .. } => Ok(HostOpResult::ListenerRemoved),
+            HostOp::SendPrivateVoice { .. } => Err(HostError::NoProvenRoute),
             HostOp::SendText {
                 request_id,
                 wire_seq,

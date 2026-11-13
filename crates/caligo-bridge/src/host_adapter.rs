@@ -33,6 +33,13 @@ pub enum HostOp {
         peer_uid: String,
         text: String,
     },
+    SendPrivateVoice {
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        peer_uin: String,
+        silk: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +111,9 @@ pub trait HostAdapter {
     /// Explicit fixed-operation capability provider. Native routes default closed.
     fn send_capabilities(&self) -> (bool, bool) {
         (false, false)
+    }
+    fn supports_private_voice(&self) -> bool {
+        false
     }
     /// Cancel a pending wrapper query on the owner thread.
     fn cancel_query(&mut self, _request_id: &str, _scope: &QueryScope) {}
