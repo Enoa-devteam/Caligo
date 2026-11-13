@@ -318,6 +318,12 @@ impl<A: HostAdapter> Resident<A> {
         Ok(token)
     }
 
+    /// Read adapter capability metadata. This only reports compiled support.
+    pub fn capability_metadata(&self) -> (Vec<caligo_model::capability::QueryCapability>, (bool, bool)) {
+        let adapter = self.adapter.lock().unwrap();
+        (adapter.query_capabilities().to_vec(), adapter.send_capabilities())
+    }
+
     /// Queue one authenticated fixed query; execution stays on the owner drain.
     pub fn submit_query(
         &self,

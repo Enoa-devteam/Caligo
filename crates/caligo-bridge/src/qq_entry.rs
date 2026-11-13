@@ -929,6 +929,10 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
         }
     }
 
+    fn query_capabilities(&self) -> &'static [caligo_model::capability::QueryCapability] {
+        crate::qq_query::supported_capabilities()
+    }
+
     fn send_capabilities(&self) -> (bool, bool) {
         (true, true)
     }

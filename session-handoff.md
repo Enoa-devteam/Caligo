@@ -4,7 +4,7 @@
 
 当前用户目标是执行 [SnowCat 分阶段计划](docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)，分支 `codex/snowcat-capability-integration`，[Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。已提交 `ef238e1` ProfileService 基线修复、`c1b5b1a` 统一动作 registry、`ca29fd4` 主线整合与目录拒绝语义、`929b914` 固定参考清单。最新证据统一见 [整合执行记录](docs/execution/2026-11-13-snowcat-capability-integration.md)。
 
-本轮 A0 固定注册分母与 Caligo mapping 已提交，`4f90fb0` 接通 A1 typed wrapper 消息至 journal，`65ea2fe` 先行接通 A3 共享 SSE/MCP。最终串行 default/research 全仓、并行 research 全仓、固定参考 6 项和覆盖 12 项检查通过；中间失败和测试修正均保留在执行记录。完整 A1/A2、WebUI/多账号/其余动作、候选冻结和 B1–B3 均未完成。先完成离线接线与验收，不能恢复旧交接中“先现场 ProfileService”的顺序。A0–A4 不启动 QQ；B2 再指定新鲜双账号和精确 profile。历史 unknown 和序号继续保留。下一工作块为 A1/A2 D9：传递 core request_id/wire_seq/remaining timeout，原生调用前登记关联，按 add/update/精确回读建立强身份；同时明确更新修订去重和 OneBot real_id/font/sub_type 合同。不要从 Promise result 或本地 correlation 直接制造成功。缺口和可重跑命令从 mapping 与执行记录进入。
+本轮 A0 固定注册分母与 Caligo mapping 已提交，`4f90fb0` 接通 A1 typed wrapper 消息至 journal，`65ea2fe` 先行接通 A3 共享 SSE/MCP。最终串行 default/research 全仓、并行 research 全仓、固定参考 6 项和覆盖 12 项检查通过；中间失败和测试修正均保留在执行记录。完整 A1/A2、WebUI/多账号/其余动作、候选冻结和 B1–B3 均未完成。先完成离线接线与验收，不能恢复旧交接中“先现场 ProfileService”的顺序。A0–A4 不启动 QQ；B2 再指定新鲜双账号和精确 profile。历史 unknown 和序号继续保留。后续 `65e7e6c` 已接入 D9 请求关联/精确回读、只读查询、13-key 动作表、显式私聊能力门和 wrapper 同 ID 修订；`8e4583b` 已接入双账号管理/WebUI/媒体工具正常入口。最终 all 与并行 research 通过，浏览器配置/启停/关闭通过，详情见[后续执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)。下一工作块按覆盖清单处理：绑定当前登录结果及昵称、明确 typed wrapper subtype 与事件 fanout 的兼容合同；随后原生媒体上传/下载和 SSO、消息段/管理通知及扩展动作、CLI/SDK/便携部署。不能把仅有工具转换当 QQ 媒体贯通，不能从配置 account 猜登录成功，也不能将本地 correlation 当 native ID。完整候选未冻结，B1–B3 未开始。
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

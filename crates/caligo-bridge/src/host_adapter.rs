@@ -77,7 +77,7 @@ pub enum HostError {
 /// resident 用它与 [`HostAdapter::owner_thread_id`] 比对,先于任何
 /// `native_op`。
 use crate::resident::SendOutcome;
-use caligo_model::capability::{HostQuery, QueryOutcome, QueryScope};
+use caligo_model::capability::{HostQuery, QueryCapability, QueryOutcome, QueryScope};
 
 pub trait HostAdapter {
     /// 宿主初始化时确定的 owner 线程(QQ 的 JS/loop 线程)。
@@ -95,6 +95,11 @@ pub trait HostAdapter {
     /// 返回 (request_id, SendOutcome);Resident 负责落 core 结果通道。
     fn drain_send_responses(&mut self) -> Vec<(String, SendOutcome)> {
         Vec::new()
+    }
+    /// Fixed query metadata advertised by this compiled adapter. This does not
+    /// imply that a live wrapper service is currently available.
+    fn query_capabilities(&self) -> &'static [QueryCapability] {
+        &[]
     }
     /// Explicit fixed-operation capability provider. Native routes default closed.
     fn send_capabilities(&self) -> (bool, bool) {

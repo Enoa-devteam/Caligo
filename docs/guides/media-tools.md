@@ -17,7 +17,7 @@
 
 - `executable`：绝对路径，必须是本地 regular file，不接受符号链接。
 - `sha256`：64 位十六进制文件哈希；执行前逐字节校验，坏 hash fail closed。
-- `version`：用户声明的工具版本字符串，仅作为可审计元数据。
+- `version`：固定工具版本字符串，生产构造执行已核对 hash 的程序 `-version` 并验证输出包含该值。
 - `license`：用户声明的 `name`、`source`，以及可选绝对 `path`。许可证路径/来源不执行认证、不联网。
 - `work_root`：绝对路径。每个任务创建独立目录，任务结束自动 cleanup。
 - `timeout_ms`、`max_stdout_stderr_bytes`、`max_input_bytes`、`max_output_bytes`：均必须为正数。
@@ -32,12 +32,12 @@ stdout/stderr 由独立读取线程并发消费，共用总字节上限，避免
 
 ## 正常入口
 
-正常 CLI 入口预期为：
+正常 CLI 入口为：
 
 ```text
 caligo-media --config <absolute-json> probe --input <absolute-file>
-caligo-media --config <absolute-json> pcm --input <absolute-file>
-caligo-media --config <absolute-json> thumbnail --input <absolute-file> --format png
+caligo-media --config <absolute-json> pcm --input <absolute-file> --output-root <absolute-dir>
+caligo-media --config <absolute-json> thumbnail --input <absolute-file> --output-root <absolute-dir>
 ```
 
 配置文件本身不执行下载或安装。CLI 只负责解析 JSON、调用 core 模块并报告结果；不会声称真实 QQ `get_record`、native 上传或 OneBot 媒体动作已经接通。NTSilk 不在本合同内，不能通过默认值或降级路径启用。

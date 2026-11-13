@@ -19,7 +19,7 @@ pub const CAPABILITY_QUERY_REVISION: u32 = 1;
 /// IPC 语义协议 v3。v2 保持原定义供历史对照;不接受 v2/v1 握手降级。
 pub const PROTOCOL_VERSION_V3: u32 = 3;
 /// Bridge/core business receipt contract revision, independent of frame/IPC v3.
-pub const BUSINESS_PROTOCOL_REVISION: u32 = 2;
+pub const BUSINESS_PROTOCOL_REVISION: u32 = 3;
 
 pub use super::ipc_v2::{EventPayload, Role};
 

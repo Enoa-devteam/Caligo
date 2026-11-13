@@ -847,6 +847,25 @@ fn pop_event_window(
     Some(event)
 }
 
+fn capability_messages<A: crate::host_adapter::HostAdapter>(
+    resident: &Resident<A>,
+    scope: &caligo_model::capability::QueryScope,
+) -> [BridgeMsg; 2] {
+    let (capabilities, (private_text, group_text)) = resident.capability_metadata();
+    [
+        BridgeMsg::QueryCapabilities {
+            revision: CAPABILITY_QUERY_REVISION,
+            scope: scope.clone(),
+            capabilities,
+        },
+        BridgeMsg::SendCapabilities {
+            scope: scope.clone(),
+            private_text,
+            group_text,
+        },
+    ]
+}
+
 enum SessionEnd {
     CoreStopped,
     LocalStop,
@@ -913,19 +932,12 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
         session_generation: cfg.session_generation,
         connection_epoch,
     };
-    if send_json(
-        conn,
-        &BridgeMsg::QueryCapabilities {
-            revision: CAPABILITY_QUERY_REVISION,
-            scope: query_scope.clone(),
-            capabilities: crate::qq_query::supported_capabilities().to_vec(),
-        },
-    )
-    .is_err()
-    {
-        return SessionEnd::Broken;
-    }
     resident.invalidate_queries_except(&query_scope);
+    for msg in capability_messages(resident, &query_scope) {
+        if send_json(conn, &msg).is_err() {
+            return SessionEnd::Broken;
+        }
+    }
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -1328,5 +1340,69 @@ mod tests {
         let mut pipe = FramePipe::new();
         let garbage = b"NOT-A-FRAME!!".repeat(2);
         assert!(pipe.feed(&garbage).is_err());
+    }
+
+    struct CapabilityHost {
+        queries: &'static [caligo_model::capability::QueryCapability],
+        sends: (bool, bool),
+    }
+
+    impl crate::host_adapter::HostAdapter for CapabilityHost {
+        fn owner_thread_id(&self) -> u64 {
+            1
+        }
+        fn current_thread_id(&self) -> u64 {
+            1
+        }
+        fn env_valid(&self) -> bool {
+            true
+        }
+        fn current_context_ok(&self) -> bool {
+            true
+        }
+        fn native_op(
+            &mut self,
+            _: crate::host_adapter::HostOp,
+        ) -> Result<crate::host_adapter::HostOpResult, crate::host_adapter::HostError> {
+            panic!("capability metadata must not invoke the host")
+        }
+        fn query_capabilities(&self) -> &'static [caligo_model::capability::QueryCapability] {
+            self.queries
+        }
+        fn send_capabilities(&self) -> (bool, bool) {
+            self.sends
+        }
+    }
+
+    #[test]
+    fn capability_advertisement_uses_adapter_metadata_and_connection_scope() {
+        use caligo_model::capability::{QueryCapability, QueryScope};
+        let fixed_queries = crate::qq_query::supported_capabilities();
+        assert_eq!(fixed_queries.len(), 6);
+        assert!(!fixed_queries.contains(&QueryCapability::LoginInfo));
+
+        for (epoch, queries, sends) in [(9, &[][..], (false, false)), (10, fixed_queries, (true, true))] {
+            let expected_scope = QueryScope {
+                account: "10001".into(),
+                host_nonce: 7,
+                session_generation: 8,
+                connection_epoch: epoch,
+            };
+            let resident = Resident::new(
+                CapabilityHost { queries, sends },
+                crate::resident::ResidentLimits::default(),
+            );
+            let [
+                BridgeMsg::QueryCapabilities { revision, scope: query_scope, capabilities },
+                BridgeMsg::SendCapabilities { scope: send_scope, private_text, group_text },
+            ] = capability_messages(&resident, &expected_scope) else {
+                panic!("query and send capability announcements missing");
+            };
+            assert_eq!(revision, CAPABILITY_QUERY_REVISION);
+            assert_eq!(query_scope, expected_scope);
+            assert_eq!(send_scope, expected_scope);
+            assert_eq!(capabilities, queries);
+            assert_eq!((private_text, group_text), sends);
+        }
     }
 }

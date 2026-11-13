@@ -1,0 +1,57 @@
+# SnowCat 后续整合执行记录
+
+承接[首批执行记录](2026-11-13-snowcat-capability-integration.md)，计划为[固定参考整合计划](../plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)。用户确认继续全部剩余计划。分支 `codex/snowcat-capability-integration`，本批起点 `67664d38909fc7d4a8b83215c346675e92808e2b`，继续更新 [Draft PR #5](https://github.com/Enoa-devteam/Caligo/pull/5)。
+
+## 范围与证据边界
+
+本批推进 D9 请求关联/精确回读、只读能力 IPC、真实目录动作、消息持久修订、双账号管理与正常进程、管理 WebUI 和受控外部媒体工具。仍先离线整合，A4 冻结前不启动 QQ。固定参考始终为 `7cf025fe1e7f9c609e02a8643c6e6398eeec0d64`；只读行为合同与 TypeScript 类型，不执行参考代码、不引入反编译 C/C++ 或研究二进制依赖。
+
+GitNexus 开始绑定此 checkout/index `67664d3`。部分符号结果异常/未命中按 UNKNOWN 处理并经源码补证，随后强制 index-only 刷新。`handle_action` 上游为 CRITICAL（27 symbols / 14 direct / 8 flows），共享协议回归必须覆盖；没有把无 callers 解释为零影响。
+
+## 已运行的定向验证
+
+- 共享动作与查询：default `onebot::` unit 12/12；`onebot_query_lab` 6/6；MCP 6/6 PASS。正常 action handler 经真实 Daemon 管道读取 typed QueryData，测试未把失败转换为空列表。
+- Query IPC/model：model unit 16 + wire golden 6 PASS。broker default/research unit 各 3/3，真实 query pipe default/research 各 7/7 PASS。核心 query 范围按 account/host nonce/session generation/connection epoch 绑定；先登记后派发，有界容量和期限，不自动重试。
+- 消息修订：default/research Store 各 6/6、runtime 各 11/11、recovery 各 10/10 PASS；research wrapper chain 1/1。default wrapper chain 为 feature gate 的 0 tests，不能记为场景通过。
+- 账号管理：default/research 各 5/5 PASS，管理 token 新断言 1/1 PASS。真实双 Daemon 目录、账本、凭据和管道隔离、单账号停止、配置原子读写和失败回滚有覆盖。最初管理 binary smoke default/research 各 1/1 PASS；后续 WebUI 动态装配仍待最终复验。
+- 媒体工具：default `media_tool_lab` 6 PASS / 1 ignored helper；真实自有 child 验证 kill/wait 和 stdout/stderr 限制；`caligo-media` 构建 PASS，相对配置路径拒绝 exit 2。尚无真实 FFmpeg 转码或 QQ 上传/语音/Silk 验收，不将 CLI 通过计为媒体全链通过。
+
+## 实现与兼容合同
+
+消息 identity 保持 account/chat kind/peer/native ID，更新以业务快照指纹去重，排除本地事件序号和观察时间；同 ID 修订不重复产生新 message event。MessageStore 初始记录维持 v1，v2 仅追加同 identity/同本地 ID 修订；旧记录继续可读。严格 wrapper 记录可生成持久 get_msg 条目，`real_id=本地持久 OneBot ID` 是兼容语义，字体 14 是兼容默认，均不冒充原生字段。subtype 来源未闭合时不发布业务消息事件。
+
+固定 6 项查询为 UIN→UID、UID→UIN、精确消息回读、好友列表、群列表和群详情；登录资料未声明。只读查询与发送能力分别协商，不从 Profile 查询存在推定私聊发送可用。QQ wrapper 的服务调用在 owner 线程上执行；core 等待不持 actor 锁。D9 保留 core request_id/wire_seq/剩余期限，Promise 只提供受理/拒绝证据，稳定 add/update 身份与精确回读另行核对。没有把本地 correlation cookie 当作 native ID。
+
+## 中间失败保留
+
+联合编译曾遇到 D9 旧变量名、修订指纹 SessionKind 序列化和 resident 查询队列元组/期限改造的中间态错误，修复后才运行相关定向测试。管理 HTTP 首跑 5/7：Windows 只读句柄权限夹具和未读请求的 TCP reset 使两个测试失败，修后结果待最终记录。固定查询执行器审阅发现 UID/UIN 混用、数值 ID 字符串洗白、owned 拷贝静默截断和立即失败 pending 泄漏，修复与回归未结束前不计已验证。
+
+## 收口定向结果与浏览器验收
+
+D9 bridge source 冻结前通过 research check、library 91/91、resident 20/20、wrapper send 1/1、query contract 2/2。固定发送测试限定 research（生产 V8 固定脚本属于该 feature）；普通构建不把零用例计为发送验证。
+
+发送能力协商与查询能力分开保存，当前 scope 的私聊发送声明必须明确为 true；错 scope、断链和重连清零。正常私聊入口保留 UIN 作为持久 target，owner 解析 native UID。`onebot_private_send_lab` 2/2 PASS：未声明/错声明拒绝、真实 pipe 派发 UIN+强回执+wrapper 持久 ID 查询，以及 unknown 后不二次派发。`capability_query_lab` 扩展 8/8，daemon chain 5/5、broker 3/3 与新增 wire 1/1 PASS。
+
+管理 HTTP 修正后 default/research 各 7/7 PASS。管理 binary default/research 各 3/3 PASS：配置 readback、启停与 restart 后实际协议 listener、鉴权 shutdown、协议端口冲突在 10 秒内退出。此前 metadata EOF 来自 smoke 夹具绕过 `--set-config` 私有 ACL 初始化，正常入口初始化后通过；启动失败清理已修为先停止 daemon 再 join listener，避免锁内重入和等待死锁。
+
+浏览器使用本机隔离 manager（两个合成账号，没有 QQ attach），实际完成：连接读取配置、停止 A 后 B 仍运行、全部停止后修改配置并点击保存回读、磁盘 `accounts.json` 精确包含新配置、重新启动 A、鉴权关闭管理器 exit 0。界面始终显示 QQ 状态未知。该证据是本地 core/UI 行为，非 QQ 登录或消息验收。原始截图/页面数据和配置仅保留 ignored `local-evidence/`。此浏览器进程曾占用 `target-harness/debug/caligo-manager.exe` 导致一次构建替换失败，已通过 UI 正常退出后恢复构建。
+
+媒体模块补版本验证时误覆盖全文件已恢复完整实现，并在隔离 target 下重新通过 6 项 LAB（1 个 ignored child helper）及 CLI build。异常记录不由原先通过覆盖。版本声明通过 `-version` 输出核对；子进程使用独立 cwd 与 file/pipe 协议白名单、无 stdin，try_wait 错误清理 kill/wait/join 保留；该罕见 I/O 错误尚无独立注入测试。
+
+一次 rustfmt 递归扩散到 20 个无关 bridge 文件，主执行者将 HEAD 内容重放相同 rustfmt 后逐字节比较，确认完全相同才恢复，未恢复本批真实修改或用户文件。
+
+## 本批完整验证
+
+`RUST_TEST_THREADS=1 ./init.sh -Mode all` exit 0，default/research 全仓 PASS；原始输出为 ignored `local-evidence/snowcat-next-all-3.log`。随后并行 research workspace `cargo test --workspace --features caligo-core/research,caligo-cli/research --locked --offline --target-dir target-harness` exit 0（`local-evidence/snowcat-next-parallel-research.log`）。此前 all-1 为取消标志中间态编译失败，all-2 为管理 smoke ACL 夹具错误，均保留；修后才记录最终通过。
+
+提交前完整 GitNexus detect 为 critical（74 changed symbols / 20 affected flows / 21 tracked changed files），无 partial/truncated 结果；其不覆盖尚未跟踪的新文件的限制由显式 stage 后再次 detect 补足。共享注册/派发仍按 critical 风险处理。`git diff --check`、文档和覆盖映射收尾结果随阶段提交更新。当前不声明完整计划完成、候选已冻结或产品就绪。
+
+## 恢复检查点：bridge 声明与覆盖清单
+
+在 `8e4583b` 和现有工作树上恢复。经 WSL 使用计划 provenance 工具读取并核对计划 SHA-256 `ce9aedc51ed469cd9fd6efa8fce9528608628ffce87e8053af8c0826e7cf8482`。基线和 dirty digest 均已变化，19 条引用路径重新定位。固定参考 checkout 仍为 `7cf025f`。现有工作树的纯换行差异、日志与本机缓存未纳入阶段文件。
+
+bridge 每次接受 HelloAck 后用同一 QueryScope 清理旧查询并发布 adapter 的查询/发送声明。默认 adapter 声明为空，QQ owner adapter 声明六项固定只读查询和两种文本发送能力。具体操作仍须通过 owner 和宿主校验。业务协议 revision 3 使旧桥接在握手阶段明确被拒绝。
+
+- 初次覆盖测试失败 4 项，原因包括 13-key 映射未刷新、证据锚点漂移、评审 fixture 与 refresh 合同不一致。修正后用真实 Rust exporter 重生成 5,711 项映射并验证 12/12。固定参考重生成 6/6。保留显式评审，自动重算派生行，媒体映射限于已实现的 PCM 解码重叠部分。
+- 串行 `init.ps1 -Mode all` 在开始工作时通过。调整声明后，research bridge 声明 1/1、default query pipe 8/8、私聊发送 2/2、IPC 14/14 通过。
+- GitNexus 1.6.12 带 PDG 刷新。Windows 全文索引构建和修复均在 `Union.union_fts` 失败，随后用 `--skip-fts` 重建符号、调用和 PDG 索引。能力声明影响报告为 CRITICAL（2 个直接调用方，5 条执行流），包含正常 bridge 会话循环。
