@@ -321,7 +321,7 @@ fn group_params_validate_before_backend_and_no_cache_is_always_a_host_read() {
 
 #[test]
 fn metadata_and_legacy_wrapper_keep_backend_availability_explicit() {
-    assert_eq!(ACTION_REGISTRY.len(), 15);
+    assert_eq!(ACTION_REGISTRY.len(), 17);
     for name in ["get_friend_list", "get_group_list", "get_group_info"] {
         assert_eq!(
             resolve_action(name).unwrap().permission,
@@ -360,6 +360,151 @@ fn metadata_and_legacy_wrapper_keep_backend_availability_explicit() {
         .data,
         json!({"user_id":7,"nickname":"stale store"})
     );
+}
+
+fn member_snapshot(group_id: &str) -> caligo_model::capability::GroupMembers {
+    use caligo_model::capability::{GroupMember, GroupMembers, MemberRole, MemberSex};
+    GroupMembers {
+        group_id: group_id.into(),
+        members: vec![GroupMember {
+            user_id: u64::MAX.to_string(),
+            nickname: "Member".into(),
+            card: "Card".into(),
+            sex: MemberSex::Female,
+            age: 27,
+            level: "12".into(),
+            qq_level: 109,
+            join_time: "1700000000".into(),
+            last_sent_time: "1700000001".into(),
+            role: MemberRole::Owner,
+            title: "Title".into(),
+            is_robot: false,
+            shut_up_timestamp: 0,
+        }],
+    }
+}
+fn member_json() -> Value {
+    json!({"group_id":30003,"user_id":u64::MAX,"nickname":"Member","card":"Card","sex":"female","age":27,
+        "area":"","level":"12","qq_level":109,"join_time":1700000000,"last_sent_time":1700000001,
+        "title_expire_time":0,"unfriendly":false,"card_changeable":true,"is_robot":false,"shut_up_timestamp":0,
+        "role":"owner","title":"Title"})
+}
+
+#[test]
+fn members_use_complete_current_snapshot_and_validate_before_backend() {
+    for (action, params, expected, force_refresh) in [
+        (
+            "get_group_member_list",
+            json!({"group_id":30003}),
+            json!([member_json()]),
+            false,
+        ),
+        (
+            "get_group_member_info",
+            json!({"group_id":30003,"user_id":u64::MAX}),
+            member_json(),
+            true,
+        ),
+        (
+            "get_group_member_info",
+            json!({"group_id":30003,"user_id":u64::MAX,"no_cache":false}),
+            member_json(),
+            false,
+        ),
+    ] {
+        let backend = FakeQueries::new(QueryOutcome::Success(QueryData::GroupMembers(
+            member_snapshot("30003"),
+        )));
+        let response = backend.run(action, params, json!(["members"]));
+        assert_eq!(response.retcode, 0);
+        assert_eq!(response.data, expected);
+        assert_eq!(response.echo, json!(["members"]));
+        assert_eq!(
+            *backend.calls.borrow(),
+            vec![(
+                HostQuery::GroupMembers {
+                    group_id: "30003".into(),
+                    force_refresh
+                },
+                QUERY_TIMEOUT
+            )]
+        );
+    }
+    let good = QueryOutcome::Success(QueryData::GroupMembers(member_snapshot("30003")));
+    for (action, params) in [
+        ("get_group_member_list", json!({})),
+        ("get_group_member_list", json!({"group_id":0})),
+        ("get_group_member_list", json!({"group_id":"30003"})),
+        (
+            "get_group_member_list",
+            json!({"group_id":30003,"no_cache":"true"}),
+        ),
+        ("get_group_member_info", json!({"group_id":30003})),
+        (
+            "get_group_member_info",
+            json!({"group_id":30003,"user_id":0}),
+        ),
+    ] {
+        let backend = FakeQueries::new(good.clone());
+        assert_eq!(
+            backend.run(action, params, Value::Null).retcode,
+            RET_BAD_PARAMS
+        );
+        assert!(backend.calls.borrow().is_empty());
+    }
+    let backend = FakeQueries::new(good.clone());
+    assert_eq!(
+        backend
+            .run(
+                "get_group_member_info",
+                json!({"group_id":30003,"user_id":7}),
+                Value::Null
+            )
+            .retcode,
+        RET_BAD_REQUEST
+    );
+    let mut duplicate = member_snapshot("30003");
+    duplicate.members.push(duplicate.members[0].clone());
+    let mut overflow = member_snapshot("30003");
+    overflow.members[0].join_time = "18446744073709551616".into();
+    for invalid in [
+        QueryData::GroupMembers(duplicate),
+        QueryData::GroupMembers(overflow),
+        QueryData::GroupMembers(member_snapshot("30004")),
+        QueryData::GroupList(vec![]),
+    ] {
+        let backend = FakeQueries::new(QueryOutcome::Success(invalid));
+        assert_eq!(
+            backend
+                .run(
+                    "get_group_member_list",
+                    json!({"group_id":30003}),
+                    Value::Null
+                )
+                .retcode,
+            RET_BAD_REQUEST
+        );
+    }
+    for (outcome, code) in [
+        (QueryOutcome::Unsupported, RET_UNSUPPORTED),
+        (QueryOutcome::NotReady, RET_NOT_READY),
+        (QueryOutcome::PermissionDenied, RET_PERMISSION_DENIED),
+        (QueryOutcome::Timeout, RET_NOT_CONFIRMED),
+        (QueryOutcome::Disconnected, RET_NOT_CONFIRMED),
+        (QueryOutcome::InvalidResponse, RET_BAD_REQUEST),
+    ] {
+        let backend = FakeQueries::new(outcome);
+        assert_eq!(
+            backend
+                .run(
+                    "get_group_member_list",
+                    json!({"group_id":30003}),
+                    Value::Null
+                )
+                .retcode,
+            code
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -576,4 +721,32 @@ mod normal_pipe {
         );
         drop(bridge);
     }
+    #[test]
+    fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect() {
+        let lab=Lab::new();let handler=action_handler(lab.daemon.clone());let (mut bridge,scope)=lab.connect();
+        let params=json!({"group_id":30003});
+        assert_eq!(handler("get_group_member_list",&params,Value::Null).retcode,RET_UNSUPPORTED);
+        bridge.send(&BridgeMsg::QueryCapabilities {revision:CAPABILITY_QUERY_REVISION,scope:scope.clone(),capabilities:vec![QueryCapability::GroupMembers]}).unwrap();
+        bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+        assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));
+        for (action,params,expected) in [
+            ("get_group_member_list",params,json!([member_json()])),
+            ("get_group_member_info",json!({"group_id":30003,"user_id":u64::MAX}),member_json()),
+        ] {
+            let h=handler.clone();let task=std::thread::spawn(move ||h(action,&params,json!(action)));
+            let CoreToBridgeMsg::Query {request_id,scope:actual,query,..}=bridge.recv().unwrap() else {panic!("expected member query")};
+            assert_eq!(actual,scope);assert_eq!(query,HostQuery::GroupMembers {group_id:"30003".into(),force_refresh:action.ends_with("info")});
+            let outcome=QueryOutcome::Success(QueryData::GroupMembers(member_snapshot("30003")));
+            let mut stale=scope.clone();stale.host_nonce+=1;
+            bridge.send(&BridgeMsg::QueryResult {request_id:request_id.clone(),scope:stale,outcome:outcome.clone()}).unwrap();
+            bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+            assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));assert!(!task.is_finished());
+            bridge.send(&BridgeMsg::QueryResult {request_id,scope:scope.clone(),outcome}).unwrap();
+            let response=task.join().unwrap();assert_eq!(response.retcode,0);assert_eq!(response.data,expected);
+            assert_eq!(response.echo,json!(action));
+        }
+        drop(bridge);let (_bridge,new_scope)=lab.connect();assert_ne!(new_scope.connection_epoch,scope.connection_epoch);
+        assert_eq!(handler("get_group_member_list",&json!({"group_id":30003}),Value::Null).retcode,RET_UNSUPPORTED);
+    }
+
 }

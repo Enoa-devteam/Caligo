@@ -206,3 +206,33 @@ GitNexus 绑定仓库/工作目录 `E:/stella/Caligo`，起点索引/HEAD `a3546
 后续顺序复核保留两项新增失败：一次 default/research 在同一 target-dir 重叠执行，默认 gate 读到被 research 覆盖的可执行文件，结果作废并改为顺序运行；之后 research 的 daemon_client_lab 首项发现旧 fixture 目录仅含 PID，Windows PID 复用会读到历史 `R1` 成功，尚未派发便满足旧成功条件，引发 dispatch 计数失败和后续 Mutex poison。已按每次 fixture 的 PID、时钟和进程序号隔离 journal，保持生产恢复语义不变。失败原报告为 ignored `snowcat-png-wire-all-verified.log`、`snowcat-png-wire-all-sequential-final.log`。不将失败隐藏为通过。
 
 最终验证：`snowcat-png-wire-all-isolated-final.log` 的顺序 default/research 全仓退出 0，随后独立默认并发 research 全仓 `snowcat-png-wire-parallel-isolated-final.log` 退出 0。覆盖含真实 registry exporter 12/12，无 skipped；docs 和 Windows diff 检查通过。提交前 force/index-only/PDG 重建并对 staged/all 分别做结构化 detect，完整报告保存在 ignored `snowcat-png-wire-detect-*.json`；前轮两个 scope 均完整返回 98 symbols / 18 flows、CRITICAL，后续 fixture 隔离也纳入最终检查。图仍有 FTS 不可用及 PDG 召回限制，未凭缺边降低风险。
+
+
+## A2 群成员查询接线
+
+从 `abab4e0` 继续处理无需 QQ 的独立合同。固定参考 `7cf025f` 的 `NodeIKernelGroupService.ts:111–124`、`GroupApi.getGroupMemberAll` 和 `OB11Construct.groupMember` 提供完整成员 Map 快照与 OneBot 字段合同。新增强类型 `GroupMembers` 查询/结果，经精确 pilot hash、当前账号/连接代次的 broker 和 owner 查询执行；新增共享 Read 动作 `get_group_member_list` 与 `get_group_member_info`。后者按完整快照的精确 UIN 选取，不把不存在的成员变成空对象，也不伪称调用了额外的 rich profile fetch。
+
+校验 errCode、finish、ids/Map 键和值 UID 的一致性、唯一 UID/UIN、正整数 UIN 和 64 位边界、角色、长度、计数与时间字段；未完成快照、超过 2,048 项或 512 KiB 均明确失败，不静默截断。原生 UID、头像路径和额外凭据不进入 IPC。`no_cache` 仅接受布尔值，列表默认 false、指定成员默认 true；两者都实际查询宿主。旧 bridge 未声明 GroupMembers 时返回未支持，断链清空能力，不读 learned peers 或本地假成员数据。
+
+编辑前 GitNexus 在 `E:/stella/Caligo` 当前工作目录检查共享 handler（CRITICAL）、query builder 和响应校验（LOW）；按源码补证固定脚本和 trait 分派。定向 wrapper 合同 6/6 通过，覆盖完整/空快照、Map 错键、重复身份、错误 role/时间/尺寸、业务拒绝、精确大整数及私有字段隔离，并将成功输出送入生产 Rust decoder。首轮 unit 为 11 PASS / 1 FAIL：新增两条真实注册项后，旧白名单未同步；已显式补齐白名单。其余实际命令、最终回归和状态在本节追加。没有启动 QQ，未冻结候选。
+
+
+最终检查：`onebot_query_lab` 8/8，新增场景验证两个正常动作经过真实管道、64 位 ID、no_cache、错 nonce 回包忽略与 reconnect 清权；共享 unit、全仓串行 default/research（`snowcat-members-all.log`）与随后独立默认并发 research（`snowcat-members-parallel.log`）均退出 0。覆盖检查含真实 exporter 12/12，registry 17 keys（14 base + 3 aliases），固定参考分母 5,711 不变；新增成员动作和 wrapper 方法仍按 partial_offline 记录，未假称 rich profile 或现场完成。一次带 `onebot` 名称过滤的命令只跑 unit、将集成测试全过滤，随后专门不带过滤执行 `onebot_query_lab`，结果以上述 8/8 为准。GitNexus staged/all 首轮均完整返回 85 symbols / 21 flows、CRITICAL，报告为 ignored `snowcat-members-detect-*.json`；回归保留图的召回限制。feat-006 继续 blocked，其余完成门与 QQ 准入不变。
+
+
+收尾另修 smoke 证据根目录：Cargo 从 package 目录运行测试，旧 `current_dir()/local-evidence` 可能让失败夹具落到未忽略的 `crates/caligo-core/local-evidence`。现按 CARGO_MANIFEST_DIR 定位 workspace 的 ignored 根目录；本轮已确认来源的失败输入夹具移入根 `local-evidence` 保留，未删除原证据。仅此测试路径变更后，default/research `manager_smoke` 各 3/3 通过，日志 `snowcat-manager-evidence-tests.log`。测试函数图为 UNKNOWN，由 `#[test]` 入口、三个真实 binary 调用及源码路径补证；没有把零图边当低风险。
+
+### 下一原生合同门
+
+固定参考再次只读核对到 `7cf025f`，当前需要 QQ 补证的具体边界如下；这些不是合成宿主可以替代的结论。
+
+| 原生依赖 | 已有来源与缺口 | 下一项最小证据 |
+|---|---|---|
+| 当前登录身份 | `snowcat-framework/snowcat.ts:93–124` 等待 `onQRCodeLoginSucceed` 后才构造 selfInfo；`NodeIKernelLoginService.getLoginList` 返回历史列表。ProfileService.getSelfStatus 仅声明 Promise&lt;unknown&gt;，固定参考没有调用样本 | 在新指定、精确 hash 的已登录实例确认可重取的当前 UIN/UID 与昵称来源，并绑定 wrapper session/host nonce；不能从配置或历史列表推断 |
+| 强制资料刷新 | `apis/user.ts:81–96` 经 `callNormalEventV2` 等待 `onUserDetailInfoChanged`，虽然 service TypeScript 声明了 Promise 返回形状，但实际流程依赖监听回调 | 确认当前 profile 的返回值、回调字段、scope/迟到关联和 listener 寿命；未据声明直接注册 get_stranger_info 或用旧缓存伪装 no_cache |
+| 自有 SSO 二进制 | `packet/client/nativeClient.ts:33–83` 依赖 `napi2nativeLoader.initHook` 再取 rspbuffer；既有 42/919 字节对照仍来自第三方实验转换 | 在已准入的独立研究合同下确认自有转换的输入/输出 owned bytes、命令/序列与回调线程/寿命；不复用第三方后端，也不重放历史 unknown |
+| 原生媒体与停止 | PNG/语音接线和精确回读已有离线证据，缓存保留及临时下载槽的真实 owner/final callback 尚无 Caligo 现场证据 | 在后续同一候选、双账号和各自 scope 上核实实际回调路径、对端观察、get_msg/get_image 和停止边界；本轮不启动 QQ 或热卸载 |
+
+这是新增原生合同的取证边界，不是完整 A4/B1/B2 验收完成。其他格式、视频/文件、管理/通知与扩展动作、CLI/SDK/便携部署等仍有离线实现工作，继续以覆盖清单逐项推进；不能把所有 missing 项统称为“只差 QQ”。完整候选未冻结，B2 集中验收仍未开始，产品 NOT READY。
+
+最终收尾包含 smoke 证据目录修正及原生合同门记录：GitNexus staged/all 各 14 files / 89 symbols / 21 flows，完整返回且风险 CRITICAL，结果为 `snowcat-members-detect-*-final.json`。`init.ps1 -Mode docs` PASS（15 live docs / 266 local links / 35 historical entries / 10 features），Windows staged/all diff 检查通过。

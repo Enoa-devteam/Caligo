@@ -112,6 +112,8 @@ pub enum ActionHandlerKind {
     GetFriendList,
     GetGroupList,
     GetGroupInfo,
+    GetGroupMemberList,
+    GetGroupMemberInfo,
     GetStatus,
     GetVersionInfo,
 }
@@ -128,6 +130,8 @@ pub enum ActionInputSchema {
     Record,
     Image,
     GroupInfo,
+    GroupMemberList,
+    GroupMemberInfo,
 }
 
 impl ActionInputSchema {
@@ -192,7 +196,7 @@ impl ActionInputSchema {
                     {"required":["user_id"], "properties":{"message_type":{"const":"private"}}}
                 ]);
             }
-            Self::GroupInfo => {
+            Self::GroupInfo | Self::GroupMemberList | Self::GroupMemberInfo => {
                 schema["properties"]["group_id"] = serde_json::json!({
                     "type":"integer", "minimum":1, "maximum":u64::MAX
                 });
@@ -201,6 +205,11 @@ impl ActionInputSchema {
                     "description":"Queries always read the host; no fabricated cache is used"
                 });
                 schema["required"] = serde_json::json!(["group_id"]);
+                if self == Self::GroupMemberInfo {
+                    schema["properties"]["no_cache"]["default"] = Value::from(true);
+                    schema["properties"]["user_id"] = serde_json::json!({"type":"integer","minimum":1,"maximum":u64::MAX});
+                    schema["required"] = serde_json::json!(["group_id","user_id"]);
+                }
             }
             Self::MessageId => {
                 schema["properties"]["message_id"] = serde_json::json!({
@@ -354,6 +363,20 @@ pub static ACTION_REGISTRY: &[ActionDefinition] = &[
         permission: ActionPermission::Read,
         handler: ActionHandlerKind::GetGroupInfo,
         input_schema: ActionInputSchema::GroupInfo,
+    },
+    ActionDefinition {
+        name: "get_group_member_list",
+        canonical: "get_group_member_list",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupMemberList,
+        input_schema: ActionInputSchema::GroupMemberList,
+    },
+    ActionDefinition {
+        name: "get_group_member_info",
+        canonical: "get_group_member_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetGroupMemberInfo,
+        input_schema: ActionInputSchema::GroupMemberInfo,
     },
     ActionDefinition {
         name: "get_status",
@@ -545,6 +568,19 @@ fn group_data(info: GroupInfo) -> Option<Value> {
     }))
 }
 
+fn member_data(group_id: &str, member: caligo_model::capability::GroupMember) -> Option<Value> {
+    let mut data = serde_json::to_value(&member).ok()?;
+    data["group_id"] = Value::from(public_id(group_id)?);
+    data["user_id"] = Value::from(public_id(&member.user_id)?);
+    data["join_time"] = Value::from(member.join_time.parse::<u64>().ok()?);
+    data["last_sent_time"] = Value::from(member.last_sent_time.parse::<u64>().ok()?);
+    data["area"] = Value::from("");
+    data["title_expire_time"] = Value::from(0);
+    data["unfriendly"] = Value::from(false);
+    data["card_changeable"] = Value::from(true);
+    Some(data)
+}
+
 fn query_response(query: HostQuery, backend: &dyn QueryBackend, echo: Value) -> ActionResponse {
     query_response_with_voice(query, backend, echo, None, None)
 }
@@ -568,6 +604,8 @@ fn query_response_with_voice(
                     "user_id":public_id(&info.user_id)?, "nickname":info.nickname, "remark":info.remark
                 })))
                 .collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupMembers { group_id, .. }, QueryData::GroupMembers(list)) if list.matches(&group_id) =>
+                list.members.into_iter().map(|m|member_data(&group_id,m)).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
                 .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
@@ -814,6 +852,58 @@ pub fn handle_action_with_queries(
                 echo,
             )
         }
+        ActionHandlerKind::GetGroupMemberList | ActionHandlerKind::GetGroupMemberInfo => {
+            let Some(group_id) = params
+                .get("group_id")
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0)
+            else {
+                return ActionResponse::failed(RET_BAD_PARAMS, "group_id 必须是正整数", echo);
+            };
+            let no_cache = match params.get("no_cache") {
+                None => definition.handler == ActionHandlerKind::GetGroupMemberInfo,
+                Some(Value::Bool(v)) => *v,
+                _ => return ActionResponse::failed(RET_BAD_PARAMS, "no_cache 必须是布尔值", echo),
+            };
+            let user_id = if definition.handler == ActionHandlerKind::GetGroupMemberInfo {
+                match params
+                    .get("user_id")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0)
+                {
+                    Some(v) => Some(v),
+                    None => {
+                        return ActionResponse::failed(RET_BAD_PARAMS, "user_id 必须是正整数", echo)
+                    }
+                }
+            } else {
+                None
+            };
+            let mut response = query_response(
+                HostQuery::GroupMembers {
+                    group_id: group_id.to_string(),
+                    force_refresh: no_cache,
+                },
+                queries,
+                echo.clone(),
+            );
+            if response.retcode == 0 {
+                if let Some(user_id) = user_id {
+                    let member = response
+                        .data
+                        .as_array()
+                        .and_then(|list| {
+                            list.iter().find(|m| m["user_id"].as_u64() == Some(user_id))
+                        })
+                        .cloned();
+                    response = match member {
+                        Some(m) => ActionResponse::ok(m, echo),
+                        None => ActionResponse::failed(RET_BAD_REQUEST, "群成员不存在", echo),
+                    };
+                }
+            }
+            response
+        }
         ActionHandlerKind::GetVersionInfo => ActionResponse::ok(
             serde_json::json!({
                 "app_name": "Caligo",
@@ -924,6 +1014,8 @@ mod tests {
                 "get_friend_list",
                 "get_group_list",
                 "get_group_info",
+            "get_group_member_list",
+            "get_group_member_info",
                 "get_status",
                 "get_version_info",
             ])
@@ -970,6 +1062,11 @@ mod tests {
                 }),
                 HostQuery::FriendList => QueryData::FriendList(vec![]),
                 HostQuery::GroupList => QueryData::GroupList(vec![]),
+                HostQuery::GroupMembers {group_id,..} => QueryData::GroupMembers(caligo_model::capability::GroupMembers {group_id,members:vec![caligo_model::capability::GroupMember {
+                    user_id:"8".into(),nickname:"member".into(),card:"card".into(),sex:caligo_model::capability::MemberSex::Unknown,
+                    age:0,level:"0".into(),qq_level:0,join_time:"0".into(),last_sent_time:"0".into(),
+                    role:caligo_model::capability::MemberRole::Member,title:"".into(),is_robot:false,shut_up_timestamp:0,
+                }]}),
                 HostQuery::GroupInfo { group_id } => QueryData::GroupInfo(GroupInfo {
                     group_id,
                     group_name: "Lab group".into(),
@@ -1006,7 +1103,8 @@ mod tests {
                 ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
                 ActionInputSchema::Record => serde_json::json!({"file":"caligo-voice:10001:42"}),
                 ActionInputSchema::Image => serde_json::json!({"file":"caligo-image:10001:42"}),
-                ActionInputSchema::GroupInfo => serde_json::json!({"group_id":7,"no_cache":true}),
+                ActionInputSchema::GroupInfo | ActionInputSchema::GroupMemberList => serde_json::json!({"group_id":7,"no_cache":true}),
+                ActionInputSchema::GroupMemberInfo => serde_json::json!({"group_id":7,"user_id":8}),
                 ActionInputSchema::Empty => serde_json::json!({}),
             };
             let echo = serde_json::json!([entry.name, {"seq":1}]);
@@ -1050,6 +1148,8 @@ mod tests {
                     response.data,
                     serde_json::json!({"user_id":1694717255u64,"nickname":"caligo"})
                 ),
+                ActionHandlerKind::GetGroupMemberInfo => assert_eq!(response.data["user_id"],8),
+                ActionHandlerKind::GetGroupMemberList => assert_eq!(response.data[0]["user_id"],8),
                 ActionHandlerKind::GetFriendList | ActionHandlerKind::GetGroupList => {
                     assert_eq!(response.data, serde_json::json!([]))
                 }
@@ -1237,6 +1337,8 @@ mod tests {
                         assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
                         assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk", "wav", "ogg"]));
                         ActionInputSchema::Record
+                    } else if matches!(handler,ActionHandlerKind::GetGroupMemberList|ActionHandlerKind::GetGroupMemberInfo) {
+                        if handler == ActionHandlerKind::GetGroupMemberList {ActionInputSchema::GroupMemberList} else {ActionInputSchema::GroupMemberInfo}
                     } else if handler == ActionHandlerKind::GetGroupInfo {
                         assert_eq!(schema["required"], serde_json::json!(["group_id"]));
                         assert_eq!(schema["properties"]["group_id"]["minimum"], 1);

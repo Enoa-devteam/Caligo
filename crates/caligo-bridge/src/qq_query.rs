@@ -25,11 +25,12 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::ExactVoiceDownload,
     QueryCapability::ImageInfo,
     QueryCapability::ImageDownload,
+    QueryCapability::GroupMembers,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
-    // Media operations form a suffix admitted only by the exact pilot profile.
-    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 5]
+    // Newly admitted operations form a suffix bound to the exact pilot profile.
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 6]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
@@ -88,6 +89,7 @@ fn kind(query: &HostQuery) -> &'static str {
         HostQuery::FriendList => "friend_list",
         HostQuery::GroupList => "group_list",
         HostQuery::GroupInfo { .. } => "group_info",
+        HostQuery::GroupMembers { .. } => "group_members",
         HostQuery::UinToUid { .. } => "uin_to_uid",
         HostQuery::UidToUin { .. } => "uid_to_uin",
         HostQuery::MessagesById { .. } => "messages_by_id",
@@ -113,6 +115,7 @@ fn query_args(query: &HostQuery) -> String {
             serde_json::to_string(message_ids).expect("message id serialization is infallible")
         ),
         HostQuery::GroupInfo { group_id } => format!("{{groupCode:{}}}", json_string(group_id)),
+        HostQuery::GroupMembers { group_id, force_refresh } => format!("{{groupCode:{},forceRefresh:{force_refresh}}}",json_string(group_id)),
         HostQuery::VoiceInfo {
             peer_uid,
             message_id,
@@ -453,6 +456,39 @@ pub fn build_query_start_js(
       }
       R.queryGroupActive = p;
       settle(group.getGroupList.call(group, true), p, function(result) { if (result && result.result !== undefined && result.result !== 0) fail(p, 'group list result'); });
+      return reply('pending');
+    }
+    if (queryKind === 'group_members') {
+      var memberService = R.session.getGroupService && R.session.getGroupService();
+      if (!memberService || typeof memberService.getAllMemberList !== 'function') return terminal(p, 'unsupported');
+      settle(memberService.getAllMemberList.call(memberService, args.groupCode, args.forceRefresh), p, function(value) {
+        if (!value || !Number.isInteger(value.errCode)) throw new Error('member response shape');
+        if (value.errCode !== 0) { p.status='rejected';p.code=value.errCode;p.reason='native member query rejected';return; }
+        var result=value.result;
+        if (!result || result.finish !== true || !(result.infos instanceof Map) || !Array.isArray(result.ids) ||
+            result.infos.size > 2048 || result.ids.length !== result.infos.size) throw new Error('incomplete member snapshot');
+        var ids=new Set(), uins=new Set(), members=[];
+        function count(n) {if (!Number.isSafeInteger(n) || n < 0 || n > 4294967295) throw new Error('invalid member count');return n;}
+        function decimal(v) {if (typeof v !== 'string' || !/^[0-9]{1,20}$/.test(v) || BigInt(v)>18446744073709551615n) throw new Error('invalid member timestamp');return v;}
+        function text(v) {if (typeof v !== 'string' || Buffer.byteLength(v,'utf8')>4096) throw new Error('invalid member text');return v;}
+        result.ids.forEach(function(id) {
+          if (!id || typeof id.uid !== 'string' || !/^u_[A-Za-z0-9_-]+$/.test(id.uid) || ids.has(id.uid)) throw new Error('invalid member key');
+          ids.add(id.uid);
+          var m=result.infos.get(id.uid);
+          if (!m || m.uid !== id.uid || typeof m.uin !== 'string' || !/^[1-9][0-9]{0,19}$/.test(m.uin) ||
+              BigInt(m.uin)>18446744073709551615n || uins.has(m.uin) || m.isDelete !== false || typeof m.isRobot !== 'boolean') throw new Error('invalid member identity');
+          uins.add(m.uin);
+          var role={2:'member',3:'admin',4:'owner'}[m.role];
+          if (!role) throw new Error('unknown member role');
+          var level=m.memberRealLevel === undefined ? 0 : count(m.memberRealLevel), qq=0;
+          if (m.qqLevel !== undefined) qq=count(count(m.qqLevel.crownNum)*64+count(m.qqLevel.sunNum)*16+count(m.qqLevel.moonNum)*4+count(m.qqLevel.starNum));
+          members.push({user_id:m.uin,nickname:text(m.nick),card:text(m.cardName),
+            sex:m.sex===1?'male':m.sex===2?'female':'unknown',age:m.age===undefined?0:count(m.age),level:String(level),qq_level:qq,
+            join_time:decimal(m.joinTime),last_sent_time:decimal(m.lastSpeakTime),role:role,title:m.memberSpecialTitle===undefined?'':text(m.memberSpecialTitle),
+            is_robot:m.isRobot,shut_up_timestamp:count(m.shutUpTime)});
+        });
+        finish(p,{kind:'group_members',data:{group_id:args.groupCode,members:members}});
+      });
       return reply('pending');
     }
     if (queryKind === 'group_info') {

@@ -43,6 +43,13 @@ impl Drop for Guard {
     }
 }
 
+fn evidence_dir() -> PathBuf {
+    // Cargo runs this binary from the package directory. Keep retained failure
+    // artifacts under the workspace's ignored evidence root as well.
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap().join("local-evidence")
+}
+
 fn unique_tag() -> String {
     format!(
         "{}-{}",
@@ -190,9 +197,7 @@ fn wait_http_closed(address: &str) {
 #[test]
 fn management_http_config_lifecycle_and_shutdown() {
     let tag = unique_tag();
-    let root = std::env::current_dir()
-        .expect("workspace")
-        .join("local-evidence")
+    let root = evidence_dir()
         .join(format!("manager-management-smoke-{tag}"));
     let prefix = format!("manager-management-smoke-{tag}");
     let protocol_port = free_port();
@@ -345,9 +350,7 @@ fn management_http_config_lifecycle_and_shutdown() {
 #[test]
 fn manager_startup_listener_bind_failure_exits_promptly() {
     let tag = unique_tag();
-    let root = std::env::current_dir()
-        .expect("workspace")
-        .join("local-evidence")
+    let root = evidence_dir()
         .join(format!("manager-bind-failure-smoke-{tag}"));
     let occupied = TcpListener::bind("127.0.0.1:0").expect("reserve protocol port");
     let port = occupied.local_addr().unwrap().port();
@@ -388,9 +391,7 @@ fn manager_startup_listener_bind_failure_exits_promptly() {
 #[test]
 fn manager_binary_runs_two_accounts_and_persists_config() {
     let tag = unique_tag();
-    let evidence = std::env::current_dir()
-        .expect("workspace")
-        .join("local-evidence");
+    let evidence = evidence_dir();
     let root = evidence.join(format!("manager-smoke-{tag}"));
     let input_dir = evidence.join(format!("manager-smoke-input-{tag}"));
     std::fs::create_dir_all(&input_dir).expect("config input directory");

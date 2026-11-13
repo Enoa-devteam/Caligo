@@ -18,6 +18,7 @@ pub enum QueryCapability {
     FriendList,
     GroupList,
     GroupInfo,
+    GroupMembers,
     UinToUid,
     UidToUin,
     MessagesById,
@@ -35,6 +36,7 @@ impl QueryCapability {
         Self::FriendList,
         Self::GroupList,
         Self::GroupInfo,
+        Self::GroupMembers,
         Self::UinToUid,
         Self::UidToUin,
         Self::MessagesById,
@@ -68,6 +70,10 @@ pub enum HostQuery {
     GroupList,
     GroupInfo {
         group_id: String,
+    },
+    GroupMembers {
+        group_id: String,
+        force_refresh: bool,
     },
     UinToUid {
         uin: String,
@@ -159,6 +165,7 @@ impl HostQuery {
             Self::FriendList => QueryCapability::FriendList,
             Self::GroupList => QueryCapability::GroupList,
             Self::GroupInfo { .. } => QueryCapability::GroupInfo,
+            Self::GroupMembers { .. } => QueryCapability::GroupMembers,
             Self::UinToUid { .. } => QueryCapability::UinToUid,
             Self::UidToUin { .. } => QueryCapability::UidToUin,
             Self::MessagesById { .. } => QueryCapability::MessagesById,
@@ -172,7 +179,7 @@ impl HostQuery {
 
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::GroupInfo { group_id } if !positive_decimal(group_id) => Err("invalid group id"),
+            Self::GroupInfo { group_id } | Self::GroupMembers { group_id, .. } if !positive_decimal(group_id) => Err("invalid group id"),
             Self::UinToUid { uin } if !positive_decimal(uin) => Err("invalid UIN"),
             Self::UidToUin { uid } if !native_uid(uid) => Err("invalid UID"),
             Self::VoiceInfo {
@@ -268,6 +275,79 @@ pub struct GroupInfo {
     pub group_name: String,
     pub member_count: u32,
     pub max_member_count: u32,
+}
+
+/// A complete bounded member snapshot for one requested group. Native UID keys
+/// and private profile fields are consumed in the bridge and never cross IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupMembers {
+    pub group_id: String,
+    pub members: Vec<GroupMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupMember {
+    pub user_id: String,
+    pub nickname: String,
+    pub card: String,
+    pub sex: MemberSex,
+    pub age: u32,
+    pub level: String,
+    pub qq_level: u32,
+    pub join_time: String,
+    pub last_sent_time: String,
+    pub role: MemberRole,
+    pub title: String,
+    pub is_robot: bool,
+    pub shut_up_timestamp: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberSex {
+    Male,
+    Female,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberRole {
+    Owner,
+    Admin,
+    Member,
+}
+
+impl GroupMembers {
+    pub fn matches(&self, group_id: &str) -> bool {
+        let timestamp = |v: &str| {
+            !v.is_empty()
+                && v.len() <= 20
+                && v.bytes().all(|b| b.is_ascii_digit())
+                && v.parse::<u64>().is_ok()
+        };
+        self.group_id == group_id
+            && positive_decimal(group_id)
+            && self.members.len() <= MAX_QUERY_ITEMS
+            && self.members.iter().all(|m| {
+                positive_decimal(&m.user_id)
+                    && m.nickname.len() <= 4096
+                    && m.card.len() <= 4096
+                    && m.title.len() <= 4096
+                    && timestamp(&m.level)
+                    && timestamp(&m.join_time)
+                    && timestamp(&m.last_sent_time)
+            })
+            && self
+                .members
+                .iter()
+                .map(|m| &m.user_id)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == self.members.len()
+    }
 }
 
 /// Owned metadata only. The wrapper's local file path and media credentials
@@ -389,6 +469,7 @@ pub enum QueryData {
     FriendList(Vec<FriendInfo>),
     GroupList(Vec<GroupInfo>),
     GroupInfo(GroupInfo),
+    GroupMembers(GroupMembers),
     Uid(String),
     Uin(String),
     Messages(Vec<crate::wrapper_message::WrapperMessage>),
@@ -437,6 +518,7 @@ impl QueryData {
                 &info.group_id == group_id && group_ok(info)
             }
             (HostQuery::UinToUid { .. }, Self::Uid(uid)) => native_uid(uid),
+            (HostQuery::GroupMembers { group_id, .. }, Self::GroupMembers(list)) => list.matches(group_id),
             (HostQuery::UidToUin { .. }, Self::Uin(uin)) => positive_decimal(uin),
             (HostQuery::ImageInfo { .. }, Self::ImageInfo(info)) => {
                 info.matches(query, MAX_IMAGE_BYTES) && (info.pic_type == 1001 || info.sender_uin == scope.account)

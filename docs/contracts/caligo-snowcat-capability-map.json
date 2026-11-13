@@ -1822,6 +1822,99 @@
         ],
         "limits": "Only ordinary PNG is admitted, with at most 128 KiB send/download bytes. get_image returns Base64, file_size and file_name without local paths or media credentials. Other formats, mixed segments and QQ field acceptance remain open."
       }
+    },
+    "group_members": {
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "implementation": [
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "fn member_data("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "if (queryKind === 'group_members')"
+        },
+        {
+          "path": "crates/caligo-model/src/capability.rs",
+          "symbol": "impl GroupMembers"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "symbol": "fn main()"
+        },
+        {
+          "path": "crates/caligo-core/src/onebot_server.rs",
+          "symbol": "pub fn action_handler("
+        },
+        {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      ],
+      "permission": {
+        "requirement": "Transport authentication; read/write classification is discovery metadata only.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-core/src/onebot.rs",
+            "symbol": "pub enum ActionPermission"
+          },
+          {
+            "path": "crates/caligo-core/src/onebot_http.rs",
+            "symbol": "fn token_ok("
+          }
+        ],
+        "limits": "No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Exact pilot profile and complete getAllMemberList contract",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "pub const SUPPORTED_CAPABILITIES"
+            },
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "memberService.getAllMemberList.call"
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 群成员查询接线"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "fn group_members_require_complete_map_snapshot_and_preserve_native_identity()"
+          },
+          {
+            "path": "crates/caligo-core/tests/onebot_query_lab.rs",
+            "symbol": "fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect()"
+          }
+        ],
+        "limits": "Only complete snapshots up to 2048 items and 512 KiB are returned. Member-info uses the snapshot, not a separate rich profile fetch; other extended profile fields and QQ field acceptance remain open."
+      }
     }
   },
   "review_basis": [
@@ -2444,16 +2537,16 @@
     {
       "reference_id": "onebot.action.get_group_member_info",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
-      "assessment": "directory_missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "onebot.action.get_group_member_list",
       "category": "actions",
-      "status": "missing",
-      "reason": "Directory actions are present in ACTION_REGISTRY, but host query execution and end-to-end validation are not final; no directory backend is credited yet.",
-      "assessment": "directory_missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "onebot.action.get_group_msg_history",
@@ -33202,9 +33295,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getAllMemberList.111",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.",
+      "assessment": "group_members"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.setHeader.125",
@@ -41830,7 +41923,7 @@
     }
   ],
   "registry": {
-    "semantic_sha256": "dec4fa56647da0127c8266f764dfc5863b195744a37b47700a50f152d502e86f",
+    "semantic_sha256": "369ffac1009d14753dfdb19cf7497afe5b35d35d92759c2817be4fbe612a3fff",
     "digest_format": "UTF-8 JSON tokens with external whitespace removed; integer literals preserved",
     "command": "cargo run --quiet -p caligo-core --example dump_onebot_registry --locked --offline --target-dir target-harness",
     "source": {
@@ -42063,6 +42156,38 @@
         }
       },
       {
+        "name": "get_group_member_list",
+        "canonical": "get_group_member_list",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_member_list"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_member_list"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
+        "name": "get_group_member_info",
+        "canonical": "get_group_member_info",
+        "permission": "read",
+        "handler": {
+          "kind": "get_group_member_info"
+        },
+        "input_schema_source": {
+          "exporter": "dump_onebot_registry",
+          "key": "get_group_member_info"
+        },
+        "output_contract_source": {
+          "path": "crates/caligo-core/src/onebot.rs",
+          "symbol": "pub fn handle_action("
+        }
+      },
+      {
         "name": "get_status",
         "canonical": "get_status",
         "permission": "read",
@@ -42097,17 +42222,17 @@
     ]
   },
   "counts": {
-    "registry_declared_keys": 15,
-    "registry_base_keys": 12,
+    "registry_declared_keys": 17,
+    "registry_base_keys": 14,
     "registry_alias_keys": 3,
     "mapped_reference_items": 5711,
     "by_category": {
       "actions": {
         "denominator": 206,
         "statuses": {
-          "missing": 194,
+          "missing": 192,
           "unknown": 0,
-          "partial_offline": 6,
+          "partial_offline": 8,
           "registered_backend_blocked": 0,
           "wired_offline": 3,
           "implemented_pending_validation": 3,
@@ -42273,9 +42398,9 @@
       "wrapper_interfaces": {
         "denominator": 1354,
         "statuses": {
-          "missing": 1343,
+          "missing": 1342,
           "unknown": 0,
-          "partial_offline": 1,
+          "partial_offline": 2,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 8,

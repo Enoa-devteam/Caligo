@@ -2,13 +2,15 @@
 
 ## Current State
 
+2026-11-13 A2 群成员：新增当前 scope 的完整成员快照查询、共享 `get_group_member_list` 和 `get_group_member_info`，绑定精确 pilot，校验 Map/身份/角色/预算并去除私有字段。wrapper 合同 6/6、正常 pipe/action 8/8、串行 default/research 与独立并行 research 全仓及覆盖 12/12 通过；未启动 QQ。[群成员接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群成员查询接线)
+
 2026-11-13 A2 PNG 发送接线：单 PNG 已经共享 OneBot、持久请求、scoped IPC、owner 和 D9 精确回读贯通；私聊/群聊独立能力，成功 ID 等待消息入库，unknown 不重发。修复查询能力 9 项上限拒绝当前 11 项声明的问题。串行 default/research 和独立并行 research 全仓、覆盖 12/12 通过；并发端口及 PID 复用导致的旧测试隔离问题已修正，继续排除离线阻塞，未启动 QQ。[PNG 发送接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片发送接线)
 
-2026-11-13 A2 PNG 发送合同：完成有界 PNG framing/CRC 验证、自有宿主缓存构造和 D9 精确自发回读合同。合成宿主覆盖私聊/群聊、文件冲突、错回读、歧义、超时和停止；scoped IPC/core/OneBot 图片发送尚未接入，不声明发送能力。继续先整合全部任务再集中 QQ 验收。[PNG 发送合同](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-png-发送构造与-d9-合同)
+先前检查点 `a35463f`（已由上方发送接线进展替代）：2026-11-13 A2 PNG 发送合同：完成有界 PNG framing/CRC 验证、自有宿主缓存构造和 D9 精确自发回读合同。合成宿主覆盖私聊/群聊、文件冲突、错回读、歧义、超时和停止；scoped IPC/core/OneBot 图片发送尚未接入，不声明发送能力。继续先整合全部任务再集中 QQ 验收。[PNG 发送合同](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-png-发送构造与-d9-合同)
 
-2026-11-13 A2 OneBot 图片：固定 profile 的普通入站 PNG 已接 D8、持久消息、共享私聊/群聊事件和 `get_image`。事件/get_msg/下载使用同一账号限定文件标识，重启保留 ID 与元数据。上传、自发图片、其他格式、其余任务及统一 QQ 验收仍未完成。[OneBot PNG 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)
+先前检查点 `051a035`：2026-11-13 A2 OneBot 图片：固定 profile 的普通入站 PNG 已接 D8、持久消息、共享私聊/群聊事件和 `get_image`。事件/get_msg/下载使用同一账号限定文件标识，重启保留 ID 与元数据。上传、自发图片、其他格式、其余任务及统一 QQ 验收仍未完成。[OneBot PNG 图片读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片读取)
 
-2026-11-13 A2 单图片：普通 PNG 的精确元数据回读与有界下载已接入固定 profile 的 scoped Rust 宿主查询。校验会话、发送者、消息/元素、大小、MD5 和 PNG 头部尺寸，超时保留在途目标至匹配回调。OneBot 图片持久化/事件/get_image、上传、其他格式及 QQ 现场待后续。[图片宿主查询](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)
+先前检查点 `c6c8792`：2026-11-13 A2 单图片：普通 PNG 的精确元数据回读与有界下载已接入固定 profile 的 scoped Rust 宿主查询。校验会话、发送者、消息/元素、大小、MD5 和 PNG 头部尺寸，超时保留在途目标至匹配回调。OneBot 图片持久化/事件/get_image、上传、其他格式及 QQ 现场待后续。[图片宿主查询](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-普通-png-图片精确回读与下载)
 
 2026-11-13 A2 群语音：`746f654` 接通群入站和已发送私聊语音读取。群语音发送已接入独立 scoped 能力、持久派发与精确群消息回读，读写均有离线合同。真实 QQ 验收待 B2。[OneBot 群语音发送](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-群语音发送)
 

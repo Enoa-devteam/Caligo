@@ -178,12 +178,18 @@ export function initialProfiles() {
     [src(LEDGER, 'A2 OneBot PNG 图片发送接线'), src('crates/caligo-core/tests/onebot_private_send_lab.rs', 'fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback()'), src(LEDGER, 'A2 OneBot PNG 图片读取'), src('crates/caligo-core/tests/wrapper_image_chain.rs', 'fn png_identity_events_get_image_and_restart_share_the_same_account_token()')],
     'Only ordinary PNG is admitted, with at most 128 KiB send/download bytes. get_image returns Base64, file_size and file_name without local paths or media credentials. Other formats, mixed segments and QQ field acceptance remain open.');
   image.supported_versions = clone(voiceDownload.supported_versions);
+  const groupMembers = scoped('partial_offline', 'Member list and member-info actions query a complete bounded native Map snapshot through current account/epoch scope; member-info selects the exact public UIN.',
+    [src(ONEBOT, 'fn member_data('), src(QUERY, "if (queryKind === 'group_members')"), src('crates/caligo-model/src/capability.rs', 'impl GroupMembers')], sharedEntry, actionPermission,
+    [{ name: 'Exact pilot profile and complete getAllMemberList contract', state: 'offline_only', evidence: [src(QUERY, 'pub const SUPPORTED_CAPABILITIES'), src(QUERY, 'memberService.getAllMemberList.call')] }],
+    [src(LEDGER, 'A2 群成员查询接线'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn group_members_require_complete_map_snapshot_and_preserve_native_identity()'), src('crates/caligo-core/tests/onebot_query_lab.rs', 'fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect()')],
+    'Only complete snapshots up to 2048 items and 512 KiB are returned. Member-info uses the snapshot, not a separate rich profile fetch; other extended profile fields and QQ field acceptance remain open.');
+  groupMembers.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
   const login = { ...clone(query), status: 'partial_offline',
     reason: 'Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.',
     acceptance: { ...clone(query.acceptance), limits: 'Offline fake-store login response only; actual normal-path nickname/account result is not established.' } };
-  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload, image };
+  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload, image, group_members: groupMembers };
   for (const [id, symbol, file, flag, dep] of [
     ['http', 'pub fn serve_http(', SERVER, '--onebot-http-bind', 'DaemonSendSink and shared registry'],
     ['http_post', 'pub fn run_http_post_ready(', TRANSPORT, '--onebot-http-post-url', 'Daemon ordered HTTP POST event bus and quick operations'],
@@ -229,6 +235,7 @@ export function chooseAssessment(entry, registry) {
   const r = registry.find(r => r.name === entry.name);
   if (entry.category === 'actions' || entry.category === 'aliases') {
     if (!r) return ['get_group_info', 'get_group_list', 'get_friend_list', 'get_group_member_info', 'get_group_member_list'].includes(entry.name.replace(/_(async|rate_limited)$/, '')) ? 'directory_missing' : 'action_missing';
+    if (['get_group_member_list','get_group_member_info'].includes(entry.name)) return 'group_members';
     if (['get_friend_list', 'get_group_list', 'get_group_info'].includes(entry.name)) return 'directory_pending';
     if (r.handler.kind === 'send') return r.handler.target === 'private' ? 'private_send_blocked' : 'send_text';
     if (r.handler.kind === 'get_login_info') return 'login_partial';
@@ -245,6 +252,7 @@ export function chooseAssessment(entry, registry) {
   if (entry.id === 'message_segment.image') return 'image';
   if (['event.OB11BaseMessageEvent', 'event_schema.OB11MessageSchema'].includes(entry.id)) return 'message_event';
   if (entry.category === 'wrapper_interfaces') {
+    if (entry.name === 'getAllMemberList' && entry.reference.interface === 'NodeIKernelGroupService') return 'group_members';
     if (entry.name === 'downloadRichMedia' && entry.reference.interface === 'NodeIKernelMsgService') return 'voice_download';
     if (entry.name === 'getUidByUin' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';
     if (entry.name === 'getUinByUid' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';

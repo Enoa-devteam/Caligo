@@ -1,6 +1,6 @@
 # OneBot 群与好友查询动作
 
-适用：修改 `get_group_list`、`get_group_info`、`get_friend_list`、登录资料或宿主查询读取。
+适用：修改 `get_group_list`、`get_group_info`、群成员、`get_friend_list`、登录资料或宿主查询读取。
 依据：[动作层](../../crates/caligo-core/src/onebot.rs)、
 [正常装配](../../crates/caligo-core/src/onebot_server.rs)、
 [查询类型](../../crates/caligo-model/src/capability.rs)、
@@ -8,10 +8,16 @@
 
 ## 当前正常入口
 
-三个目录动作已纳入共享 `ACTION_REGISTRY`，HTTP、WS、MCP 使用相同
+目录与群成员动作已纳入共享 `ACTION_REGISTRY`，HTTP、WS、MCP 使用相同
 `QueryBackend → Daemon::query_host → typed IPC → owner query`。
 `get_group_info` 要求正整数 `group_id`；可选 `no_cache` 必须为布尔值。
 当前每次实际查询宿主，不以 learned peers 充当目录缓存。
+
+`get_group_member_list` 和 `get_group_member_info` 使用精确 pilot profile 的完整
+`getAllMemberList` 快照。参数要求正整数 group_id，指定成员另需正整数 user_id；
+no_cache 为布尔值，列表默认 false，指定成员默认 true。未完成快照、重复身份、
+超出 2,048 项或 512 KiB 均拒绝；指定成员不存在时失败。当前不额外抓取 rich profile，
+UID、头像路径和私有字段不跨 IPC；详情按快照实际字段返回。
 
 查询结果必须匹配账号、宿主 nonce、会话代次及连接 epoch，且由当前 bridge
 显式声明支持。Map 按原键取值，UID 和公开 UIN 分开；消息回读按精确 peer/ID。

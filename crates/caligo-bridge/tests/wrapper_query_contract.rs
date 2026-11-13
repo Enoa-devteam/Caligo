@@ -429,3 +429,73 @@ assert.equal(START_UIN.includes('eval('), false);
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn group_members_require_complete_map_snapshot_and_preserve_native_identity() {
+    use caligo_model::capability::{QueryData, QueryOutcome};
+    let s = scope();
+    let query = HostQuery::GroupMembers {
+        group_id: "30003".into(),
+        force_refresh: true,
+    };
+    assert!(
+        !qq_query::is_supported(&query),
+        "new native contract requires exact pilot"
+    );
+    let start = qq_query::build_query_start_js("members", &s, &query, 1000);
+    let poll = qq_query::build_query_poll_js("members", &s);
+    let script = format!(
+        "const start={},poll={};\n",
+        serde_json::to_string(&start).unwrap(),
+        serde_json::to_string(&poll).unwrap()
+    ) + r#"
+const assert=require('node:assert/strict');
+function member(){return {uid:'u_member',uin:'18446744073709551615',nick:'Member',cardName:'Card',role:4,
+  memberRealLevel:12,qqLevel:{crownNum:1,sunNum:2,moonNum:3,starNum:1},sex:2,age:27,
+  joinTime:'1700000000',lastSpeakTime:'1700000001',memberSpecialTitle:'Title',isDelete:false,isRobot:false,shutUpTime:0,
+  avatarPath:'private-path',credential:'private-secret'};}
+function fresh(){return {errCode:0,errMsg:'',result:{ids:[{uid:'u_member',index:0}],infos:new Map([['u_member',member()]]),finish:true,hasRobot:false}};}
+async function run(value){
+ const service={getAllMemberList(group,force){assert.equal(this,service);assert.equal(group,'30003');assert.equal(force,true);return Promise.resolve(value);}};
+ globalThis.__caligo_d8={sid:'nt_members',session:{getGroupService:()=>service}};
+ assert.equal(JSON.parse(eval(start)).status,'pending');await new Promise(resolve=>setImmediate(resolve));
+ return JSON.parse(eval(poll));
+}
+(async()=>{
+ for(const mutate of [
+   v=>v.result.finish=false,v=>v.result.infos=[],v=>v.result.ids=[],
+   v=>v.result.ids.push(v.result.ids[0]),v=>v.result.infos.set('u_other',member()),
+   v=>v.result.infos.get('u_member').uid='u_wrong',v=>v.result.infos.get('u_member').uin=123,
+   v=>v.result.infos.get('u_member').role=99,v=>v.result.infos.get('u_member').joinTime='18446744073709551616',
+   v=>v.result.infos.get('u_member').isDelete=true,v=>v.result.infos.get('u_member').nick='a'.repeat(4097),
+ ]){const v=fresh();mutate(v);assert.equal((await run(v)).status,'invalid_response');}
+ let rejected=fresh();rejected.errCode=5;assert.equal((await run(rejected)).status,'rejected');
+ let empty=fresh();empty.result.ids=[];empty.result.infos=new Map();assert.deepEqual((await run(empty)).data.data.members,[]);
+ const valid=await run(fresh());assert.equal(valid.status,'success');
+ assert.equal(valid.data.data.members[0].user_id,'18446744073709551615');assert.equal(valid.data.data.members[0].role,'owner');
+ assert.equal(valid.data.data.members[0].qq_level,109);assert.equal(valid.data.data.members[0].sex,'female');
+ const raw=JSON.stringify(valid);assert(!raw.includes('private-path'));assert(!raw.includes('private-secret'));assert(!raw.includes('u_member'));
+ process.stdout.write(raw);
+})().catch(error=>{console.error(error);process.exit(1)});
+"#;
+    let path = std::env::temp_dir().join(format!("caligo-members-{}.cjs", std::process::id()));
+    std::fs::write(&path, script).unwrap();
+    let output = std::process::Command::new("node")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result =
+        qq_query::decode_query_result(&query, &s, std::str::from_utf8(&output.stdout).unwrap())
+            .unwrap();
+    let QueryOutcome::Success(QueryData::GroupMembers(list)) = result else {
+        panic!("members not decoded")
+    };
+    assert_eq!(list.group_id, "30003");
+    assert_eq!(list.members[0].user_id, u64::MAX.to_string());
+}
