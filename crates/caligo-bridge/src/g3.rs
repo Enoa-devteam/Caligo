@@ -27,16 +27,61 @@
 use core::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// getter 机器级原型(72DE38;同 g1/g2,作 wrapper 身份核验 + 租约)。
+/// getter 机器级原型(各 wrapper profile 同 ABI,作身份核验 + 租约)。
 type GetterFn = unsafe extern "system" fn(out: *mut ServicePair) -> *mut ServicePair;
 
-const GETTER_RVA: usize = 0x72DE38;
-const ANCHOR_SVC_VTBL_RVA: usize = 0x3F6DED8;
-/// transport 原版 vtable RVA(现场三次采样,thread-contract §10.1)。
-const TRANSPORT_VTBL_RVA: usize = 0x41403B8;
-/// slot7 = vtable +0x38;原函数 RVA 0x1B4E4EC。
+pub const G3_PROFILE_ID_9933: u32 = 0;
+pub const G3_PROFILE_ID_9936: u32 = 1;
+pub const G3_PROFILE_9933_WRAPPER_SHA256: &str =
+    "63112AB9161E127F5F7E17998A7196E143808923FB54CBBF7B4E21426187A5F0";
+pub const G3_PROFILE_9936_WRAPPER_SHA256: &str =
+    "0D8B94448F4DAFE7337B88D6A568B004224C37FCBE2BD1142C1AF7624FBD534C";
+
+#[derive(Clone, Copy)]
+struct G3BuildProfile {
+    getter_rva: usize,
+    anchor_svc_vtbl_rva: usize,
+    transport_vtbl_rva: usize,
+    slot7_orig_rva: usize,
+    send_sso_rva: usize,
+    qq_operator_new_rva: usize,
+    empty_fn_callable_rva: Option<usize>,
+    empty_fn_dtor_rva: Option<usize>,
+    wirecap_call_sites: [usize; 2],
+    requires_consumer: bool,
+}
+
+const G3_PROFILE_9933: G3BuildProfile = G3BuildProfile {
+    getter_rva: 0x72DE38,
+    anchor_svc_vtbl_rva: 0x3F6DED8,
+    transport_vtbl_rva: 0x41403B8,
+    slot7_orig_rva: 0x1B4E4EC,
+    send_sso_rva: 0x732A80,
+    qq_operator_new_rva: 0xB75000,
+    empty_fn_callable_rva: Some(0x72D596),
+    empty_fn_dtor_rva: Some(0x72D5C8),
+    wirecap_call_sites: [0x732A3E, 0x7333E6],
+    requires_consumer: false,
+};
+
+// Exact wrapper 0D8B…534C. Entries were matched to current-hash code and RTTI;
+// G3-send requires the research consumer because this build's empty-delegate
+// helper RVAs have not been mapped.
+const G3_PROFILE_9936: G3BuildProfile = G3BuildProfile {
+    getter_rva: 0x74F214,
+    anchor_svc_vtbl_rva: 0x40FFF58,
+    transport_vtbl_rva: 0x42DEF48,
+    slot7_orig_rva: 0x1C21344,
+    send_sso_rva: 0x753FE6,
+    qq_operator_new_rva: 0xBC0FB4,
+    empty_fn_callable_rva: None,
+    empty_fn_dtor_rva: None,
+    wirecap_call_sites: [0x753FA4, 0x75494C],
+    requires_consumer: true,
+};
+
+/// transport vtable slot 7 位于 vtable +0x38。
 const SLOT7_OFF: usize = 0x38;
-const SLOT7_ORIG_RVA: usize = 0x1B4E4EC;
 /// transport+0x60 = conn pair(b7ce8a 的状态检查对象)。
 const TRANSPORT_FIELD_CONN: usize = 0x60;
 /// MSFService+0x60 字段(transport 指针)。
@@ -54,6 +99,9 @@ const CAND_CAP: usize = 4;
 const STR_CAP: usize = 128;
 /// 每槽 qword 数(记录布局见下)。
 const SLOT_QWORDS: usize = 96;
+
+#[cfg(feature = "research")]
+static G3_CALLBACK_NONCE: AtomicU64 = AtomicU64::new(1);
 
 // 记录布局(槽内偏移):
 //  [0]       seq|1(完成位;0=未完成)
@@ -536,13 +584,25 @@ struct ServicePair {
 ///
 /// SAFETY: ctx 必须指向本进程内有效的 [`G3Ctx`]。
 pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
+    // This export remains pinned to the historic 9.9.33 profile.
+    unsafe { g3_probe_run_with_profile(ctx, &G3_PROFILE_9933) }
+}
+
+/// Same bounded, zero-send probe for the exact 9.9.36-53644 wrapper hash.
+///
+/// SAFETY: ctx 必须指向本进程内有效的 [`G3Ctx`]。
+pub unsafe fn g3_probe_run_9936(ctx: *const G3Ctx) -> u32 {
+    unsafe { g3_probe_run_with_profile(ctx, &G3_PROFILE_9936) }
+}
+
+unsafe fn g3_probe_run_with_profile(ctx: *const G3Ctx, profile: &G3BuildProfile) -> u32 {
     // SAFETY: ctx 由 loader 写入。
     let (wrapper_base, report_path, observe_ms) =
         unsafe { ((*ctx).wrapper_base, (*ctx).report_path, (*ctx).observe_ms) };
     let observe_ms = observe_ms.min(300_000).max(500);
 
     // wrapper 身份核验(getter 租约 + 锚点;g1/g2 同机械)。
-    let getter: GetterFn = unsafe { core::mem::transmute(wrapper_base + GETTER_RVA) };
+    let getter: GetterFn = unsafe { core::mem::transmute(wrapper_base + profile.getter_rva) };
     let mut pair = ServicePair {
         obj: core::ptr::null_mut(),
         ctrl: core::ptr::null_mut(),
@@ -554,8 +614,17 @@ pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
         return ERR_NO_OBSERVER;
     }
     let vptr = unsafe { core::ptr::read_volatile(pair.obj as *const u64) };
-    if (vptr as usize).wrapping_sub(wrapper_base) != ANCHOR_SVC_VTBL_RVA {
-        stage(report_path, "g3_adopt", false, "anchor mismatch");
+    let actual_vtbl_rva = (vptr as usize).wrapping_sub(wrapper_base);
+    if actual_vtbl_rva != profile.anchor_svc_vtbl_rva {
+        stage(
+            report_path,
+            "g3_adopt",
+            false,
+            &format!(
+                "anchor mismatch actual_vtbl_rva=0x{:x} expected_vtbl_rva=0x{:x}",
+                actual_vtbl_rva, profile.anchor_svc_vtbl_rva
+            ),
+        );
         return ERR_SWAP_STATE;
     }
     stage(
@@ -580,7 +649,7 @@ pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
         return ERR_NO_TRANSPORT;
     }
     let orig_vptr = safe_read_qword(transport as usize).unwrap_or(0);
-    let vptr_ok = orig_vptr == (wrapper_base + TRANSPORT_VTBL_RVA) as u64;
+    let vptr_ok = orig_vptr == (wrapper_base + profile.transport_vtbl_rva) as u64;
     let conn = safe_read_qword(transport as usize + TRANSPORT_FIELD_CONN).unwrap_or(0);
     let conn_vptr = if addr_plausible(conn) {
         safe_read_qword(conn as usize).unwrap_or(0)
@@ -607,7 +676,7 @@ pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
     // 伪 vtable(自分配 RW 数据页;原表 16 qword 副本,slot7 → 蹦床)。
     let bytes = trampoline_bytes(
         g3_capture as usize,
-        (wrapper_base + SLOT7_ORIG_RVA) as usize,
+        (wrapper_base + profile.slot7_orig_rva) as usize,
     );
     let tramp = unsafe {
         use windows_sys::Win32::System::Memory::{
@@ -781,19 +850,20 @@ pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
     OK
 }
 
-// ===== G3-P2 受控发送(无插桩,单次调用;2026-10-09 用户批准)=====
+// ===== G3-P2 受控发送(单次调用;hash-bound profiles)=====
 //
 // 静态依据(r4-g3 phaseF + send-probe-design §1):
-// - 入口 = MSFService::SendSSORequestInternal(0x732A80),五参:
+// - 9.9.33 入口 = 0x732A80; 9.9.36-53644 入口 = 0x753FE6;五参:
 //   (this, const string& cmd, vector<uint8>& body /*移转*/, bool, callback32B& /*移转*/);
 //   1b4e4ec(transport slot7)语义:未连接同步失败(token=0 不排队),已连接
 //   组闭包经 D32138 提交全局 dispatcher(跨线程唤醒)——单次直接调用,
 //   **零插桩、零常驻修改**;
 // - body = libc++ vector<uint8>{begin,end,cap}(phaseF 0x21866d0 定案:
 //   BaseMsgMgr 经 vtbl+0x100 取得,内容 = 编码好的请求体);task 析构由 QQ
-//   侧释放 → **data 必须来自 QQ 分配器**(b75000 = 全局 operator new);
-// - cmd = "MessageSvc.PbSendMsg"(chat_type 常规);回调 = QQ 自身空函数
-//   (0x72D596/0x72D5C8)——MSF 层回调本就被 b7f6f6 置空,结果路由走
+//   侧释放 → **data 必须来自 QQ 分配器**(profile 内绑定 operator new RVA);
+// - cmd = "MessageSvc.PbSendMsg"(chat_type 常规);9.9.33 回调 = QQ 自身空函数
+//   (0x72D596/0x72D5C8);9.9.36 profile 仅允许 research consumer delegate。
+//   MSF 层回调本就被 b7f6f6 置空,结果路由走
 //   BaseMsgMgr token 注册表,我们无消费者,空回调 = QQ 原生 inert 表示;
 // - param_2(uin 串)从活对象 svc+0x1f0 逐字节复制(短形态内联;长形态
 //   头部原样保留、data 换为我们 QQ 分配的副本)——零编码猜测。
@@ -802,11 +872,7 @@ pub unsafe fn g3_probe_run(ctx: *const G3Ctx) -> u32 {
 // qq_protocol::send 同源,verified=false——本次发送同时是该编码的首次
 // 真实核验;桥不依赖 core,内联同款 writer)。
 
-const SEND_SSO_RVA: usize = 0x732A80;
-const QQ_OPERATOR_NEW_RVA: usize = 0xB75000;
-const EMPTY_FN_CALLABLE_RVA: usize = 0x72D596;
-const EMPTY_FN_DTOR_RVA: usize = 0x72D5C8;
-/// MSFService+0x1f0 = 本机账号串(732a80 param_2 的源)。
+/// MSFService+0x1f0 = 本机账号串(send function param_2 的源)。
 const SVC_FIELD_SELF_STRING: usize = 0x1F0;
 
 // 字段号权威源 = caligo_model::qq_wire::send(N1 起);此处仅保留 @ 研究
@@ -1124,16 +1190,78 @@ fn make_short_string(dst: &mut [u8; 24], s: &[u8]) {
 type OperatorNewFn = unsafe extern "system" fn(usize) -> *mut c_void;
 type SendSsoFn = unsafe extern "system" fn(usize, usize, usize, u8, usize);
 
+#[cfg(feature = "research")]
+fn observe_g3_callback(cookie: crate::native_response::Cookie, report_path: *const u16) {
+    use std::time::{Duration, Instant};
+
+    const OBSERVE_WINDOW: Duration = Duration::from_secs(5);
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    let deadline = Instant::now() + OBSERVE_WINDOW;
+    loop {
+        let matches = crate::consumer_probe::drain_responses_for_cookie(&cookie);
+        if let Some((_, err_code, err)) = matches.first() {
+            stage(
+                report_path,
+                "g3s_callback_observation",
+                true,
+                &format!(
+                    "matches={} err_code={} err_bytes={} delivery=unconfirmed",
+                    matches.len(),
+                    err_code,
+                    err.len()
+                ),
+            );
+            return;
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            stage(
+                report_path,
+                "g3s_callback_observation",
+                false,
+                "matches=0 window_ms=5000 callback_and_delivery=unknown; no retry",
+            );
+            return;
+        }
+        std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
 /// G3-P2 受控发送主入口(loader 经 `caligo_g3_send_run` 远程线程调用)。
 ///
 /// 单次调用 SendSSORequestInternal;零插桩、无常驻修改、零转发。
-/// 缓冲所有权:body data 经移转归 QQ(本侧不释放);回调为 QQ 原生空函数。
-/// 发送结果异步(无消费者),验证 = 对端收到消息(现场确认)。
+/// 缓冲所有权:body data 经移转归 QQ(本侧不释放);回调由 profile 绑定。
+/// 9.9.36 research profile 使用受控 capture 并限时观察;callback 不证明送达。
+/// 发送结果异步,delivery 仍须由受控对端确认。
 ///
 /// SAFETY: ctx 必须指向本进程内有效的 [`G3SendCtx`]。
 pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
+    unsafe { g3_send_run_with_profile(ctx, &G3_PROFILE_9933) }
+}
+
+/// Same one-shot send path, bound to wrapper SHA-256 0D8B…534C.
+/// This profile requires the captured research consumer.
+///
+/// SAFETY: ctx 必须指向本进程内有效的 [`G3SendCtx`]。
+pub unsafe fn g3_send_run_9936(ctx: *const G3SendCtx) -> u32 {
+    unsafe { g3_send_run_with_profile(ctx, &G3_PROFILE_9936) }
+}
+
+unsafe fn g3_send_run_with_profile(ctx: *const G3SendCtx, profile: &G3BuildProfile) -> u32 {
     // SAFETY: ctx 由 loader 写入。
-    let (wrapper_base, report_path, peer_uin, text_ptr, uid_ptr, group_code, client_seq, random) = unsafe {
+    let (
+        wrapper_base,
+        report_path,
+        peer_uin,
+        text_ptr,
+        uid_ptr,
+        group_code,
+        client_seq,
+        random,
+        use_consumer,
+    ) = unsafe {
         (
             (*ctx).wrapper_base,
             (*ctx).report_path,
@@ -1143,17 +1271,36 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
             (*ctx).group_code,
             (*ctx).client_seq,
             (*ctx).random,
+            (*ctx).use_consumer,
         )
     };
-    // v6 研究增补(research 构建,进程级幂等):wire 捕获钩子 —— 补丁 732A80
-    // 两个调用点,转储所有 732A80 调用的 (cmd, body)。用于抓原生路径
+    if profile.requires_consumer && (!cfg!(feature = "research") || use_consumer == 0) {
+        stage(
+            report_path,
+            "g3s_profile",
+            false,
+            "9.9.36-53644 requires the research response consumer",
+        );
+        return ERR_SEND_BODY;
+    }
+    // v6 research wire capture is bound to the callsites in this exact profile.
     // (SnowLuma)的真实 @ wire body 与裸调形状逐字节对照。
     #[cfg(feature = "research")]
     if (*ctx).use_ch == 93 {
         // use_ch=93 = 卸载模式(N3R50 后停用 wirecap;还原调用点原始字节)。
-        crate::wirecap::uninstall(wrapper_base, report_path);
+        crate::wirecap::uninstall(
+            wrapper_base,
+            report_path,
+            profile.send_sso_rva,
+            profile.wirecap_call_sites,
+        );
     } else {
-        crate::wirecap::install(wrapper_base, report_path);
+        crate::wirecap::install(
+            wrapper_base,
+            report_path,
+            profile.send_sso_rva,
+            profile.wirecap_call_sites,
+        );
     }
     // random = 0 时现场生成(每消息新鲜值;真实客户端同语义,服务器不校验来源)。
     let random = if random == 0 {
@@ -1165,7 +1312,7 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
     };
 
     // adopt(getter 租约;g1/g2/g3 探测同机械)。
-    let getter: GetterFn = unsafe { core::mem::transmute(wrapper_base + GETTER_RVA) };
+    let getter: GetterFn = unsafe { core::mem::transmute(wrapper_base + profile.getter_rva) };
     let mut pair = ServicePair {
         obj: core::ptr::null_mut(),
         ctrl: core::ptr::null_mut(),
@@ -1177,8 +1324,17 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
         return ERR_NO_OBSERVER;
     }
     let vptr = unsafe { core::ptr::read_volatile(pair.obj as *const u64) };
-    if (vptr as usize).wrapping_sub(wrapper_base) != ANCHOR_SVC_VTBL_RVA {
-        stage(report_path, "g3s_adopt", false, "anchor mismatch");
+    let actual_vtbl_rva = (vptr as usize).wrapping_sub(wrapper_base);
+    if actual_vtbl_rva != profile.anchor_svc_vtbl_rva {
+        stage(
+            report_path,
+            "g3s_adopt",
+            false,
+            &format!(
+                "anchor mismatch actual_vtbl_rva=0x{:x} expected_vtbl_rva=0x{:x}",
+                actual_vtbl_rva, profile.anchor_svc_vtbl_rva
+            ),
+        );
         return ERR_SWAP_STATE;
     }
     let svc = pair.obj as usize;
@@ -1194,7 +1350,7 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
         return ERR_NO_TRANSPORT;
     }
     let t_vptr = safe_read_qword(transport as usize).unwrap_or(0);
-    let ok = (t_vptr as usize).wrapping_sub(wrapper_base) == TRANSPORT_VTBL_RVA;
+    let ok = (t_vptr as usize).wrapping_sub(wrapper_base) == profile.transport_vtbl_rva;
     stage(
         report_path,
         "g3s_site",
@@ -1260,7 +1416,8 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
     );
 
     // body data:QQ 分配器(QQ 侧释放;本侧永不释放)。
-    let new_fn: OperatorNewFn = unsafe { core::mem::transmute(wrapper_base + QQ_OPERATOR_NEW_RVA) };
+    let new_fn: OperatorNewFn =
+        unsafe { core::mem::transmute(wrapper_base + profile.qq_operator_new_rva) };
     // SAFETY: operator new 契约;失败返回 null(MSVC new 实际抛异常,
     // 小分配不触发;null 检查兜底)。
     let buf = unsafe { new_fn(body.len().max(1)) };
@@ -1351,44 +1508,64 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
     let mut cmd = [0u8; 24];
     make_short_string(&mut cmd, b"MessageSvc.PbSendMsg");
     let mut cb = [0u64; 4];
+    #[cfg(feature = "research")]
+    let mut callback_cookie = None;
     // 消费者分支 = research 专属(default 构建 E0433 自 r2 起预存,本提交
     // 补门;default 下 use_consumer 落回空 delegate,行为与 0 无异)。
     #[cfg(feature = "research")]
-    if (*ctx).use_consumer != 0 {
+    if use_consumer != 0 && cfg!(feature = "research") {
         // v4(N3R34):响应消费者 delegate —— cb = L1 {ctx, 1, manager, invoker}。
         // 732A80 把 arg5 内层 delegate 移入捕获块,响应经 0x73C34C → 73bd6c
         // 门(manager op=4 答 0 = 非空)→ invoke(5 参:inner/tag/errCode/errStr/responseUid)。
         // 防御式实现(consumer_probe;RPM-self 安全读,布局误判不崩)。
-        let c = match crate::consumer_probe::leak_ctx(wrapper_base, report_path, 0) {
-            Some(c) => c,
-            None => {
-                stage(
-                    report_path,
-                    "g3s_consumer",
-                    false,
-                    "callback module pin or generation context registry unavailable",
-                );
-                return ERR_SEND_ALLOC;
-            }
-        };
-        cb = crate::consumer_probe::build_cb(wrapper_base, c);
+        let callback_generation = G3_CALLBACK_NONCE.fetch_add(1, Ordering::Relaxed).max(1);
+        let callback_nonce = G3_CALLBACK_NONCE.fetch_add(1, Ordering::Relaxed).max(1);
+        let c =
+            match crate::consumer_probe::leak_ctx(wrapper_base, report_path, callback_generation) {
+                Some(c) => c,
+                None => {
+                    stage(
+                        report_path,
+                        "g3s_consumer",
+                        false,
+                        "callback module pin or generation context registry unavailable",
+                    );
+                    return ERR_SEND_ALLOC;
+                }
+            };
+        cb = crate::consumer_probe::build_cb_for_generation(c, callback_nonce);
+        let mut cookie = [0u8; 16];
+        cookie[..8].copy_from_slice(&cb[0].to_le_bytes());
+        cookie[8..].copy_from_slice(&cb[1].to_le_bytes());
+        callback_cookie = Some(crate::native_response::Cookie(cookie));
         stage(
             report_path,
             "g3s_consumer",
             true,
             &format!(
-                "ctx={:p} manager={:x} invoke={:x}",
-                c as *const _, cb[2], cb[3]
+                "generation={} manager={:x} invoke={:x}",
+                c.generation, cb[2], cb[3]
             ),
         );
     }
-    if (*ctx).use_consumer == 0 || !cfg!(feature = "research") {
-        cb[2] = (wrapper_base + EMPTY_FN_CALLABLE_RVA) as u64;
-        cb[3] = (wrapper_base + EMPTY_FN_DTOR_RVA) as u64;
+    if use_consumer == 0 || !cfg!(feature = "research") {
+        let (Some(callable), Some(dtor)) =
+            (profile.empty_fn_callable_rva, profile.empty_fn_dtor_rva)
+        else {
+            stage(
+                report_path,
+                "g3s_consumer",
+                false,
+                "profile has no verified empty-delegate helpers",
+            );
+            return ERR_SEND_BODY;
+        };
+        cb[2] = (wrapper_base + callable) as u64;
+        cb[3] = (wrapper_base + dtor) as u64;
     }
 
     // 单次调用(本线程;发送经全局 dispatcher 异步执行)。
-    let send: SendSsoFn = unsafe { core::mem::transmute(wrapper_base + SEND_SSO_RVA) };
+    let send: SendSsoFn = unsafe { core::mem::transmute(wrapper_base + profile.send_sso_rva) };
     // SAFETY: 契约见模块注释;全部实参为 QQ 侧可消费的合法对象。
     unsafe {
         send(
@@ -1409,11 +1586,15 @@ pub unsafe fn g3_send_run(ctx: *const G3SendCtx) -> u32 {
             body.len()
         ),
     );
+    #[cfg(feature = "research")]
+    if let Some(cookie) = callback_cookie {
+        observe_g3_callback(cookie, report_path);
+    }
     stage(
         report_path,
         "g3s_done",
         true,
-        "ok — verify delivery on peer",
+        "submission path returned; callback observation is separate; peer delivery remains unconfirmed",
     );
     OK
 }

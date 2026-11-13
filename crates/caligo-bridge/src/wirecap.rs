@@ -1,11 +1,11 @@
 //! wire 捕获钩子(N3 研究;research 构建)。
 //!
-//! 目的:抓 732A80(MSFService::SendSSORequestInternal)的**真实 wire 实参**
+//! 目的:抓 hash-bound send function(MSFService::SendSSORequestInternal)的**真实 wire 实参**
 //! —— 原生路径(SnowLuma/手点)与我们裸调的 (cmd, body) 逐字节对照。
 //! @ 调查:v6–v9 body 已对齐存储记录仍 1006501(30.5s 无 ack),唯一
 //! 未知 = 真实 wire body 与存储记录的差异(存储 ≈ 但 ≠ wire)。
 //!
-//! 机制:补丁 732A80 的两个直接调用点(0x732a3e / 0x7333e6,各 5B E8)
+//! 机制:补丁 profile 的两个直接调用点(各 5B E8)
 //! → trampoline(g3::trampoline_bytes,field-proven:call capture(a1..a6)
 //! 后 jmp 732A80 入口 —— 调用点补丁,入口不动,无循环)。
 //!
@@ -29,10 +29,6 @@ pub struct WirecapCtx {
 }
 
 const CTX_MAGIC: u64 = 0xC0A1_5E09_1DEA;
-
-const SEND_SSO_RVA: usize = 0x732A80;
-/// 732A80 的两个直接调用点(E8 rel32)。
-const CALL_SITES: [usize; 2] = [0x732a3e, 0x7333e6];
 
 static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 static CAP_CTX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -257,7 +253,12 @@ fn stage(path: &str, stage: &str, ok: bool, detail: &str) {
 
 /// 安装钩子(幂等;进程级一次)。补丁两个调用点 → trampoline。
 /// 失败仅记录 stage,不影响发送流程。
-pub fn install(wrapper_base: usize, report_path: *const u16) {
+pub fn install(
+    wrapper_base: usize,
+    report_path: *const u16,
+    send_sso_rva: usize,
+    call_sites: [usize; 2],
+) {
     if INSTALLED.set(()).is_err() {
         return;
     }
@@ -292,15 +293,20 @@ pub fn install(wrapper_base: usize, report_path: *const u16) {
     {
         return;
     }
-    match install_inner(wrapper_base, &path) {
+    match install_inner(wrapper_base, &path, send_sso_rva, call_sites) {
         Ok(n) => stage(&path, "install", true, &format!("patched={n}")),
         Err(e) => stage(&path, "install", false, &e),
     }
 }
 
-/// 卸载钩子(N3R50 教训后停用 wirecap):把两个调用点写回原始
-/// E8 rel32→732A80。幂等:已是原始字节则跳过。无 trampoline 依赖。
-pub fn uninstall(wrapper_base: usize, report_path: *const u16) {
+/// 卸载钩子(N3R50 教训后停用 wirecap):把 profile 的两个调用点写回原始
+/// E8 rel32 target。幂等:已是原始字节则跳过。无 trampoline 依赖。
+pub fn uninstall(
+    wrapper_base: usize,
+    report_path: *const u16,
+    send_sso_rva: usize,
+    call_sites: [usize; 2],
+) {
     use windows_sys::Win32::System::Memory::VirtualProtect;
     let mut ctx_report = [0u16; 180];
     // SAFETY: loader 写入的 NUL 结尾 UTF-16。
@@ -317,9 +323,9 @@ pub fn uninstall(wrapper_base: usize, report_path: *const u16) {
         std::ffi::OsString::from_wide(&ctx_report[..end]).to_string_lossy().into_owned()
     };
     let mut restored = 0usize;
-    for site in CALL_SITES {
+    for site in call_sites {
         let addr = wrapper_base + site;
-        let orig_rel = (SEND_SSO_RVA as i64) - (site as i64) - 5;
+        let orig_rel = (send_sso_rva as i64) - (site as i64) - 5;
         let want = {
             let mut v = vec![0xE8u8];
             v.extend_from_slice(&orig_rel.to_le_bytes());
@@ -351,13 +357,17 @@ pub fn uninstall(wrapper_base: usize, report_path: *const u16) {
     stage(&path, "uninstall_done", true, &format!("restored={restored}"));
 }
 
-fn install_inner(wrapper_base: usize, path: &str) -> Result<usize, String> {
+fn install_inner(
+    wrapper_base: usize,
+    path: &str,
+    send_sso_rva: usize,
+    call_sites: [usize; 2],
+) -> Result<usize, String> {
     use windows_sys::Win32::System::Memory::{
         VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
         PAGE_READWRITE,
     };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let target = wrapper_base + SEND_SSO_RVA;
+    let target = wrapper_base + send_sso_rva;
     // SAFETY: RWX 一页放 trampoline(66B)。
     let tramp = unsafe {
         VirtualAlloc(
@@ -376,25 +386,25 @@ fn install_inner(wrapper_base: usize, path: &str) -> Result<usize, String> {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), tramp as *mut u8, bytes.len());
     }
     let mut patched = 0usize;
-    for site in CALL_SITES {
+    for site in call_sites {
         let addr = wrapper_base + site;
         let mut orig = [0u8; 5];
         if !rpm_read(addr, &mut orig) {
             stage(path, "read", false, &format!("site {site:#x} unreadable"));
             continue;
         }
-        // 原始 5B 校验:E8 rel32 且 rel 指向 732A80。已补丁站点(指向旧
+        // 原始 5B 校验:E8 rel32 且 rel 指向 profile send RVA。已补丁站点(指向旧
         // trampoline)一律跳过 —— N3R47 教训:仅查 E8 会误重补已补丁站点。
         let orig_rel = i32::from_le_bytes(orig[1..5].try_into().unwrap());
         let orig_tgt = (addr as i64) + 5 + orig_rel as i64;
-        if orig[0] != 0xE8 || orig_tgt != (wrapper_base + SEND_SSO_RVA) as i64 {
+        if orig[0] != 0xE8 || orig_tgt != (wrapper_base + send_sso_rva) as i64 {
             stage(
                 path,
                 "verify",
                 false,
                 &format!(
                     "site {site:#x} not original call (tgt {orig_tgt:#x} vs {:#x}) — skip",
-                    wrapper_base + SEND_SSO_RVA
+                    wrapper_base + send_sso_rva
                 ),
             );
             continue;

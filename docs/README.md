@@ -13,12 +13,14 @@
 | 模块边界与调用链 | [架构](guides/architecture.md) |
 | 构建与测试 | [开发验证](guides/development.md) |
 | OneBot 群/好友查询动作 | [查询动作](guides/onebot-queries.md) |
+| OneBot/SSE/MCP 应用接入 | [协议入口](guides/onebot-app-entries.md) |
 | FFI、适配、现场准入 | [原生研究](guides/native-research.md) |
 | 新规则、状态、文档维护 | [文档规范](guides/documentation.md) |
 | 工作块依赖与完成门 | [feature_list](../feature_list.json) |
 
 ## 计划与执行（按阶段选择）
 
+- SnowCat 研究成果整合：[先接线、后统一验收计划](plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)；[分阶段执行记录](execution/2026-11-13-snowcat-capability-integration.md)；[固定参考能力清单](contracts/snowcat-capability-inventory.json)；[Caligo 逐项映射](contracts/caligo-snowcat-capability-map.json)。
 - N4 当前解阻入口：[2026-10-11 响应恢复计划](plans/2026-10-11-gitnexus-plan-caligo-n4-response-recovery.md)；先离线修请求关联与结果语义，现场仍硬停。
 - N4 执行现状：[响应恢复执行记录](execution/2026-10-11-n4-response-recovery.md)；序号 authority 决策见 [ADR](decisions/2026-10-11-wire-sequence-authority.md)。R1 离线合同通过，R5/R6 OneBot transports 有离线接线与协议合同；R2 native 寿命、R3 强身份、R4 现场和 R6 真实应用完成门仍开放。
 
@@ -72,3 +74,8 @@
 | K4 接收/发送接线 | [k4-d8-receive](acceptance/k4-d8-receive.md)、[k4-d9-send-wiring](acceptance/k4-d9-send-wiring.md) |
 
 记录中的 PASS 只针对其日期、构建、路径与样本；生产完成门仍由当前工作块的完整证据决定。
+
+
+## QQNT 静态研究私有归档
+
+3,179 份 QQNT 静态研究阶段报告与按报告引用筛选的原始静态证据子集，已从 Caligo 工作树隔离并存入[私有归档仓库](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research)。浏览[报告索引](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/INDEX.md)、[Phase4173 静态范围核对](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/docs/research/2026-11-06-qqnt-static-scope-reconciliation-phase4173.md)、[Phase4172 numeric resource-key 全 ASAR 核查](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/docs/research/2026-11-06-qqnt-group-uid-numeric-resource-all-asar-census-phase4172.md)、[Phase4171 ASAR 服务绑定核查](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/docs/research/2026-11-06-qqnt-group-uid-asar-service-binding-census-phase4171.md)、[报告 SHA-256 清单](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/ARCHIVE-MANIFEST.tsv)、[原始证据说明](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/RAW-EVIDENCE.md)和[原始证据 SHA-256 清单](https://github.com/Eternal-Wanderer-Vegetable/Caligo_research/blob/main/RAW-EVIDENCE-MANIFEST.tsv)。归档含 3,550 个筛选后的原始静态证据文件，共 436,807,690 字节；不包含 QQ 安装包、PE/NODE/ASAR 原件、Ghidra 数据库或运行时账号/聊天数据。当前私有归档提交：`69c66bc6d0104dc26f3576f4acd60e403ffbafbc`。

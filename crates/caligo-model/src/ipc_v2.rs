@@ -171,6 +171,8 @@ pub struct EventPayload {
     pub native_id: String,
     pub text: String,
     pub platform_time: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapper_message: Option<crate::wrapper_message::WrapperMessageEnvelope>,
     /// Optional, explicitly resolved OneBot fields. Older bridge builds omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onebot_projection: Option<crate::OneBotMessageProjection>,

@@ -75,6 +75,8 @@ pub mod qq_v8;
 pub mod register;
 pub mod resident;
 #[cfg(feature = "research")]
+pub mod uid_map_probe;
+#[cfg(feature = "research")]
 pub mod wirecap;
 
 /// 注册入口结果码。
@@ -450,6 +452,20 @@ pub unsafe extern "system" fn caligo_g3_probe_run(ctx: *const g3::G3Ctx) -> u32 
     unsafe { g3::g3_probe_run(ctx) }
 }
 
+/// G3-P1 zero-send probe for the exact QQ 9.9.36-53644 wrapper profile.
+/// The caller must have matched the wrapper SHA-256 before dispatch.
+#[no_mangle]
+pub unsafe extern "system" fn caligo_g3_probe_run_9936(ctx: *const g3::G3Ctx) -> u32 {
+    if let Some(code) = gate::reject_legacy() {
+        return code;
+    }
+    if ctx.is_null() {
+        return probe_code::ERR_NULL_PATH;
+    }
+    // SAFETY: ctx 由 loader 写入且位于本进程;CLI 已按 wrapper hash 选择 profile。
+    unsafe { g3::g3_probe_run_9936(ctx) }
+}
+
 /// G3-P2 受控发送(P7;`g3.rs`):单次调用 SendSSORequestInternal,
 /// 零插桩、无常驻修改。发送结果异步,验证 = 对端收到消息。
 ///
@@ -468,6 +484,21 @@ pub unsafe extern "system" fn caligo_g3_send_run(ctx: *const g3::G3SendCtx) -> u
     }
     // SAFETY: ctx 由 loader 写入且位于本进程。
     unsafe { g3::g3_send_run(ctx) }
+}
+
+/// G3-P2 one-shot send for the exact QQ 9.9.36-53644 wrapper profile.
+/// Requires the research response consumer; the empty-delegate RVAs are unknown.
+#[cfg(feature = "research")]
+#[no_mangle]
+pub unsafe extern "system" fn caligo_g3_send_run_9936(ctx: *const g3::G3SendCtx) -> u32 {
+    if let Some(code) = gate::reject_legacy() {
+        return code;
+    }
+    if ctx.is_null() {
+        return probe_code::ERR_NULL_PATH;
+    }
+    // SAFETY: ctx 由 loader 写入且位于本进程;CLI 已按 wrapper hash 选择 profile。
+    unsafe { g3::g3_send_run_9936(ctx) }
 }
 
 pub unsafe extern "system" fn caligo_obs_run2(ctx: *const obs::ObsCtx) -> u32 {
@@ -645,8 +676,8 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
     };
     match bootstrap(&cfg, &symbols) {
         Ok(handle) => {
-            // 存档句柄(daemon 导出取用)+ 唤醒面地址 + 报告路径。
-            qq_entry::register_report_path(view.report_path as *const u16);
+            // 存档句柄(daemon 导出取用)+ 唤醒面地址。
+            // bootstrap 已复制并泄漏进程生存期路径；不要保存 loader 的临时远程缓冲。
             qq_entry::store_entry_handle(handle, qq_entry::wake_trampoline_addr());
             qq_entry_code::OK
         }
@@ -659,6 +690,55 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
             EntryError::Timeout => qq_entry_code::ERR_TIMEOUT,
             EntryError::AlreadyBootstrapped => qq_entry_code::ERR_ALREADY,
         },
+    }
+}
+
+/// One-shot QQNT identity-map context. This is research-only, writes only to
+/// the supplied local result path, and cannot send messages.
+#[cfg(feature = "research")]
+#[repr(C)]
+pub struct QqUidMapProbeCtx {
+    pub uin: u64,
+    /// NUL-terminated UTF-16 path under the workspace's ignored local-evidence directory.
+    pub output_path: usize,
+    pub timeout_ms: u32,
+    /// 0 = GroupService round trip; 1 = GroupService surface only;
+    /// 2 = exact-build ProfileService round trip.
+    pub mode: u32,
+}
+
+/// Run the selected read-only UID-map operation on the owner pump.
+///
+/// The remote loader thread only queues this fixed operation and waits. V8 and
+/// the selected QQNT wrapper methods run from the established K4 owner loop.
+/// Round-trip results contain raw identity values; all output stays under
+/// `local-evidence/`.
+///
+/// The loader must verify the exact loaded QQNT, major and wrapper module
+/// identities for mode 2 before invoking this entry.
+#[cfg(feature = "research")]
+#[no_mangle]
+pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx) -> u32 {
+    if ctx.is_null() {
+        return uid_map_probe::code::ERR_NOT_BOOTSTRAPPED;
+    }
+    // SAFETY: loader supplies this fixed repr(C) context in target process memory.
+    let view = unsafe { &*ctx };
+    if !matches!((view.mode, view.uin), (1, 0) | (0 | 2, 1..)) {
+        return uid_map_probe::code::ERR_BAD_MODE;
+    }
+    if view.output_path == 0 {
+        return uid_map_probe::code::ERR_REPORT;
+    }
+    let Some(path) = wide_ptr_to_string(view.output_path as *const u16) else {
+        return uid_map_probe::code::ERR_REPORT;
+    };
+    let output = std::path::PathBuf::from(path);
+    match view.mode {
+        0 => uid_map_probe::run(view.uin, output, view.timeout_ms),
+        1 => uid_map_probe::run_surface_only(output, view.timeout_ms),
+        2 => uid_map_probe::run_profile(view.uin, output, view.timeout_ms),
+        _ => uid_map_probe::code::ERR_BAD_MODE,
     }
 }
 
@@ -802,6 +882,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     // Quarantined(写阶段日志,worker 退出)。
     {
         let r = resident.clone();
+        let wrapper_binding = caligo_model::wrapper_message::WrapperBinding {
+            account: account.clone(), session_generation,
+            host_nonce: daemon_client::host_instance_nonce(), wrapper_session: String::new(),
+        };
         qq_entry::install_drain_hook(Box::new(move || {
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
             // 重试直至成功;首次失败原因写阶段日志(不吞)。
@@ -826,9 +910,12 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             if OWNER_INIT.load(Ordering::Relaxed) {
                 match crate::qq_v8::poll_listener_json() {
                     Ok(json) if !json.starts_with("NOT_ARMED") => {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                        let mut binding = wrapper_binding.clone();
+                        binding.wrapper_session = crate::qq_v8::listener_session().unwrap_or_default();
+                        if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
                             // D9:sendResults 回收(fired 的 Promise 结果)。
-                            if let Some(sr) = v.get("sendResults").and_then(|x| x.as_object()) {
+                            {
+                                let sr = &batch.send_results;
                                 let mut done: Vec<(String, String)> = Vec::new();
                                 let mut rejected: Vec<(String, String)> = Vec::new();
                                 for (mid, st) in sr {
@@ -854,40 +941,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                                     r.complete_sends(&done, &rejected);
                                 }
                             }
-                            if let Some(items) = v.get("items").and_then(|x| x.as_array()) {
-                                for it in items {
-                                    let g = |k: &str| {
-                                        it.get(k)
-                                            .map(|x| {
-                                                if x.is_string() {
-                                                    x.as_str().unwrap_or("").to_string()
-                                                } else {
-                                                    x.to_string()
-                                                }
-                                            })
-                                            .unwrap_or_default()
-                                    };
-                                    let ev = resident::OwnedEvent {
-                                        source: if g("src") == "update" {
-                                            resident::EventSourceKind::Update
-                                        } else {
-                                            resident::EventSourceKind::Recv
-                                        },
-                                        chat_type: it
-                                            .get("chatType")
-                                            .and_then(|x| x.as_u64())
-                                            .unwrap_or(0)
-                                            as u32,
-                                        peer_uid: g("peerUid"),
-                                        peer_uin: g("peerUin"),
-                                        sender_uin: g("senderUin"),
-                                        native_id: g("msgId"),
-                                        text: g("text"),
-                                        msg_time: it.get("msgTime").and_then(|x| x.as_u64()),
-                                    };
-                                    r.ingest_event(ev);
-                                }
-                            }
+
                         }
                     }
                     Ok(_) => {}

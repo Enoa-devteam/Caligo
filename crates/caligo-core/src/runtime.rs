@@ -213,6 +213,7 @@ fn event_from_record(e: &crate::journal::EventRecord) -> Result<MsgEvent, String
         native_id: NativeMessageId(e.native_id.clone()),
         text: e.text.clone(),
         platform_time: e.platform_time,
+        wrapper_message: e.wrapper_message.clone(),
         onebot_projection: e.onebot_projection.clone(),
         observed_at_unix_ms: e.observed_at_unix_ms,
         source: match e.source.as_str() {
@@ -868,9 +869,9 @@ impl AccountActor {
 
         // 交付队列限额(items/bytes 任一到达 → Gap + 拒绝;bridge 依契约保留
         // replay 窗口,不是静默丢弃)。
-        let ev_bytes = ev.text.len() + ev.sender.len() + ev.native_id.0.len() + 128;
+        let ev_bytes = ev.queue_bytes();
         if self.events_out.len() + 1 > self.config.event_queue_max_items
-            || self.events_out_bytes + ev_bytes > self.config.event_queue_max_bytes
+            || self.events_out_bytes.saturating_add(ev_bytes) > self.config.event_queue_max_bytes
         {
             self.record_gap(
                 self.event_seq_next,
@@ -924,9 +925,9 @@ impl AccountActor {
     }
 
     fn enqueue_persisted_event(&mut self, ev: MsgEvent) -> Result<(), RejectReason> {
-        let ev_bytes = ev.text.len() + ev.sender.len() + ev.native_id.0.len() + 128;
+        let ev_bytes = ev.queue_bytes();
         if self.events_out.len() + 1 > self.config.event_queue_max_items
-            || self.events_out_bytes + ev_bytes > self.config.event_queue_max_bytes
+            || self.events_out_bytes.saturating_add(ev_bytes) > self.config.event_queue_max_bytes
         {
             self.record_gap(
                 ev.event_seq,
@@ -948,7 +949,7 @@ impl AccountActor {
         for _ in 0..n {
             if let Some(ev) = self.events_out.pop_front() {
                 self.events_out_bytes -=
-                    ev.text.len() + ev.sender.len() + ev.native_id.0.len() + 128;
+                    ev.queue_bytes();
                 self.delivered_cursor = self.delivered_cursor.max(ev.event_seq);
                 let _ = self.journal.append(&JournalRecord::EventDelivered {
                     event_seq: ev.event_seq,
@@ -1141,6 +1142,7 @@ impl AccountActor {
                 native_id: ev.native_id.0.clone(),
                 text: ev.text.clone(),
                 platform_time: ev.platform_time,
+                wrapper_message: ev.wrapper_message.clone(),
                 onebot_projection: ev.onebot_projection.clone(),
                 observed_at_unix_ms: ev.observed_at_unix_ms,
                 source: match ev.source {

@@ -30,7 +30,7 @@ Windows x64 + Rust MSVC 工具链；安装所需 Rust/Windows SDK 是环境准�
 node scripts/check-docs.mjs
 cargo build --workspace --locked --offline --target-dir target-harness
 cargo test --workspace --locked --offline --target-dir target-harness
-cargo test --workspace --features caligo-core/research --locked --offline --target-dir target-harness
+cargo test --workspace --features caligo-core/research,caligo-cli/research --locked --offline --target-dir target-harness
 cargo build --release --workspace --locked --offline --target-dir target-harness
 ```
 

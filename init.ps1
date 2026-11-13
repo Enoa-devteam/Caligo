@@ -27,7 +27,7 @@ try {
         }
         if ($Mode -in @('research', 'all')) {
             Invoke-Checked -Program 'cargo' -Arguments @(
-                'test', '--workspace', '--features', 'caligo-core/research',
+                'test', '--workspace', '--features', 'caligo-core/research,caligo-cli/research',
                 '--locked', '--offline', '--target-dir', 'target-harness'
             )
         }

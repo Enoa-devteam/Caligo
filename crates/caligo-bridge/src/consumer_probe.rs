@@ -5,6 +5,7 @@
 //! files. The resident worker drains the slots and owns all formatting and IO.
 
 use core::ffi::c_void;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
@@ -115,20 +116,28 @@ static CONTEXT_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct CallbackCapture {
     context: usize,
     cookie: [u8; 16],
+    callback_tid: u32,
     err_code: i32,
     err: [u8; MAX_ERR_BYTES],
     err_len: u16,
     err_flags: u8,
+    response_uid: [u8; MAX_ERR_BYTES],
+    response_uid_len: u16,
+    response_uid_flags: u8,
 }
 
 impl CallbackCapture {
     const EMPTY: Self = Self {
         context: 0,
         cookie: [0; 16],
+        callback_tid: 0,
         err_code: 0,
         err: [0; MAX_ERR_BYTES],
         err_len: 0,
         err_flags: 0,
+        response_uid: [0; MAX_ERR_BYTES],
+        response_uid_len: 0,
+        response_uid_flags: 0,
     };
 }
 
@@ -153,6 +162,7 @@ static RESPONSE_SLOTS: [ResponseSlot; RESPONSE_CAPACITY] =
     [const { ResponseSlot::new() }; RESPONSE_CAPACITY];
 static WRITE_HINT: AtomicUsize = AtomicUsize::new(0);
 static ORPHAN_CALLBACKS: AtomicU64 = AtomicU64::new(0);
+static RESPONSE_UID_HASHER: OnceLock<std::collections::hash_map::RandomState> = OnceLock::new();
 
 /// Once a QQ delegate stores these Rust function pointers, Windows must keep
 /// this DLL mapped until process exit. The QQ dispatcher has no proven
@@ -303,32 +313,36 @@ fn safe_read_into(addr: usize, out: &mut [u8]) -> bool {
     got == out.len()
 }
 
-// err_flags: 0 empty, 1 complete, 2 over budget (omitted), 3 unreadable.
-fn capture_error(addr: usize, out: &mut CallbackCapture) {
+// capture flags: 0 empty, 1 complete, 2 over budget (omitted), 3 unreadable.
+fn capture_qq_string(addr: usize, bytes: &mut [u8]) -> (u16, u8) {
+    if addr == 0 {
+        return (0, 0);
+    }
     if addr < 0x10000 {
-        return;
+        return (0, 3);
     }
     let mut first = [0u8; 1];
     if !safe_read_into(addr, &mut first) {
-        out.err_flags = 3;
-        return;
+        return (0, 3);
     }
     if first[0] & 1 == 0 {
         let len = (first[0] >> 1) as usize;
         if len == 0 {
-            return;
+            return (0, 0);
         }
-        if len > MAX_ERR_BYTES {
-            out.err_flags = 2;
-            return;
+        // The profiled libc++ string has a 24-byte object with 22 bytes of
+        // short-string capacity. Refuse malformed short lengths instead of
+        // reading past the callback-owned object.
+        if len > 22 {
+            return (0, 3);
         }
-        if !safe_read_into(addr.saturating_add(1), &mut out.err[..len]) {
-            out.err_flags = 3;
-            return;
+        if len > bytes.len() {
+            return (0, 2);
         }
-        out.err_len = len as u16;
-        out.err_flags = 1;
-        return;
+        if !safe_read_into(addr.saturating_add(1), &mut bytes[..len]) {
+            return (0, 3);
+        }
+        return (len as u16, 1);
     }
     let size = match safe_read_qword(addr.saturating_add(8)) {
         Some(v) => usize::try_from(v).ok(),
@@ -340,27 +354,65 @@ fn capture_error(addr: usize, out: &mut CallbackCapture) {
     };
     let (size, data) = match (size, data) {
         (Some(size), Some(data)) => (size, data),
-        _ => {
-            out.err_flags = 3;
-            return;
-        }
+        _ => return (0, 3),
     };
     if size == 0 {
-        return;
+        return (0, 0);
     }
-    if size > MAX_ERR_BYTES {
-        out.err_flags = 2;
-        return;
+    if size > bytes.len() {
+        return (0, 2);
     }
-    if data < 0x10000 || !safe_read_into(data, &mut out.err[..size]) {
-        out.err_flags = 3;
-        return;
+    if data < 0x10000 || !safe_read_into(data, &mut bytes[..size]) {
+        return (0, 3);
     }
-    out.err_len = size as u16;
-    out.err_flags = 1;
+    (size as u16, 1)
 }
 
-fn enqueue_capture(mut capture: CallbackCapture, context: Option<&'static ConsumerCtx>) {
+fn capture_error(addr: usize, out: &mut CallbackCapture) {
+    (out.err_len, out.err_flags) = capture_qq_string(addr, &mut out.err);
+}
+
+fn capture_response_uid(addr: usize, out: &mut CallbackCapture) {
+    (out.response_uid_len, out.response_uid_flags) = capture_qq_string(addr, &mut out.response_uid);
+}
+
+fn clear_response_uid(bytes: &mut [u8; MAX_ERR_BYTES]) {
+    for byte in bytes {
+        // Keep the wipe observable after the stack copy is otherwise dead.
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+}
+
+fn capture_state(flags: u8) -> &'static str {
+    match flags {
+        1 => "copied",
+        2 => "over_budget",
+        3 => "unreadable",
+        _ => "empty",
+    }
+}
+
+fn diagnostic_fingerprint(domain: &[u8], bytes: &[u8]) -> u64 {
+    let builder = RESPONSE_UID_HASHER.get_or_init(std::collections::hash_map::RandomState::new);
+    let mut hasher = builder.build_hasher();
+    hasher.write(b"caligo:diagnostic:v1\0");
+    hasher.write(domain);
+    hasher.write(b"\0");
+    hasher.write(bytes);
+    hasher.finish()
+}
+
+/// Same-process keyed fingerprint for correlating future response/CPB
+/// candidates. This is diagnostic-only and must never be used as a message ID.
+pub(crate) fn response_uid_fingerprint(bytes: &[u8]) -> u64 {
+    diagnostic_fingerprint(b"response-uid", bytes)
+}
+
+fn request_cookie_fingerprint(cookie: &[u8; 16]) -> u64 {
+    diagnostic_fingerprint(b"request-cookie", cookie)
+}
+
+fn enqueue_capture(capture: &mut CallbackCapture, context: Option<&'static ConsumerCtx>) {
     let start = WRITE_HINT.fetch_add(1, Ordering::Relaxed) % RESPONSE_CAPACITY;
     for offset in 0..RESPONSE_CAPACITY {
         let slot = &RESPONSE_SLOTS[(start + offset) % RESPONSE_CAPACITY];
@@ -378,8 +430,9 @@ fn enqueue_capture(mut capture: CallbackCapture, context: Option<&'static Consum
                 capture.context = ctx as *const ConsumerCtx as usize;
             }
             // SAFETY: SLOT_WRITING is exclusively owned by this producer.
-            unsafe { *slot.capture.get() = capture };
+            unsafe { *slot.capture.get() = *capture };
             slot.state.store(SLOT_READY, Ordering::Release);
+            clear_response_uid(&mut capture.response_uid);
             return;
         }
     }
@@ -388,13 +441,14 @@ fn enqueue_capture(mut capture: CallbackCapture, context: Option<&'static Consum
     } else {
         ORPHAN_CALLBACKS.fetch_add(1, Ordering::Relaxed);
     }
+    clear_response_uid(&mut capture.response_uid);
 }
 
 fn with_ffi_panic_boundary(f: impl FnOnce()) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
 }
 
-/// QQ delegate manager with the statically verified op 0/1/3/4 contract.
+/// QQ delegate manager with the fixed-image op 0–4 contract.
 /// No formatting or IO happens on this callback thread.
 ///
 /// # Safety
@@ -419,34 +473,19 @@ pub unsafe extern "system" fn consumer_manager(
         // SAFETY: pointers are supplied by the profiled QQ delegate contract.
         unsafe {
             match op {
-                0 => {
-                    if !out.is_null() && !src.is_null() {
+                0 | 1 => {
+                    if context.is_some() && !dest.is_null() && !out.is_null() && !src.is_null() {
                         let src_addr = src as usize;
-                        let v0 = safe_read_qword(src_addr).unwrap_or(0);
-                        let v1 = safe_read_qword(src_addr.saturating_add(8)).unwrap_or(0);
-                        core::ptr::write(out as *mut u64, v0);
-                        core::ptr::write((out as *mut u64).add(1), v1);
-                    }
-                    if !dest.is_null() {
-                        core::ptr::write(
-                            dest as *mut u64,
-                            consumer_manager as *const () as usize as u64,
-                        );
-                        core::ptr::write(
-                            (dest as *mut u64).add(1),
-                            consumer_invoke as *const () as usize as u64,
-                        );
-                    }
-                }
-                1 | 3 => {
-                    if !dest.is_null() {
-                        if let Some(ctx) = context.filter(|c| c.wrapper_base > 0x10000) {
-                            core::ptr::write(dest as *mut u64, ctx.wrapper_base + EMPTY_MGR_RVA);
-                            core::ptr::write(
-                                (dest as *mut u64).add(1),
-                                ctx.wrapper_base + EMPTY_INV_RVA,
-                            );
-                        } else {
+                        if let (Some(v0), Some(v1)) = (
+                            safe_read_qword(src_addr),
+                            safe_read_qword(src_addr.saturating_add(8)),
+                        ) {
+                            // The fixed-image assignment helper passes the target
+                            // manager slot as `dest` and target wrapper as `out`.
+                            // Install the pair in the target manager slot and leave
+                            // the source wrapper untouched.
+                            core::ptr::write(out as *mut u64, v0);
+                            core::ptr::write((out as *mut u64).add(1), v1);
                             core::ptr::write(
                                 dest as *mut u64,
                                 consumer_manager as *const () as usize as u64,
@@ -458,6 +497,18 @@ pub unsafe extern "system" fn consumer_manager(
                         }
                     }
                 }
+                2 => {
+                    if !dest.is_null() {
+                        if let Some(ctx) = context.filter(|c| c.wrapper_base > 0x10000) {
+                            core::ptr::write(dest as *mut u64, ctx.wrapper_base + EMPTY_MGR_RVA);
+                            core::ptr::write(
+                                (dest as *mut u64).add(1),
+                                ctx.wrapper_base + EMPTY_INV_RVA,
+                            );
+                        }
+                    }
+                }
+                3 => {} // Cookie is POD; QQ's op=3 leaves the pair in place.
                 4 => {
                     if !out.is_null() {
                         core::ptr::write(out as *mut u64, 0);
@@ -474,14 +525,16 @@ pub unsafe extern "system" fn consumer_manager(
 ///
 /// # Safety
 /// `this` and `err_str` must be readable under the profiled callback contract.
-/// The fifth argument is an opaque response-UID pointer and is not dereferenced.
-/// RPM protects ordinary bad reads but cannot catch every SEH fault.
+/// The fifth argument is the callback's borrowed QQ string for response UID;
+/// it is copied synchronously into the bounded slot and is never used as a
+/// request cookie or business identity. RPM protects ordinary bad reads but
+/// cannot catch every SEH fault.
 pub unsafe extern "system" fn consumer_invoke(
     this: *mut c_void,
     _tag: u32,
     err_code: i32,
     err_str: *const c_void,
-    _response_uid: *const c_void,
+    response_uid: *const c_void,
 ) {
     with_ffi_panic_boundary(|| {
         if this.is_null() {
@@ -512,9 +565,14 @@ pub unsafe extern "system" fn consumer_invoke(
         let mut capture = CallbackCapture::EMPTY;
         capture.cookie[..8].copy_from_slice(&lo.to_le_bytes());
         capture.cookie[8..].copy_from_slice(&hi.to_le_bytes());
+        // Capture the OS thread at the actual invoker entry. Formatting and
+        // file IO remain on the resident worker.
+        capture.callback_tid =
+            unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
         capture.err_code = err_code;
         capture_error(err_str as usize, &mut capture);
-        enqueue_capture(capture, Some(context));
+        capture_response_uid(response_uid as usize, &mut capture);
+        enqueue_capture(&mut capture, Some(context));
     });
 }
 
@@ -537,14 +595,14 @@ fn append_line(ctx: &ConsumerCtx, line: &str) {
         });
 }
 
-/// Research-only static delegate used by g3_send_run.
-pub fn build_cb(_wrapper_base: usize, ctx: &ConsumerCtx) -> [u64; 4] {
-    [
-        ctx as *const ConsumerCtx as u64,
-        1,
-        consumer_manager as *const () as usize as u64,
-        consumer_invoke as *const () as usize as u64,
-    ]
+/// Research-only one-shot delegate for a direct G3 probe. The first cookie
+/// word selects the immutable generation context; the second is a unique
+/// per-send nonce, so the invoker does not mistake the cookie for `ctx` itself.
+pub fn build_cb_for_generation(ctx: &ConsumerCtx, nonce: u64) -> [u64; 4] {
+    let mut cookie = crate::native_response::Cookie([0; 16]);
+    cookie.0[..8].copy_from_slice(&ctx.generation.to_le_bytes());
+    cookie.0[8..].copy_from_slice(&nonce.to_le_bytes());
+    build_cb_for_cookie(&cookie)
 }
 
 /// Register this resident generation. Failure is a hard startup failure.
@@ -562,9 +620,26 @@ pub fn build_cb_for_cookie(cookie: &crate::native_response::Cookie) -> [u64; 4] 
     ]
 }
 
-/// Drain bounded callback slots on the worker thread, then return complete
+/// Drain all bounded callback slots on the consumer thread, then return
 /// diagnostic strings for the existing response ledger interface.
 pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
+    drain_responses_matching(None)
+}
+
+/// Drain callback slots for one request cookie while preserving every other
+/// generation's ready slot. This is used by the bounded direct G3 observer;
+/// normal resident consumption continues to use [`drain_responses`].
+pub fn drain_responses_for_cookie(
+    expected: &crate::native_response::Cookie,
+) -> Vec<(crate::native_response::Cookie, i32, String)> {
+    drain_responses_matching(Some(expected))
+}
+
+fn drain_responses_matching(
+    expected: Option<&crate::native_response::Cookie>,
+) -> Vec<(crate::native_response::Cookie, i32, String)> {
+    let expected_generation = expected
+        .map(|cookie| u64::from_le_bytes(cookie.0[..8].try_into().expect("cookie width is fixed")));
     let mut responses = Vec::new();
     for slot in &RESPONSE_SLOTS {
         if slot
@@ -580,8 +655,15 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
             continue;
         }
         // SAFETY: SLOT_WRITING is exclusively owned by this consumer.
-        let capture = unsafe { *slot.capture.get() };
-        slot.state.store(SLOT_FREE, Ordering::Release);
+        let mut capture = unsafe { *slot.capture.get() };
+        if expected.is_some_and(|cookie| capture.cookie != cookie.0) {
+            // This slot belongs to another request. Do not consume or format
+            // it; wipe only the temporary copy and republish the untouched
+            // slot for its own consumer.
+            clear_response_uid(&mut capture.response_uid);
+            slot.state.store(SLOT_READY, Ordering::Release);
+            continue;
+        }
         let context = context_for_pointer(capture.context);
         let err = match capture.err_flags {
             1 => String::from_utf8_lossy(&capture.err[..capture.err_len as usize]).into_owned(),
@@ -589,15 +671,45 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
             3 => "<diagnostic unreadable>".to_owned(),
             _ => String::new(),
         };
+        let response_uid_fingerprint = if capture.response_uid_flags == 1 {
+            format!(
+                "{:016x}",
+                response_uid_fingerprint(
+                    &capture.response_uid[..capture.response_uid_len as usize]
+                )
+            )
+        } else {
+            String::new()
+        };
+        let request_cookie_fingerprint =
+            format!("{:016x}", request_cookie_fingerprint(&capture.cookie));
+        clear_response_uid(&mut capture.response_uid);
         if let Some(ctx) = context {
+            let drain_tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
             append_line(
                 ctx,
                 &format!(
-                    "{{\"kind\":\"consumer_result\",\"generation\":{},\"err_code\":{},\"err\":{:?}}}",
-                    ctx.generation, capture.err_code, err
+                    "{{\"kind\":\"consumer_result\",\"generation\":{},\"callback_tid\":{},\"drain_tid\":{},\"err_code\":{},\"err\":{:?},\"request_cookie_fingerprint\":{:?},\"response_uid_state\":{:?},\"response_uid_len\":{},\"response_uid_fingerprint\":{:?}}}",
+                    ctx.generation,
+                    capture.callback_tid,
+                    drain_tid,
+                    capture.err_code,
+                    err,
+                    request_cookie_fingerprint,
+                    capture_state(capture.response_uid_flags),
+                    capture.response_uid_len,
+                    response_uid_fingerprint
                 ),
             );
         }
+        // The callback slot can be reused, so erase the bounded UID copy after
+        // deriving its process-keyed diagnostic fingerprint.
+        unsafe {
+            let slot_capture = &mut *slot.capture.get();
+            clear_response_uid(&mut slot_capture.response_uid);
+            *slot_capture = CallbackCapture::EMPTY;
+        }
+        slot.state.store(SLOT_FREE, Ordering::Release);
         responses.push((
             crate::native_response::Cookie(capture.cookie),
             capture.err_code,
@@ -608,7 +720,11 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
         if slot.state.load(Ordering::Acquire) != SLOT_READY {
             continue;
         }
-        if let Some(ctx) = context_for_generation(slot.generation.load(Ordering::Relaxed)) {
+        let generation = slot.generation.load(Ordering::Relaxed);
+        if expected_generation.is_some_and(|expected| expected != generation) {
+            continue;
+        }
+        if let Some(ctx) = context_for_generation(generation) {
             let manager_calls = ctx.manager_calls.swap(0, Ordering::Relaxed);
             let overflow = ctx.callback_overflow.swap(0, Ordering::Relaxed);
             let late_callbacks = ctx.late_callbacks_rejected.swap(0, Ordering::Relaxed);
@@ -623,7 +739,11 @@ pub fn drain_responses() -> Vec<(crate::native_response::Cookie, i32, String)> {
             }
         }
     }
-    let orphaned = ORPHAN_CALLBACKS.swap(0, Ordering::Relaxed);
+    let orphaned = if expected.is_none() {
+        ORPHAN_CALLBACKS.swap(0, Ordering::Relaxed)
+    } else {
+        0
+    };
     if orphaned != 0 {
         if let Some(ctx) = CONTEXTS
             .iter()
@@ -650,6 +770,12 @@ mod tests {
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0xCA11_0000);
     fn context() -> (&'static ConsumerCtx, std::path::PathBuf, Vec<u16>) {
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        context_for_generation(generation)
+    }
+
+    fn context_for_generation(
+        generation: u64,
+    ) -> (&'static ConsumerCtx, std::path::PathBuf, Vec<u16>) {
         let report = std::env::temp_dir().join(format!("caligo-cp-{generation:x}.jsonl"));
         let _ = std::fs::remove_file(&report);
         let wide: Vec<u16> = report
@@ -660,6 +786,98 @@ mod tests {
             .collect();
         let ctx = leak_ctx(0x180000000, wide.as_ptr(), generation).expect("context slot available");
         (ctx, report, wide)
+    }
+
+    #[test]
+    fn one_shot_generation_delegate_is_a_send_cookie_not_context_pointer() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let (ctx, report, _wide) = context_for_generation(0);
+        let nonce = 0xA17E_5EED_0000_0001;
+        let mut delegate = build_cb_for_generation(ctx, nonce);
+        assert_eq!(delegate[0], 0, "cookie selects generation zero");
+        assert_eq!(delegate[1], nonce);
+        assert_ne!(delegate[0] as usize, ctx as *const ConsumerCtx as usize);
+
+        let callback_tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        // The delegate's first two qwords are the callback's borrowed cookie.
+        // SAFETY: the delegate remains live for the entire synchronous callback.
+        unsafe {
+            consumer_invoke(
+                delegate.as_mut_ptr().cast(),
+                0x10,
+                0,
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+        }
+
+        assert!(!report.exists(), "callback entry must not perform file IO");
+        let drained = drain_responses();
+        assert_eq!(drained.len(), 1);
+        let mut expected = [0u8; 16];
+        expected[..8].copy_from_slice(&0u64.to_le_bytes());
+        expected[8..].copy_from_slice(&nonce.to_le_bytes());
+        assert_eq!(drained[0].0, crate::native_response::Cookie(expected));
+        assert_eq!(drained[0].1, 0);
+        let output = std::fs::read_to_string(&report).unwrap();
+        assert!(output.contains(&format!("\"callback_tid\":{callback_tid}")));
+        assert!(output.contains("\"consumer_result\""));
+        assert!(output.contains("\"response_uid_state\":\"empty\""));
+        let _ = std::fs::remove_file(report);
+    }
+
+    #[test]
+    fn cookie_scoped_drain_leaves_other_generation_slots_ready() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let (left, left_report, _left_wide) = context();
+        let (right, right_report, _right_wide) = context();
+        let left_nonce = 0xA11C_E001;
+        let right_nonce = 0xA11C_E002;
+        let mut left_delegate = build_cb_for_generation(left, left_nonce);
+        let mut right_delegate = build_cb_for_generation(right, right_nonce);
+
+        // SAFETY: each delegate and its immutable context stay live throughout
+        // this synchronous synthetic callback.
+        unsafe {
+            consumer_invoke(
+                left_delegate.as_mut_ptr().cast(),
+                0x10,
+                0,
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+            consumer_invoke(
+                right_delegate.as_mut_ptr().cast(),
+                0x10,
+                1006501,
+                core::ptr::null(),
+                core::ptr::null(),
+            );
+        }
+
+        let mut left_bytes = [0u8; 16];
+        left_bytes[..8].copy_from_slice(&left.generation.to_le_bytes());
+        left_bytes[8..].copy_from_slice(&left_nonce.to_le_bytes());
+        let left_cookie = crate::native_response::Cookie(left_bytes);
+        let mut right_bytes = [0u8; 16];
+        right_bytes[..8].copy_from_slice(&right.generation.to_le_bytes());
+        right_bytes[8..].copy_from_slice(&right_nonce.to_le_bytes());
+        let right_cookie = crate::native_response::Cookie(right_bytes);
+
+        let left_drained = drain_responses_for_cookie(&left_cookie);
+        assert_eq!(left_drained, vec![(left_cookie, 0, String::new())]);
+        assert!(std::fs::read_to_string(&left_report)
+            .unwrap()
+            .contains("\"consumer_result\""));
+        assert!(!right_report.exists(), "other generation remains untouched");
+
+        let right_drained = drain_responses();
+        assert_eq!(right_drained, vec![(right_cookie, 1006501, String::new())]);
+        assert!(std::fs::read_to_string(&right_report)
+            .unwrap()
+            .contains("\"consumer_result\""));
+        let _ = std::fs::remove_file(left_report);
+        let _ = std::fs::remove_file(right_report);
     }
 
     fn short_string(s: &[u8]) -> [u8; 24] {
@@ -728,48 +946,87 @@ mod tests {
             );
         }
         assert_eq!(gate[0], 0, "op 4 zero means callable");
-        let mut reset = [0u64; 2];
-        // SAFETY: op=3 receives the source clone and destination delegate slots.
+        let mut assigned = dest;
+        assigned[0] ^= 0x10;
+        assigned[1] ^= 0x20;
+        let old_target = assigned;
+        let source_before = src;
+        // Match 54CE00's first step: dispose the old target. The POD cookie
+        // has no resource to release and op=3 must not rewrite the pair.
         unsafe {
             consumer_manager(
-                reset.as_mut_ptr().cast(),
+                assigned.as_mut_ptr().add(2).cast(),
                 3,
-                dest.as_mut_ptr().cast(),
+                assigned.as_mut_ptr().cast(),
+                0x10,
+                core::ptr::null_mut(),
+            );
+        }
+        assert_eq!(assigned, old_target);
+        // 54CE00 invokes op=1 with the target manager slot, source wrapper,
+        // size 0x10, and target wrapper as the fifth argument.
+        unsafe {
+            consumer_manager(
+                assigned.as_mut_ptr().add(2).cast(),
+                1,
+                src.as_ptr().cast_mut().cast(),
+                0x10,
+                assigned.as_mut_ptr().cast(),
+            );
+        }
+        assert_eq!(assigned[0..2], src[0..2], "op 1 copies the cookie");
+        assert_eq!(
+            assigned[2..4],
+            dest[2..4],
+            "op 1 keeps the invoker callable"
+        );
+        assert_eq!(src, source_before, "op 1 preserves the source wrapper");
+        let unknown_source = [u64::MAX, 7, src[2], src[3]];
+        let mut refused = [0xA5u64; 4];
+        // SAFETY: registered source is required before a QQ-owned wrapper may
+        // receive Caligo function pointers; both buffers are writable here.
+        unsafe {
+            consumer_manager(
+                refused.as_mut_ptr().add(2).cast(),
+                1,
+                unknown_source.as_ptr().cast_mut().cast(),
+                0x10,
+                refused.as_mut_ptr().cast(),
+            );
+        }
+        assert_eq!(refused, [0xA5; 4]);
+        let mut reset_after_op2 = [0u64; 2];
+        // SAFETY: op=2 receives a live wrapper and writable manager slots.
+        unsafe {
+            consumer_manager(
+                reset_after_op2.as_mut_ptr().cast(),
+                2,
+                assigned.as_mut_ptr().cast(),
                 0x10,
                 core::ptr::null_mut(),
             );
         }
         assert_eq!(
-            reset,
+            reset_after_op2,
             [
                 ctx.wrapper_base + EMPTY_MGR_RVA,
                 ctx.wrapper_base + EMPTY_INV_RVA
-            ]
+            ],
+            "op 2 leaves an empty manager pair"
         );
-        let mut destroyed = [0u64; 2];
-        // SAFETY: op=1 receives the same live source pair and writable slots.
-        unsafe {
-            consumer_manager(
-                destroyed.as_mut_ptr().cast(),
-                1,
-                dest.as_mut_ptr().cast(),
-                0x10,
-                core::ptr::null_mut(),
-            );
-        }
-        assert_eq!(destroyed, reset, "op 1 writes the profiled empty pair");
         let err = short_string(b"ok");
+        let response_uid = short_string(b"response-uid");
+        let caller_tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
         let _: unsafe extern "system" fn(*mut c_void, u32, i32, *const c_void, *const c_void) =
             consumer_invoke;
-        // SAFETY: error string is readable; the opaque fifth argument is
-        // deliberately invalid to prove that capture never dereferences it.
+        // SAFETY: both borrowed QQ strings remain live through the callback.
         unsafe {
             consumer_invoke(
-                dest.as_mut_ptr().cast(),
+                assigned.as_mut_ptr().cast(),
                 0x10,
                 0,
                 err.as_ptr().cast(),
-                1usize as *const c_void,
+                response_uid.as_ptr().cast(),
             );
         }
         assert!(!report.exists(), "callback thread must not write reports");
@@ -779,7 +1036,31 @@ mod tests {
         assert_eq!(drained[0].1, 0);
         assert_eq!(drained[0].2, "ok");
         let output = std::fs::read_to_string(report).unwrap();
+        assert!(output.contains(&format!("\"callback_tid\":{caller_tid}")));
+        assert!(output.contains(&format!("\"drain_tid\":{caller_tid}")));
         assert!(output.contains("\"err_code\":0"));
+        assert!(output.contains(&format!(
+            "\"request_cookie_fingerprint\":{:?}",
+            format!("{:016x}", request_cookie_fingerprint(&cookie.0))
+        )));
+        assert!(output.contains("\"response_uid_state\":\"copied\""));
+        assert!(output.contains(&format!(
+            "\"response_uid_fingerprint\":{:?}",
+            format!("{:016x}", response_uid_fingerprint(b"response-uid"))
+        )));
+        assert!(
+            !output.contains("response-uid"),
+            "raw response UID is not logged"
+        );
+        let raw_cookie = cookie
+            .0
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert!(
+            !output.contains(&raw_cookie),
+            "raw request cookie is not logged"
+        );
         assert!(!output.contains("span_shape"));
     }
 
@@ -803,7 +1084,11 @@ mod tests {
         let exact_span = heap_string(&exact_bytes);
         let oversize_bytes = vec![b'y'; MAX_ERR_BYTES + 1];
         let oversize_span = heap_string(&oversize_bytes);
-        let response_uid = 1usize as *const c_void;
+        let empty_uid = core::ptr::null();
+        let heap_uid_bytes = b"heap-response-id";
+        let heap_uid = heap_string(heap_uid_bytes);
+        let oversize_uid_bytes = vec![b'z'; MAX_ERR_BYTES + 1];
+        let oversize_uid = heap_string(&oversize_uid_bytes);
 
         // Null is the valid empty diagnostic span. The two heap-shaped spans
         // cover the inclusive byte budget and the first omitted-over-budget size.
@@ -813,21 +1098,21 @@ mod tests {
                 0x10,
                 0,
                 core::ptr::null(),
-                response_uid,
+                empty_uid,
             );
             consumer_invoke(
                 exact_delegate.as_ptr().cast_mut().cast(),
                 0x10,
                 0,
                 exact_span.as_ptr().cast(),
-                response_uid,
+                heap_uid.as_ptr().cast(),
             );
             consumer_invoke(
                 oversize_delegate.as_ptr().cast_mut().cast(),
                 0x10,
                 0,
                 oversize_span.as_ptr().cast(),
-                response_uid,
+                oversize_uid.as_ptr().cast(),
             );
         }
         assert!(!report.exists(), "callback thread must not write reports");
@@ -847,6 +1132,18 @@ mod tests {
             result_for(oversize_cookie).2,
             "<diagnostic omitted: over budget>"
         );
+        let output = std::fs::read_to_string(report).unwrap();
+        assert!(output.contains("\"response_uid_state\":\"empty\""));
+        assert!(output.contains("\"response_uid_state\":\"copied\""));
+        assert!(output.contains("\"response_uid_state\":\"over_budget\""));
+        assert!(output.contains(&format!(
+            "\"response_uid_fingerprint\":{:?}",
+            format!("{:016x}", response_uid_fingerprint(heap_uid_bytes))
+        )));
+        assert!(
+            !output.contains("heap-response-id"),
+            "raw response UID is not logged"
+        );
     }
 
     #[test]
@@ -859,7 +1156,8 @@ mod tests {
         cookie.0[8..].copy_from_slice(&7u64.to_le_bytes());
         let cb = build_cb_for_cookie(&cookie);
         let err = short_string(b"late");
-        let response_uid = short_string(b"response-uid");
+        let response_uid_bytes = b"heap-response-id";
+        let response_uid = heap_string(response_uid_bytes);
         // SAFETY: callback input storage is live for the duration of the call.
         unsafe {
             consumer_invoke(
@@ -877,6 +1175,15 @@ mod tests {
         assert!(
             old_report.exists(),
             "late callback is audited to old context"
+        );
+        let output = std::fs::read_to_string(old_report).unwrap();
+        assert!(output.contains(&format!(
+            "\"response_uid_fingerprint\":{:?}",
+            format!("{:016x}", response_uid_fingerprint(response_uid_bytes))
+        )));
+        assert!(
+            !output.contains("heap-response-id"),
+            "raw response UID is not logged"
         );
     }
 
@@ -935,8 +1242,7 @@ mod tests {
 
         // Dropping the owner guard is the resident shutdown path.
         drop(GenerationGuard::new(ctx.generation));
-        // The quarantine check returns before touching the error pointer; the
-        // fifth response-UID argument is opaque.
+        // The quarantine check returns before touching either borrowed string.
         unsafe {
             consumer_invoke(
                 delegate.as_ptr().cast_mut().cast(),
@@ -988,8 +1294,7 @@ mod tests {
         let (_ctx, _report, _wide) = context();
         let unknown = [u64::MAX, 7, 0, 0];
         let orphaned_before = ORPHAN_CALLBACKS.load(Ordering::Relaxed);
-        // Unknown callback identity returns before the error pointer is read;
-        // the opaque fifth argument is never dereferenced.
+        // Unknown callback identity returns before either borrowed string is read.
         unsafe {
             consumer_invoke(
                 unknown.as_ptr().cast_mut().cast(),
@@ -1011,7 +1316,7 @@ mod tests {
         const CHILD_MODE: &str = "CALIGO_CONSUMER_POINTER_CHILD";
         let _lock = TEST_LOCK.lock().unwrap();
         if std::env::var_os(CHILD_MODE).is_some() {
-            let (ctx, _report, _wide) = context();
+            let (ctx, report, _wide) = context();
             let mut cookie = crate::native_response::Cookie([0; 16]);
             cookie.0[..8].copy_from_slice(&ctx.generation.to_le_bytes());
             cookie.0[8..].copy_from_slice(&0xBADu64.to_le_bytes());
@@ -1024,7 +1329,7 @@ mod tests {
                     0x10,
                     0,
                     0x10000usize as *const c_void,
-                    1usize as *const c_void,
+                    0x10000usize as *const c_void,
                 );
             }
             let captured = drain_responses();
@@ -1032,6 +1337,8 @@ mod tests {
                 captured,
                 vec![(cookie, 0, "<diagnostic unreadable>".to_string())]
             );
+            let output = std::fs::read_to_string(report).unwrap();
+            assert!(output.contains("\"response_uid_state\":\"unreadable\""));
             println!("CAPTURE=unreadable; CHILD=clean");
             return;
         }
@@ -1056,6 +1363,17 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).contains("CAPTURE=unreadable; CHILD=clean"),
             "child did not report its capture result"
         );
+    }
+
+    #[test]
+    fn malformed_short_string_does_not_read_past_the_qq_string_object() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let mut malformed = [0u8; 24];
+        malformed[0] = 24 << 1;
+        let mut captured = [0u8; MAX_ERR_BYTES];
+        let (len, flags) = capture_qq_string(malformed.as_ptr() as usize, &mut captured);
+        assert_eq!(len, 0);
+        assert_eq!(flags, 3, "SSO length above 22 is invalid for this object");
     }
 
     #[test]

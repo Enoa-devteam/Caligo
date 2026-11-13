@@ -86,6 +86,7 @@ fn event(
         native_id: NativeMessageId(native_id.into()),
         text: text.into(),
         platform_time: Some(1_000),
+        wrapper_message: None,
         onebot_projection: None,
         observed_at_unix_ms: 2_000,
         source,

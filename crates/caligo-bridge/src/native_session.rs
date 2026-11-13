@@ -56,6 +56,8 @@ pub enum AttachError {
     AlreadyAttached,
     /// ops 报告底层未就绪(transport 未连接等)。
     NotReady(String),
+    /// ops 的调用前置合同不满足；不得进入 Ready。
+    PreCall(&'static str),
 }
 
 /// 会话阶段。
@@ -181,8 +183,10 @@ impl<S: SeqSource> NativeSession<S> {
             return Err(AttachError::AlreadyAttached);
         }
         // 底层就绪探针:零副作用(不提交任何请求)。
-        if let Err(OpsError::NotReady(r)) = ops.probe_ready(proof.service_addr) {
-            return Err(AttachError::NotReady(r));
+        match ops.probe_ready(proof.service_addr) {
+            Ok(()) => {}
+            Err(OpsError::NotReady(reason)) => return Err(AttachError::NotReady(reason)),
+            Err(OpsError::PreCall(reason)) => return Err(AttachError::PreCall(reason)),
         }
         self.ledger
             .set_generations(proof.host_generation, proof.session_generation);
@@ -533,6 +537,38 @@ mod tests {
         assert_eq!(s.phase(), &SessionPhase::Detached);
         assert_eq!(s.counters.native_ops, 0);
         assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn attach_rejects_precall_probe_failure_before_becoming_ready() {
+        struct RefusingProbe;
+        impl NativeOps for RefusingProbe {
+            fn probe_ready(&mut self, _service_addr: usize) -> Result<(), OpsError> {
+                Err(OpsError::PreCall("service lease mismatch"))
+            }
+
+            fn submit(
+                &mut self,
+                _service_addr: usize,
+                _cookie: &Cookie,
+                _body: &[u8],
+            ) -> Result<(), OpsError> {
+                panic!("a failed attach must not submit")
+            }
+        }
+
+        let mut session = NativeSession::new(seq_from(1));
+        let mut ops = RefusingProbe;
+        assert_eq!(
+            session.attach(&mut ops, proof()),
+            Err(AttachError::PreCall("service lease mismatch"))
+        );
+        assert_eq!(session.phase(), &SessionPhase::Detached);
+        assert_eq!(session.counters.native_ops, 0);
+        assert_eq!(
+            session.enqueue_send(&mut ops, "r", cookie(1), b"BODY"),
+            SendAcceptance::NotAttached
+        );
     }
 
     /// 附加成功 → Ready;enqueue:seq 先持久化、cookie 先登记、再提交。

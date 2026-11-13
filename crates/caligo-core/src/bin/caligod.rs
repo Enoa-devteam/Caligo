@@ -33,6 +33,8 @@ struct Args {
     token_file: Option<String>,
     onebot_http_bind: String,
     onebot_ws_bind: Option<String>,
+    onebot_sse_bind: Option<String>,
+    onebot_mcp_bind: Option<String>,
     onebot_http_post_url: Option<String>,
     onebot_http_post_secret_env: Option<String>,
     onebot_http_post_timeout_ms: u64,
@@ -53,6 +55,8 @@ fn parse_args() -> Option<Args> {
         token_file: None,
         onebot_http_bind: "127.0.0.1:5700".into(),
         onebot_ws_bind: None,
+        onebot_sse_bind: None,
+        onebot_mcp_bind: None,
         onebot_http_post_url: None,
         onebot_http_post_secret_env: None,
         onebot_http_post_timeout_ms: 5_000,
@@ -76,6 +80,8 @@ fn parse_args() -> Option<Args> {
             "--token-file" => a.token_file = next(&mut i),
             "--onebot-http-bind" => a.onebot_http_bind = next(&mut i)?,
             "--onebot-ws-bind" => a.onebot_ws_bind = Some(next(&mut i)?),
+            "--onebot-sse-bind" => a.onebot_sse_bind = Some(next(&mut i)?),
+            "--onebot-mcp-bind" => a.onebot_mcp_bind = Some(next(&mut i)?),
             "--onebot-http-post-url" => a.onebot_http_post_url = Some(next(&mut i)?),
             "--onebot-http-post-secret-env" => a.onebot_http_post_secret_env = Some(next(&mut i)?),
             "--onebot-http-post-timeout-ms" => {
@@ -92,7 +98,7 @@ fn parse_args() -> Option<Args> {
     }
     if a.pipe_prefix.is_empty() || a.journal.is_empty() || a.account.is_empty() {
         eprintln!(
-            "caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
+            "caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-sse-bind 127.0.0.1:6701] [--onebot-mcp-bind 127.0.0.1:6702] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
         );
         return None;
     }
@@ -189,6 +195,22 @@ fn main() {
     let onebot_ws_addr = ws_listener
         .as_ref()
         .map(|listener| listener.local_addr().expect("bound websocket address"));
+    let bind_optional = |address: Option<&str>, protocol: &str| {
+        address.map(|address| {
+            caligo_core::onebot_server::bind_loopback(address).unwrap_or_else(|error| {
+                eprintln!("[caligod] {protocol} bind failed: {error}");
+                std::process::exit(6);
+            })
+        })
+    };
+    let sse_listener = bind_optional(args.onebot_sse_bind.as_deref(), "OneBot SSE");
+    let mcp_listener = bind_optional(args.onebot_mcp_bind.as_deref(), "MCP");
+    let onebot_sse_addr = sse_listener
+        .as_ref()
+        .map(|listener| listener.local_addr().expect("bound SSE address"));
+    let onebot_mcp_addr = mcp_listener
+        .as_ref()
+        .map(|listener| listener.local_addr().expect("bound MCP address"));
     let (bridge_name, control_name) = daemon.pipe_names();
     // 启动信息首行(JSON):管道名 + 认证 token。启动方读取后应立即吞掉该输出。
     println!(
@@ -199,6 +221,8 @@ fn main() {
             "auth_token": daemon.auth_token(),
             "onebot_http": onebot_http_addr,
             "onebot_ws": onebot_ws_addr,
+            "onebot_sse": onebot_sse_addr,
+            "onebot_mcp": onebot_mcp_addr,
             "http_post_enabled": args.onebot_http_post_url.is_some(),
             "reverse_ws_enabled": args.onebot_ws_reverse_url.is_some(),
         })
@@ -217,6 +241,16 @@ fn main() {
         std::thread::spawn(move || {
             caligo_core::onebot_transport::serve_forward_ws(d, listener, Some(token))
         })
+    });
+    let onebot_sse_server = sse_listener.map(|listener| {
+        let d = daemon.clone();
+        let token = daemon.auth_token();
+        std::thread::spawn(move || caligo_core::onebot_sse::serve_sse(d, listener, Some(token)))
+    });
+    let onebot_mcp_server = mcp_listener.map(|listener| {
+        let d = daemon.clone();
+        let token = daemon.auth_token();
+        std::thread::spawn(move || caligo_core::onebot_mcp::serve_mcp(d, listener, Some(token)))
     });
     let http_post_worker = args.onebot_http_post_url.map(|url| {
         daemon.enable_onebot_http_post_ordering();
@@ -300,6 +334,18 @@ fn main() {
             "[caligod] OneBot WebSocket 已停止，共接入 {} 个连接",
             server.join().expect("OneBot WS thread panicked")
         );
+    }
+    if let Some(server) = onebot_sse_server {
+        match server.join().expect("OneBot SSE thread panicked") {
+            Ok(stats) => println!("[caligod] OneBot SSE stopped: {stats:?}"),
+            Err(error) => eprintln!("[caligod] OneBot SSE failed: {error}"),
+        }
+    }
+    if let Some(server) = onebot_mcp_server {
+        match server.join().expect("MCP thread panicked") {
+            Ok(stats) => println!("[caligod] MCP stopped: {stats:?}"),
+            Err(error) => eprintln!("[caligod] MCP failed: {error}"),
+        }
     }
     if let Some(worker) = http_post_worker {
         println!(

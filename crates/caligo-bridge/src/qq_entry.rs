@@ -178,6 +178,30 @@ pub fn install_drain_hook(f: Box<dyn Fn() -> usize + Send>) {
     }
 }
 
+/// Install a one-shot research hook only when no resident/daemon hook owns the pump.
+/// This prevents an isolated probe from replacing the active production seam.
+pub fn try_install_drain_hook(f: Box<dyn Fn() -> usize + Send>) -> bool {
+    match DRAIN_HOOK.lock() {
+        Ok(mut g) if g.is_none() => {
+            *g = Some(f);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Clear a completed one-shot hook. The pump mutex serializes this with any active callback.
+pub fn clear_drain_hook() {
+    if let Ok(mut g) = DRAIN_HOOK.lock() {
+        *g = None;
+    }
+}
+
+/// Wake the owner pump through the sole cross-thread libuv operation.
+pub fn wake_owner_pump() -> bool {
+    wake_trampoline()
+}
+
 /// daemon 启动产物(worker 停止标志;导出侧保存)。
 #[derive(Debug, Clone)]
 pub struct DaemonStartup {
@@ -214,14 +238,24 @@ pub fn peek_stored_wake() -> Option<fn() -> bool> {
     Some(unsafe { std::mem::transmute::<usize, fn() -> bool>(addr) })
 }
 
-/// 登记报告路径(shutdown/daemon 阶段日志用)。
+/// daemon/D8 侧:isolate 地址(首入时解析;ready 前 0)。
+pub fn isolate_addr() -> *mut core::ffi::c_void {
+    ENTRY.isolate.load(Ordering::Acquire) as *mut core::ffi::c_void
+}
+
+/// 登记由调用方保证进程生存期的报告路径缓冲(daemon 配置路径使用)。
 pub fn register_report_path(p: *const u16) {
     REPORT_PATH_PTR.store(p as usize, Ordering::Release);
 }
 
-/// daemon/D8 侧:isolate 地址(首入时解析;ready 前 0)。
-pub fn isolate_addr() -> *mut core::ffi::c_void {
-    ENTRY.isolate.load(Ordering::Acquire) as *mut core::ffi::c_void
+/// Whether the one-time K4 owner entry is ready.
+pub fn is_ready() -> bool {
+    ENTRY.ready.load(Ordering::Acquire) == 1
+}
+
+/// Frozen QQNT base captured by the successful owner bootstrap.
+pub fn qqnt_base() -> usize {
+    ENTRY.qqnt_base.load(Ordering::Acquire)
 }
 
 /// daemon 导出侧:读取 worker 停止标志(shutdown 先停 worker)。
@@ -316,8 +350,7 @@ fn take_error() -> Option<EntryError> {
 /// 直接落到与 bootstrap 相同的报告文件(路径存于 ENTRY 之外 —— shutdown
 /// 在 bootstrap 之后调用,路径经 bootstrap 记录;此处从静态取)。
 pub fn append_stage_simple(stage: &str, ok: bool, detail: &str) {
-    // ENTRY 不保存路径;shutdown 的日志由导出侧持有路径参数 —— 但导出无路径。
-    // 折衷:日志写到 bootstrap 报告同目录的 shutdown.jsonl(若取不到路径则跳过)。
+    // bootstrap 将报告路径复制到 bridge 进程生存期存储；不得保留 loader 的临时远程缓冲指针。
     let path = REPORT_PATH_PTR.load(Ordering::Acquire);
     if path == 0 {
         return;

@@ -45,6 +45,11 @@ impl EventBus {
         self.subscribers.len()
     }
 
+    /// Queue losses for one current subscription; absent after unsubscribe.
+    pub fn subscriber_dropped(&self, id: u64) -> Option<u64> {
+        self.subscribers.get(&id).map(|(_, _, dropped)| *dropped)
+    }
+
     /// 发布事件(JSON 文本)到全部订阅者;满队列丢弃并计数。
     /// 返回 (送达数, 丢弃数)。
     pub fn publish(&mut self, event_json: &str) -> (usize, u64) {
@@ -166,6 +171,7 @@ mod tests {
             native_id: NativeMessageId("native-1".into()),
             text: "hello [CQ:at,qq=1]".into(),
             platform_time: None,
+            wrapper_message: None,
             onebot_projection: Some(OneBotMessageProjection {
                 peer_id: 20002,
                 sender_user_id: 30003,
