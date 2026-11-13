@@ -101,3 +101,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 媒体工具通过可选的本地 `silk_decoder` 解码到 24 kHz 单声道 s16le PCM，再调用已有 FFmpeg 容器转换。独立子进程使用固定参数、版本、许可证及 SHA-256 校验、超时与有界输出。旧配置仍可运行原媒体操作。首轮真实 CLI 运行发现 Windows debug 的 1 MiB 栈上哈希缓冲溢出，移到堆后通过。
 
 离线实测从 [rust-silk 固定提交](https://github.com/wangnov/rust-silk/tree/7d4fd9eb265ac44b6d76bda4002d327651a022c0) 编译解码器（SDK 1.0.9.6），结合 [FFmpeg 8.1.2 essentials](https://www.gyan.dev/ffmpeg/builds/) 处理 24 kHz、440 Hz 的 200 ms 合成腾讯前缀样本。SILK 样本 SHA-256 为 `97ca76deaff11794d723439df80cf759add9c3c4a927d65dea75a0b67030efc7`。真实 `caligo-media` 两种命令退出 0，ffprobe 回读 WAV 为 24 kHz PCM/单声道/200 ms，Ogg 为 Opus/单声道，含预跳过的容器时长 206.5 ms，任务目录清空。工具与样本留在本机。定向 `media_tool_lab` 7 项通过，子进程夹具 1 项按设计忽略。
+
+## A2 OneBot 语音转码
+
+承接 `099db2a`。共享 `get_record` 根据当前会话的有界下载结果核对持久化语音元数据，然后按配置返回 WAV 或 OGG。省略 `out_format` 继续返回原始 Silk。转码走显式配置的独立工具，两个子进程执行前重新核对哈希，停止信号与账号 daemon 共用。PCM 和输出均最多 4 MiB。单账号从 `--media-config` 加载，多账号从各账号私有目录中的 `voice-media.json` 加载，并固定各自的临时目录。
+
+定向合成 wrapper → IPC → daemon → OneBot 回归覆盖 WAV、OGG、原始 Silk、错指纹、工具被替换、错误码和任务目录清理。真实 `caligod` 通过 OneBot HTTP、合成命名管道宿主和固定解码工具返回原始 682 字节 Silk、9,678 字节 WAV 和 924 字节 Ogg，控制管道正常停止，临时目录清空。真实 `caligo-manager` 双账号启动验证已配置账号使用独立私有工作目录，管理 API 正常停止两账号。串行 `init.ps1 -Mode all` 通过默认和 research 全仓，真实 Rust registry 覆盖检查 12/12。现场尚待候选冻结。下一工作块核对语音上传的关联合同，随后推进其他媒体和 SSO。

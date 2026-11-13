@@ -5,6 +5,7 @@
 //! matching persisted OneBot projection before reporting send success.
 
 use crate::daemon::Daemon;
+use crate::media_tool::{MediaTool, StopToken};
 use crate::onebot::{handle_action_with_queries, QueryBackend};
 use crate::onebot_http::{serve_parallel, DEFAULT_MAX_BODY};
 use caligo_model::capability::{HostQuery, QueryOutcome};
@@ -61,6 +62,12 @@ impl DaemonQueryBackend {
 impl QueryBackend for DaemonQueryBackend {
     fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome {
         self.daemon.query_host(query, timeout)
+    }
+
+    fn voice_media(&self) -> Option<(&MediaTool, StopToken)> {
+        let media = self.daemon.voice_media.as_ref()?;
+        media.config().silk_decoder.as_ref()?;
+        Some((media, StopToken::from_flag(self.daemon.stop_flag())))
     }
 }
 

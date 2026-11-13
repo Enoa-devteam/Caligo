@@ -162,13 +162,14 @@ export function initialProfiles() {
     { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
     [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startVoiceDownload(')] }],
     [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()')],
-    'Private incoming Silk only. Group/media variants, public OneBot retrieval, and Caligo QQ field acceptance remain open.');
+    'Private incoming Silk only. Group/media variants and Caligo QQ field acceptance remain open.');
   voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
-  const record = scoped('partial_offline', 'Incoming private voice publishes a durable record token and get_record retrieves bounded original Silk.',
-    [src(ONEBOT, 'fn get_record('), src(EVENTS, 'voice_file_token(')], sharedEntry, actionPermission,
-    clone(voiceDownload.backend_dependencies),
-    [src(LEDGER, 'A2 OneBot 语音读取'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
-    'Only account-scoped local file tokens and original Silk are supported. Conversion, outgoing voice, group voice and QQ field acceptance remain open.');
+  const record = scoped('partial_offline', 'Incoming private voice publishes a durable record token. get_record retrieves original Silk and optionally converts it to WAV or OGG.',
+    [src(ONEBOT, 'fn get_record('), src(EVENTS, 'voice_file_token('), src('crates/caligo-core/src/media_tool.rs', 'pub fn silk_to_container(')], sharedEntry, actionPermission,
+    [...clone(voiceDownload.backend_dependencies),
+      { name: 'WAV and OGG conversion through explicitly configured local tools', state: 'offline_only', evidence: [src(SERVER, 'fn voice_media(')] }],
+    [src(LEDGER, 'A2 OneBot 语音读取'), src(LEDGER, 'A2 独立 SILK 转码'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
+    'Account-scoped tokens only. WAV and OGG require a pinned SILK decoder and FFmpeg. Outgoing voice, group voice and QQ field acceptance remain open.');
   record.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };

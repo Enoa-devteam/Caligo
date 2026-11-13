@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::{Daemon, DaemonConfig, SessionError};
+use crate::media_tool::{MediaTool, MediaToolConfig};
 use crate::onebot_server::{self, ActionHandler};
 
 #[derive(Debug)]
@@ -253,6 +254,17 @@ impl AccountManager {
             .clone();
         let dir = validate_account_paths(&self.root, &spec)?;
         let lock = lock_directory(&dir)?;
+        let media_path = dir.join("voice-media.json");
+        let voice_media = if media_path.try_exists()? {
+            check_private_file(&media_path)?;
+            let mut config = MediaToolConfig::read_from(&media_path)
+                .map_err(|_| invalid("invalid account voice media configuration"))?;
+            config.work_root = dir.join("media-jobs");
+            Some(MediaTool::for_voice_records(config)
+                .map_err(|_| invalid("account voice media initialization failed"))?)
+        } else {
+            None
+        };
         // Validate/read existing credentials before opening the journal.
         let token_path = dir.join("auth.token");
         let token = if token_path.try_exists()? {
@@ -269,7 +281,7 @@ impl AccountManager {
             }
             Some(readback)
         };
-        let daemon = Daemon::start(DaemonConfig {
+        let config = DaemonConfig {
             pipe_prefix: spec.pipe_prefix,
             journal_path: dir.join("journal.jsonl"),
             module_baseline: spec.module_baseline,
@@ -279,8 +291,9 @@ impl AccountManager {
             runtime: Default::default(),
             test_fault_break_bridge_after_hello: false,
             test_fault_break_bridge_after_result: false,
-        })
-        .map_err(|_| invalid("account journal/message store open failed"))?;
+        };
+        let daemon = Daemon::start_with_voice_media(config, voice_media)
+            .map_err(|_| invalid("account journal/message store open failed"))?;
         if let Some(token) = token {
             daemon.set_auth_token(&token);
         }
@@ -526,7 +539,7 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 #[cfg(windows)]
-fn reject_reparse_chain(path: &Path) -> Result<()> {
+pub(crate) fn reject_reparse_chain(path: &Path) -> Result<()> {
     use std::os::windows::fs::MetadataExt;
     for ancestor in path.ancestors() {
         let metadata = fs::symlink_metadata(ancestor)?;
@@ -684,7 +697,7 @@ fn with_user_sid<T>(
     }
 }
 #[cfg(windows)]
-fn ensure_private_dir(path: &Path) -> Result<()> {
+pub(crate) fn ensure_private_dir(path: &Path) -> Result<()> {
     if path.try_exists()? {
         reject_reparse_chain(path)?;
         if !fs::metadata(path)?.is_dir() {

@@ -1,6 +1,7 @@
 //! OneBot V11 action layer. All transports share this action registry and
 //! dispatch exactly once through `SendSink`.
 
+use crate::media_tool::{ContainerFormat, MediaError, MediaTool, StopToken, MAX_RECORD_OUTPUT_BYTES};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use caligo_model::capability::{positive_decimal, GroupInfo, HostQuery, QueryData, QueryOutcome, VoiceDownload, VoiceInfo, MAX_VOICE_DOWNLOAD_BYTES};
 use caligo_model::onebot_traits::{
@@ -63,6 +64,10 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Implementations enforce account, connection and session scope before success.
 pub trait QueryBackend {
     fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome;
+
+    fn voice_media(&self) -> Option<(&MediaTool, StopToken)> {
+        None
+    }
 }
 
 struct UnsupportedQueries;
@@ -185,7 +190,8 @@ impl ActionInputSchema {
                 schema["properties"] = serde_json::json!({
                     "file":{"type":"string", "maxLength":64, "description":"Caligo record file token"},
                     "file_id":{"type":"string", "maxLength":64, "description":"Alternate Caligo record file token"},
-                    "out_format":{"type":"string", "enum":["silk"], "default":"silk"}
+                    "out_format":{"type":"string", "enum":["silk","wav","ogg"], "default":"silk",
+                        "description":"WAV and OGG require a configured SILK decoder"}
                 });
                 schema["oneOf"] = serde_json::json!([{"required":["file"]},{"required":["file_id"]}]);
             }
@@ -502,7 +508,7 @@ fn query_response_with_voice(
     query: HostQuery,
     backend: &dyn QueryBackend,
     echo: Value,
-    expected_voice: Option<&VoiceInfo>,
+    record: Option<(&VoiceInfo, RecordFormat<'_>)>,
 ) -> ActionResponse {
     let invalid =
         || ActionResponse::failed(RET_BAD_REQUEST, "宿主查询响应不符合合同", echo.clone());
@@ -520,7 +526,12 @@ fn query_response_with_voice(
                 .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
             (HostQuery::VoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
-                expected_voice.and_then(|expected| voice_data(expected, download))
+                if let Some((expected, format)) = record {
+                    if let Some(bytes) = voice_bytes(expected, download) {
+                        return record_response(bytes, format, echo);
+                    }
+                }
+                None
             }
             _ => None,
         },
@@ -539,7 +550,7 @@ fn query_response_with_voice(
     }
 }
 
-fn voice_data(expected: &VoiceInfo, download: VoiceDownload) -> Option<Value> {
+fn voice_bytes(expected: &VoiceInfo, download: VoiceDownload) -> Option<Vec<u8>> {
     let size = expected.size;
     if &download.info != expected || !(1..=MAX_VOICE_DOWNLOAD_BYTES).contains(&size)
         || download.silk_hex.len() != size as usize * 2
@@ -554,9 +565,45 @@ fn voice_data(expected: &VoiceInfo, download: VoiceDownload) -> Option<Value> {
     if !bytes.starts_with(b"#!SILK_V3") && !bytes.starts_with(b"\x02#!SILK_V3") {
         return None;
     }
-    Some(serde_json::json!({
-        "base64":STANDARD.encode(bytes), "file_size":size.to_string(), "file_name":"voice.silk"
-    }))
+    Some(bytes)
+}
+
+enum RecordFormat<'a> {
+    Silk,
+    Converted {
+        format: ContainerFormat,
+        tool: &'a MediaTool,
+        stop: StopToken,
+    },
+}
+
+fn record_response(bytes: Vec<u8>, format: RecordFormat<'_>, echo: Value) -> ActionResponse {
+    let (bytes, file_name) = match format {
+        RecordFormat::Silk => (bytes, "voice.silk"),
+        RecordFormat::Converted { format, tool, stop } => {
+            let artifact = match tool.silk_to_container(&bytes, format, &stop) {
+                Ok(artifact) => artifact,
+                Err(MediaError::TimedOut | MediaError::Stopped) => {
+                    return ActionResponse::failed(RET_NOT_CONFIRMED, "语音转码超时或已停止", echo);
+                }
+                Err(MediaError::FileTooLarge { .. }) => {
+                    return ActionResponse::failed(RET_UNSUPPORTED, "语音超过转码大小上限", echo);
+                }
+                Err(_) => return ActionResponse::failed(RET_NOT_READY, "语音转码失败", echo),
+            };
+            if artifact.bytes.len() as u64 > MAX_RECORD_OUTPUT_BYTES {
+                return ActionResponse::failed(RET_UNSUPPORTED, "语音超过转码大小上限", echo);
+            }
+            let file_name = match format {
+                ContainerFormat::Wav => "voice.wav",
+                ContainerFormat::Ogg => "voice.ogg",
+            };
+            (artifact.bytes, file_name)
+        }
+    };
+    ActionResponse::ok(serde_json::json!({
+        "file_size":bytes.len().to_string(), "base64":STANDARD.encode(bytes), "file_name":file_name
+    }), echo)
 }
 
 fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBackend, echo: Value) -> ActionResponse {
@@ -567,12 +614,24 @@ fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBacken
     let Some(file) = file.filter(|file| !file.is_empty() && file.len() <= 64) else {
         return ActionResponse::failed(RET_BAD_PARAMS, "必须提供一个语音文件标识", echo);
     };
-    match params.get("out_format") {
-        None => {}
-        Some(value) if value.as_str() == Some("silk") => {}
-        Some(Value::String(_)) => return ActionResponse::failed(RET_UNSUPPORTED, "当前仅支持原始 Silk", echo),
+    let conversion = match params.get("out_format") {
+        None => None,
+        Some(Value::String(format)) => match format.as_str() {
+            "silk" => None,
+            "wav" => Some(ContainerFormat::Wav),
+            "ogg" => Some(ContainerFormat::Ogg),
+            _ => return ActionResponse::failed(RET_UNSUPPORTED, "语音输出格式未支持", echo),
+        },
         Some(_) => return ActionResponse::failed(RET_BAD_PARAMS, "out_format 必须是字符串", echo),
-    }
+    };
+    let format = if let Some(format) = conversion {
+        let Some((tool, stop)) = queries.voice_media() else {
+            return ActionResponse::failed(RET_UNSUPPORTED, "未配置语音转码", echo);
+        };
+        RecordFormat::Converted { format, tool, stop }
+    } else {
+        RecordFormat::Silk
+    };
     let Some(info) = store.voice_info(file) else {
         return ActionResponse::failed(RET_BAD_REQUEST, "语音文件标识不存在", echo);
     };
@@ -584,7 +643,7 @@ fn get_record(params: &Value, store: &dyn StoreReader, queries: &dyn QueryBacken
         message_id: info.message_id.clone(),
         element_id: info.element_id.clone(),
     };
-    query_response_with_voice(query, queries, echo, Some(&info))
+    query_response_with_voice(query, queries, echo, Some((&info, format)))
 }
 
 /// Compatibility entry for callers without a host query backend. Directory
@@ -917,6 +976,20 @@ mod tests {
             if entry.permission == ActionPermission::Read {
                 assert!(sink.0.is_empty());
             }
+            if entry.handler == ActionHandlerKind::GetRecord {
+                for format in ["wav", "ogg"] {
+                    let response = handle_action_with_queries(
+                        entry.name,
+                        &serde_json::json!({"file":"caligo-voice:10001:42","out_format":format}),
+                        echo.clone(),
+                        &mut sink,
+                        &FakeStore,
+                        &FakeQueries,
+                    );
+                    assert_eq!(response.retcode, RET_UNSUPPORTED);
+                    assert!(response.data.is_null());
+                }
+            }
         }
     }
 
@@ -1064,7 +1137,7 @@ mod tests {
                         ActionInputSchema::MessageId
                     } else if handler == ActionHandlerKind::GetRecord {
                         assert_eq!(schema["oneOf"], serde_json::json!([{"required":["file"]},{"required":["file_id"]}]));
-                        assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk"]));
+                        assert_eq!(schema["properties"]["out_format"]["enum"], serde_json::json!(["silk", "wav", "ogg"]));
                         ActionInputSchema::Record
                     } else if handler == ActionHandlerKind::GetGroupInfo {
                         assert_eq!(schema["required"], serde_json::json!(["group_id"]));

@@ -6,9 +6,11 @@
 //! 首行 JSON(仅供本地启动方读取;不进命令行、不进日志文件)。
 //!
 //! 用法:caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u>
-//!            [--expect-pid <n>] [--core-build <s>]
+//!            [--expect-pid <n>] [--core-build <s>] [--media-config <absolute-json>]
 
+use caligo_core::media_tool::{MediaTool, MediaToolConfig};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Ctrl+C 处理器可见的进程级停止标志(与 control Stop 汇合)。
@@ -31,6 +33,7 @@ struct Args {
     /// 凭据文件:存在则读取(重启连续性),不存在则生成并写入(user-only)。
     /// 计划 §6.4:凭据不进 argv/日志 —— 文件是本地私有通道。
     token_file: Option<String>,
+    media_config: Option<PathBuf>,
     onebot_http_bind: String,
     onebot_ws_bind: Option<String>,
     onebot_sse_bind: Option<String>,
@@ -53,6 +56,7 @@ fn parse_args() -> Option<Args> {
         expect_pid: 0,
         core_build: caligo_core::CORE_BUILD.to_string(),
         token_file: None,
+        media_config: None,
         onebot_http_bind: "127.0.0.1:5700".into(),
         onebot_ws_bind: None,
         onebot_sse_bind: None,
@@ -78,6 +82,7 @@ fn parse_args() -> Option<Args> {
             "--expect-pid" => a.expect_pid = next(&mut i)?.parse().ok()?,
             "--core-build" => a.core_build = next(&mut i)?,
             "--token-file" => a.token_file = next(&mut i),
+            "--media-config" => a.media_config = Some(PathBuf::from(next(&mut i)?)),
             "--onebot-http-bind" => a.onebot_http_bind = next(&mut i)?,
             "--onebot-ws-bind" => a.onebot_ws_bind = Some(next(&mut i)?),
             "--onebot-sse-bind" => a.onebot_sse_bind = Some(next(&mut i)?),
@@ -98,7 +103,7 @@ fn parse_args() -> Option<Args> {
     }
     if a.pipe_prefix.is_empty() || a.journal.is_empty() || a.account.is_empty() {
         eprintln!(
-            "caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-sse-bind 127.0.0.1:6701] [--onebot-mcp-bind 127.0.0.1:6702] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
+            "caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--media-config <absolute-json>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-sse-bind 127.0.0.1:6701] [--onebot-mcp-bind 127.0.0.1:6702] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
         );
         return None;
     }
@@ -143,6 +148,13 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let voice_media = args.media_config.as_deref().map(|path| {
+        MediaToolConfig::read_from(path).and_then(MediaTool::for_voice_records)
+            .unwrap_or_else(|error| {
+                eprintln!("[caligod] voice media initialization failed: {error}");
+                std::process::exit(2);
+            })
+    });
     let config = caligo_core::daemon::DaemonConfig {
         pipe_prefix: args.pipe_prefix,
         journal_path: args.journal.into(),
@@ -156,7 +168,7 @@ fn main() {
     };
     // 凭据:token-file 优先(重启连续性;文件 user-only,不进 argv/日志)。
     // Daemon::start 自身生成随机 token —— token-file 模式下用文件内容覆盖。
-    let daemon = match caligo_core::daemon::Daemon::start(config) {
+    let daemon = match caligo_core::daemon::Daemon::start_with_voice_media(config, voice_media) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("[caligod] journal open failed(不静默重建): {e}");

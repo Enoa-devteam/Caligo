@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::capability_broker::CapabilityBroker;
+use crate::media_tool::MediaTool;
 use crate::ipc::{
     encode_frame, validate_auth, validate_bridge_hello_v3, validate_hello_v3, BridgeMsg,
     ControlMsg, CoreToBridgeMsg, CoreToControlMsg, EventPayload, FrameDecoder, OutcomePayload,
@@ -139,6 +140,7 @@ pub struct DaemonConfig {
 
 /// 常驻 core(LAB 形态;计划 §7-D5)。
 pub struct Daemon {
+    pub(crate) voice_media: Option<MediaTool>,
     pub config: DaemonConfig,
     auth_hex: std::sync::Mutex<String>,
     core_nonce: u64,
@@ -177,6 +179,13 @@ impl Drop for BridgeQuerySession<'_> {
 
 impl Daemon {
     pub fn start(config: DaemonConfig) -> Result<Arc<Self>, crate::runtime::OpenError> {
+        Self::start_with_voice_media(config, None)
+    }
+
+    pub fn start_with_voice_media(
+        config: DaemonConfig,
+        voice_media: Option<MediaTool>,
+    ) -> Result<Arc<Self>, crate::runtime::OpenError> {
         let message_store = match config.account.parse::<u64>() {
             Ok(account_id) if account_id > 0 => {
                 let mut path = config.journal_path.clone();
@@ -202,6 +211,7 @@ impl Daemon {
             ))
         })?;
         Ok(Arc::new(Self {
+            voice_media,
             auth_hex: std::sync::Mutex::new(token_hex(&token)),
             core_nonce: u64::from_le_bytes(token[0..8].try_into().unwrap()),
             actor: Mutex::new(actor),

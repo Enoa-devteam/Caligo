@@ -8,11 +8,11 @@
 
 恢复执行已完成按连接代次的能力声明、覆盖清单刷新和普通私聊/群聊入站事件接线。下一步先离线核对已登录实例可用的当前身份来源和宿主绑定，再接 `LoginInfo`；若固定参考无可用合同，保持拒绝并推进独立的媒体、SSO 或扩展动作能力。详见[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a1a2-普通私聊与群聊的事件接线)。
 
-语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。下一步为持久化语音元素身份、OneBot `get_record` 与独立转换合同，随后推进上传和其他媒体。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
+语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
 
-语音持久化检查点 `e1b4420` 已接当前 profile 的单个私聊入站元素。共享事件和 `get_record` 使用同一账号限定文件标识，当前仅支持原始 Silk。下一步核对独立 Silk 解码依赖和脱敏 golden 样本，再接 WAV/OGG 转码；随后推进上传和其他媒体。现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
+语音持久化检查点 `e1b4420` 已接当前 profile 的单个私聊入站元素。`318e46d` 的共享事件和 `get_record` 使用同一账号限定文件标识。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
 
-独立 `caligo-media silk-wav|silk-ogg` 已通过固定外部解码器与合成音频。下一步将可选转码器装配到 OneBot 动作链，使用持久账号文件标识和当前下载能力。[独立转码验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-独立-silk-转码)
+`099db2a` 的独立 `caligo-media silk-wav|silk-ogg` 已通过固定外部解码器与合成音频。共享 OneBot 动作接入可选 WAV/OGG，配置入口见媒体工具指南。下一工作块核对语音上传的文件 ID、提交与精确回读合同，再处理其他媒体和 SSO。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。[OneBot 语音转码](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音转码)
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 

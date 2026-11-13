@@ -272,6 +272,29 @@ fn strict_json_and_conflicting_specs_are_rejected() {
 }
 
 #[test]
+fn invalid_local_voice_config_blocks_only_its_account_and_can_be_corrected() {
+    let sandbox = Sandbox::new("voice-config");
+    let cfg = config("voice-config");
+    let account = sandbox.root().join(&cfg.accounts[0].data_dir);
+    let mut manager = AccountManager::new(sandbox.root(), cfg).unwrap();
+    let media_config = account.join("voice-media.json");
+    std::fs::write(&media_config, "{}").unwrap();
+    manager.start(10002).unwrap();
+    assert!(manager
+        .start(10001)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("invalid account voice media configuration"));
+    assert_eq!(manager.running_accounts(), [10002]);
+    assert!(!account.join("journal.jsonl").exists());
+    std::fs::remove_file(media_config).unwrap();
+    manager.start(10001).unwrap();
+    assert_eq!(manager.running_accounts(), [10001, 10002]);
+    manager.shutdown().unwrap();
+}
+
+#[test]
 fn failed_batch_rolls_back_pipe_threads_and_preserves_existing_account() {
     let sandbox = Sandbox::new("rollback");
     let cfg = config("rollback");

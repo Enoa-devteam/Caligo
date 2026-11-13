@@ -6,9 +6,17 @@ use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};
 use caligo_bridge::resident::{Resident, ResidentLimits};
 use caligo_core::daemon::{BridgeClient, ControlClient, Daemon, DaemonConfig};
 use caligo_core::ipc::{BridgeMsg, ControlMsg, CoreToBridgeMsg, CoreToControlMsg};
+use caligo_core::media_tool::{
+    LicenseDeclaration, MediaError, MediaProcessRunner, MediaTool, MediaToolConfig,
+    ProcessResult, StopToken, ToolDeclaration,
+};
 use caligo_core::runtime::{AccountActor, RuntimeConfig};
 use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::WrapperBinding;
+use sha2::{Digest, Sha256};
+use std::ffi::OsString;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 struct OfflineHost;
@@ -32,6 +40,73 @@ impl HostAdapter for OfflineHost {
             _ => panic!("receive-only test must not submit a message"),
         }
     }
+}
+
+struct OfflineVoiceTools;
+
+impl MediaProcessRunner for OfflineVoiceTools {
+    fn run(
+        &self,
+        executable: &Path,
+        args: &[OsString],
+        _cwd: &Path,
+        _timeout: Duration,
+        _output_limit: u64,
+        stop: &StopToken,
+    ) -> Result<ProcessResult, MediaError> {
+        assert!(!stop.is_stopped());
+        let output = Path::new(args.last().unwrap());
+        let bytes: &[u8] = match output.extension().unwrap().to_str().unwrap() {
+            "pcm" => {
+                assert_eq!(executable.file_name().unwrap(), "silk.exe");
+                let input = std::fs::read(&args[2]).unwrap();
+                assert_eq!(input.len(), 1073);
+                assert!(input.starts_with(b"\x02#!SILK_V3"));
+                &[0, 1, 2, 3]
+            }
+            "wav" => b"RIFFfakeWAVE",
+            "ogg" => b"OggSfixture",
+            _ => panic!("unexpected media output"),
+        };
+        std::fs::write(output, bytes).unwrap();
+        Ok(ProcessResult {
+            success: true,
+            code: Some(0),
+            stdout: vec![],
+            stderr: vec![],
+        })
+    }
+}
+
+fn offline_voice_tools(dir: &Path) -> MediaTool {
+    let declare = |name: &str| {
+        let executable = dir.join(name);
+        std::fs::write(&executable, name).unwrap();
+        ToolDeclaration {
+            executable,
+            sha256: format!("{:x}", Sha256::digest(name.as_bytes())),
+            version: "test-only".into(),
+            license: LicenseDeclaration {
+                name: "test-only".into(),
+                source: "offline fixture".into(),
+                path: None,
+            },
+        }
+    };
+    MediaTool::with_runner_for_tests(
+        MediaToolConfig {
+            ffmpeg: declare("ffmpeg.exe"),
+            ffprobe: declare("ffprobe.exe"),
+            silk_decoder: Some(declare("silk.exe")),
+            work_root: dir.join("media-jobs"),
+            timeout_ms: 100,
+            max_stdout_stderr_bytes: 1024,
+            max_input_bytes: 4096,
+            max_output_bytes: 4096,
+        },
+        Arc::new(OfflineVoiceTools),
+    )
+    .unwrap()
 }
 
 fn script_batch() -> String {
@@ -129,7 +204,7 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     std::fs::create_dir_all(&dir).unwrap();
     let journal = dir.join("journal.log");
     let prefix = format!("\\\\.\\pipe\\caligo-wrapper-{}-{nonce}", std::process::id());
-    let daemon = Daemon::start(DaemonConfig {
+    let config = DaemonConfig {
         pipe_prefix: prefix.clone(),
         journal_path: journal.clone(),
         module_baseline: "lab-wrapper".into(),
@@ -139,8 +214,8 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         runtime: RuntimeConfig::default(),
         test_fault_break_bridge_after_hello: false,
         test_fault_break_bridge_after_result: false,
-    })
-    .unwrap();
+    };
+    let daemon = Daemon::start_with_voice_media(config, Some(offline_voice_tools(&dir))).unwrap();
     let (_, ws_events) = daemon.subscribe_onebot_events("wrapper-ws");
     let (_, sse_events) = daemon.subscribe_onebot_events("wrapper-sse");
     let run = daemon.clone();
@@ -271,7 +346,7 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     assert_eq!(
         handler(
             "get_record",
-            &serde_json::json!({"file":file,"out_format":"wav"}),
+            &serde_json::json!({"file":file,"out_format":"mp3"}),
             serde_json::Value::Null
         )
         .retcode,
@@ -311,12 +386,21 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     ));
     let info = daemon.voice_info(file).unwrap();
     // A valid wire shape still fails if its fingerprint disagrees with the journal.
-    for (md5, code) in [
-        ("ffffffffffffffffffffffffffffffff", 1440),
-        (info.md5.as_str(), 0),
+    for (format, md5, code) in [
+        (Some("wav"), "ffffffffffffffffffffffffffffffff", 1440),
+        (None, info.md5.as_str(), 0),
+        (Some("wav"), info.md5.as_str(), 0),
+        (Some("ogg"), info.md5.as_str(), 0),
+        (Some("wav"), info.md5.as_str(), 1502),
     ] {
+        if code == 1502 {
+            std::fs::write(dir.join("silk.exe"), b"replaced fixture executable").unwrap();
+        }
         let handler = handler.clone();
-        let args = args.clone();
+        let args = match format {
+            Some(format) => serde_json::json!({"file_id":file,"out_format":format}),
+            None => args.clone(),
+        };
         let waiter =
             std::thread::spawn(move || handler("get_record", &args, serde_json::json!("record")));
         let CoreToBridgeMsg::Query {
@@ -361,14 +445,21 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         assert_eq!(result.retcode, code);
         assert_eq!(result.echo, "record");
         if code == 0 {
-            assert_eq!(result.data["file_size"], "1073");
-            assert!(result.data["base64"]
-                .as_str()
-                .unwrap()
-                .starts_with("AiMhU0lMS19WMw"));
+            let (name, size, base64_prefix) = match format {
+                Some("wav") => ("voice.wav", "12", "UklGRmZha2VXQVZF"),
+                Some("ogg") => ("voice.ogg", "11", "T2dnU2ZpeHR1cmU="),
+                None => ("voice.silk", "1073", "AiMhU0lMS19WMw"),
+                _ => unreachable!(),
+            };
+            assert_eq!(result.data["file_name"], name);
+            assert_eq!(result.data["file_size"], size);
+            assert!(result.data["base64"].as_str().unwrap().starts_with(base64_prefix));
             assert!(result.data.get("file").is_none());
+        } else {
+            assert!(result.data.is_null());
         }
     }
+    assert_eq!(std::fs::read_dir(dir.join("media-jobs")).unwrap().count(), 0);
     assert!(
         ws_events.try_recv().is_err(),
         "old-generation, sent, updated, and replayed events must not fan out"

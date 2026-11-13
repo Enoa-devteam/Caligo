@@ -18,6 +18,8 @@ const DEFAULT_OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
 const DEFAULT_INPUT_LIMIT: u64 = 512 * 1024 * 1024;
 const DEFAULT_FILE_LIMIT: u64 = 512 * 1024 * 1024;
 const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_RECORD_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
 const HASH_READ_CHUNK: usize = 1024 * 1024;
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -163,6 +165,13 @@ pub struct MediaToolConfig {
     pub max_output_bytes: u64,
 }
 impl MediaToolConfig {
+    pub fn read_from(path: &Path) -> Result<Self, MediaError> {
+        require_absolute(path, "media config path")?;
+        let bytes = read_bounded(path, MAX_CONFIG_BYTES)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| MediaError::InvalidConfig(format!("config JSON: {error}")))
+    }
+
     pub fn validate(&self) -> Result<(), MediaError> {
         require_absolute(&self.work_root, "media work root")?;
         if self.timeout_ms == 0
@@ -218,6 +227,10 @@ pub struct MediaArtifact {
 #[derive(Debug, Clone, Default)]
 pub struct StopToken(Arc<AtomicBool>);
 impl StopToken {
+    pub(crate) fn from_flag(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
     pub fn stop(&self) {
         self.0.store(true, Ordering::Release);
     }
@@ -477,6 +490,20 @@ pub struct MediaTool {
     runner: Arc<dyn MediaProcessRunner>,
 }
 impl MediaTool {
+    pub fn for_voice_records(mut config: MediaToolConfig) -> Result<Self, MediaError> {
+        config.validate()?;
+        config.max_input_bytes = config.max_input_bytes.min(MAX_RECORD_OUTPUT_BYTES);
+        config.max_output_bytes = config.max_output_bytes.min(MAX_RECORD_OUTPUT_BYTES);
+        if let Some(parent) = config.work_root.parent() {
+            crate::account_manager::reject_reparse_chain(parent)
+                .map_err(|error| MediaError::InvalidConfig(format!("voice work root parent: {error}")))?;
+        }
+        crate::account_manager::ensure_private_dir(&config.work_root).map_err(|error| {
+            MediaError::InvalidConfig(format!("private voice work root: {error}"))
+        })?;
+        Self::new(config)
+    }
+
     pub fn new(config: MediaToolConfig) -> Result<Self, MediaError> {
         config.verify_tools()?;
         let runner: Arc<dyn MediaProcessRunner> = Arc::new(OsProcessRunner);
@@ -622,6 +649,9 @@ impl MediaTool {
         format: ContainerFormat,
         stop: &StopToken,
     ) -> Result<MediaArtifact, MediaError> {
+        if stop.is_stopped() {
+            return Err(MediaError::Stopped);
+        }
         if silk.len() as u64 > self.config.max_input_bytes {
             return Err(MediaError::FileTooLarge {
                 path: PathBuf::from("<silk>"),
@@ -666,6 +696,10 @@ impl MediaTool {
                 "decoder returned incomplete s16le PCM".into(),
             ));
         }
+        if stop.is_stopped() {
+            return Err(MediaError::Stopped);
+        }
+        self.config.ffmpeg.verify(ToolRole::Ffmpeg)?;
         self.pcm_to_container(&pcm, format, stop)
     }
 
@@ -818,6 +852,9 @@ impl MediaTool {
         cwd: &Path,
         stop: &StopToken,
     ) -> Result<ProcessResult, MediaError> {
+        if stop.is_stopped() {
+            return Err(MediaError::Stopped);
+        }
         let declaration = match role {
             ToolRole::Ffmpeg => &self.config.ffmpeg,
             ToolRole::Ffprobe => &self.config.ffprobe,
@@ -953,9 +990,11 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, MediaError> {
             limit,
         });
     }
-    let mut f = File::open(path).map_err(MediaError::Io)?;
+    let f = File::open(path).map_err(MediaError::Io)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    f.read_to_end(&mut bytes).map_err(MediaError::Io)?;
+    f.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(MediaError::Io)?;
     if bytes.len() as u64 > limit {
         return Err(MediaError::FileTooLarge {
             path: path.to_path_buf(),

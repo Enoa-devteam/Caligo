@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 static OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -108,25 +107,6 @@ fn absolute_path(value: String, label: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn read_config(path: &Path) -> Result<MediaToolConfig, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|e| format!("config metadata: {e}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("config must be a local regular file".into());
-    }
-    if metadata.len() > MAX_CONFIG_BYTES {
-        return Err(format!("config exceeds {MAX_CONFIG_BYTES} bytes"));
-    }
-    let file = File::open(path).map_err(|e| format!("config open: {e}"))?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_CONFIG_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("config read: {e}"))?;
-    if bytes.len() as u64 > MAX_CONFIG_BYTES {
-        return Err(format!("config exceeds {MAX_CONFIG_BYTES} bytes"));
-    }
-    serde_json::from_slice(&bytes).map_err(|e| format!("config JSON: {e}"))
-}
-
 fn validate_input(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|e| format!("input metadata: {e}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -179,7 +159,7 @@ fn write_artifact(
 
 fn run(cli: Cli) -> Result<serde_json::Value, String> {
     validate_input(&cli.input)?;
-    let config = read_config(&cli.config)?;
+    let config = MediaToolConfig::read_from(&cli.config).map_err(|e| e.to_string())?;
     let tool = MediaTool::new(config).map_err(|e| e.to_string())?;
     let stop = StopToken::default();
     match cli.operation {
