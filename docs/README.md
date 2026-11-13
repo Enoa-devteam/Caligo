@@ -19,7 +19,7 @@
 
 ## 计划与执行（按阶段选择）
 
-- SnowCat 研究成果整合：[先接线、后统一验收计划](plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)；[分阶段执行记录](execution/2026-11-13-snowcat-capability-integration.md)。
+- SnowCat 研究成果整合：[先接线、后统一验收计划](plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md)；[分阶段执行记录](execution/2026-11-13-snowcat-capability-integration.md)；[固定参考能力清单](contracts/snowcat-capability-inventory.json)。
 - N4 当前解阻入口：[2026-10-11 响应恢复计划](plans/2026-10-11-gitnexus-plan-caligo-n4-response-recovery.md)；先离线修请求关联与结果语义，现场仍硬停。
 - N4 执行现状：[响应恢复执行记录](execution/2026-10-11-n4-response-recovery.md)；序号 authority 决策见 [ADR](decisions/2026-10-11-wire-sequence-authority.md)。R1 离线合同通过，R5/R6 OneBot transports 有离线接线与协议合同；R2 native 寿命、R3 强身份、R4 现场和 R6 真实应用完成门仍开放。
 

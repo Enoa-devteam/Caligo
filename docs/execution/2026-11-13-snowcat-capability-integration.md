@@ -17,6 +17,14 @@
 - 编译器提示已有重复 `no_mangle` 属性、未使用变量/代码等告警；不以通过测试声称无告警。
 - A0 基线审阅修复：ProfileService acquisition 异常统一清除全局状态；跨 owner tick 保留 session；非 Map 返回继续拒绝，并吸收跨上下文 Promise/thenable 拒绝。`cargo test -p caligo-bridge --lib --features research uid_map_script_tests --locked --offline --target-dir target-harness -- --test-threads=1`：4/4 PASS，覆盖双向 exact-key Map、异常清理、session 持有、foreign Promise 与 delayed thenable。`qq_v8.rs` 单文件 rustfmt 检查仍报告既有格式差异，未批量格式化。
 
+## A0：固定参考清单
+
+[机器清单](../contracts/snowcat-capability-inventory.json) 由[纯静态抽取器](../../scripts/extract-snowcat-capabilities.mjs)读取固定 Git blob 生成；引用 645 份源码的 blob/SHA-256/行号，不执行参考代码，不读取 C/C++。207 次显式实例化对应 206 个基础动作、412 个生成别名、618 个最终注册键；重复 check_url_safely 导致 3 个键被覆盖。显式测试动作 test_download_stream 单列，排除后基础动作分母为 205；两个 decorator 测试没有静态 import 可达注册。router 210 项中独有 4 项，不能用于替代真实注册分母。
+
+清单另列 38 个事件类（26 concrete）、23 消息段、7 网络 adapter 与一个第二协议 scaffold、26 包目录、122 入口导出声明、9 原生组件和 3,297 归档导出行、1,354 wrapper 方法声明、129 WebUI route 与 50 工具入口。它们分别是声明/注册分母，不是 Caligo 支持计数。参考 MCP 的首次初始化接线缺口、第二协议空 Map 与权限/精确版本未知均保留。
+
+`SNOWCAT_REFERENCE=E:/stella/Snowcat/Napcat-Snowluma-research node --test scripts/extract-snowcat-capabilities.test.mjs`：6/6 PASS，含全部引用哈希/行号和逐字节再生。未设置该环境变量时为 5 PASS / 1 SKIP，不能把跳过的固定参考检查计为通过。独立完整输出在 ignored `local-evidence/snowcat-inventory-pinned-tests-20261113.log`。
+
 ## 共享入口与主线整合
 
 - `ef238e1`：保存计划、ProfileService research 基线及异常/持有修复。
