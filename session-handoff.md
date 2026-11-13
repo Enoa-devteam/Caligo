@@ -10,6 +10,8 @@
 
 语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。下一步为持久化语音元素身份、OneBot `get_record` 与独立转换合同，随后推进上传和其他媒体。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
 
+语音持久化检查点已接入当前 profile 的单个私聊入站元素。下一步用账号限定的文件标识接 OneBot 查询，保留转换和 QQ 现场边界。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-语音元素身份持久化)
+
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 
 PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.

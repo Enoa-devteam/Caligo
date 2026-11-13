@@ -85,3 +85,7 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 每个 owner 会话只允许一笔 native 语音下载在途。取消或超时后，等待精确完成回调回收临时目录；未收到回调时保留该槽与目标，不再次派发，也不声称 native 已停止。后续需现场核对回调路径是否与请求路径一致，以及 Windows 上的真实停止和临时资源回收。本阶段仅覆盖固定 profile 下的私聊入站 Silk 和正常 Rust 宿主查询入口。公开 `get_record`、其他媒体类型、上传、SSO 和真实 QQ 验收仍未完成。
 
 合成 owner 与命名管道回归分别覆盖同步完成、错元素/路径、损坏数据、取消、迟到、停止后禁止派发、当前能力声明及精确响应。测试夹具早期曾因 Windows 命令行长度上限无法启动 Node，改用标准输入运行同一段脚本。最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过。真实 Rust registry 覆盖检查 12/12，映射只把 `NodeIKernelMsgService.downloadRichMedia` 标为离线部分支持。
+
+## A2 语音元素身份持久化
+
+固定 profile 的 D8 listener 接收单个入站 C2C 语音元素。Rust 二次验证来源、账号和 peer，仅保存消息/元素身份、大小和 MD5。原始媒体路径与文件内容不进入事件。MessageStore 使用与文本相同的持久 ID 分配，`get_msg` 返回 `record` 段及账号限定的本地文件标识。旧文本日志无需迁移。合成 D8 → Resident → IPC → journal → 重启回归通过，另验证错 peer 拒绝及既有私聊发送回归。此阶段公开事件仍按文本条件发布。

@@ -5,7 +5,7 @@
 //! The append is flushed before the int32 OneBot ID is returned to a caller.
 
 use crate::onebot::StoreReader;
-use caligo_model::{onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
+use caligo_model::{capability::VoiceInfo, onebot_traits::StoredMessageView, EventSource, MsgEvent, SessionKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -38,6 +38,8 @@ pub struct StoredMessage {
     pub time: i32,
     #[serde(default)]
     pub native_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -173,13 +175,27 @@ impl MessageStore {
         time: i32,
         native_seq: Option<u64>,
     ) -> Result<i32, String> {
+        self.insert_message(StoredMessage {
+            message_id: self.next_id,
+            identity,
+            real_id,
+            sender,
+            message,
+            time,
+            native_seq,
+            voice: None,
+        })
+    }
+
+    fn insert_message(&mut self, stored: StoredMessage) -> Result<i32, String> {
+        let identity = &stored.identity;
         if identity.account_id != self.account_id
             || identity.peer_id.is_empty()
             || identity.native_id.is_empty()
         {
             return Err("message identity is incomplete or belongs to another account".into());
         }
-        if let Some(id) = self.by_identity.get(&identity) {
+        if let Some(id) = self.by_identity.get(identity) {
             return Ok(*id);
         }
         let id = self.next_id;
@@ -189,34 +205,9 @@ impl MessageStore {
         let next_id = id
             .checked_add(1)
             .ok_or("OneBot int32 message ID space exhausted")?;
-        let stored = StoredMessage {
-            message_id: id,
-            identity: identity.clone(),
-            real_id,
-            sender,
-            message,
-            time,
-            native_seq,
-        };
-        if let Some(path) = &self.path {
-            let entry = JournalEntry {
-                version: 1,
-                message: stored.clone(),
-            };
-            let mut bytes = serde_json::to_vec(&entry).map_err(|e| e.to_string())?;
-            bytes.push(b'\n');
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|e| format!("open message journal: {e}"))?;
-            file.write_all(&bytes)
-                .map_err(|e| format!("append message journal: {e}"))?;
-            file.sync_all()
-                .map_err(|e| format!("flush message journal: {e}"))?;
-        }
+        self.append_entry(1, &stored)?;
         self.next_id = next_id;
-        self.by_identity.insert(identity, id);
+        self.by_identity.insert(identity.clone(), id);
         self.by_id.insert(id, stored);
         Ok(id)
     }
@@ -281,6 +272,9 @@ impl MessageStore {
             .get(&id)
             .cloned()
             .ok_or("message identity index is inconsistent")?;
+        if message.voice.is_some() {
+            return Ok(Some(id));
+        }
         message.real_id = projection.real_id;
         message.sender = Value::Object(sender);
         message.message = Value::String(event.text.clone());
@@ -324,7 +318,12 @@ impl MessageStore {
             SessionKind::Group if record.chat_type == 2 => ChatType::Group,
             _ => return Err("wrapper chat type does not match session".into()),
         };
-        let text = envelope.text().map_err(|_| "wrapper text is invalid")?;
+        let voice = envelope.voice();
+        let text = if voice.is_some() {
+            String::new()
+        } else {
+            envelope.text().map_err(|_| "wrapper text is invalid")?
+        };
         if account_id == 0
             || account_id != self.account_id
             || account_id != bound_account
@@ -336,6 +335,8 @@ impl MessageStore {
             || event.native_id.0 != record.msg_id
             || event.text != text
             || event.platform_time != Some(platform_time)
+            || voice.is_some() && (event.direction != caligo_model::Direction::Incoming
+                || event.source != EventSource::Recv || sender_id == account_id)
             || event.direction == caligo_model::Direction::SelfSent
                 && record.sender_uin != envelope.binding.account
         {
@@ -361,6 +362,9 @@ impl MessageStore {
                 .get(&id)
                 .cloned()
                 .ok_or("message identity index is inconsistent")?;
+            if revised.voice.is_some() {
+                return Ok(Some(id));
+            }
             revised.real_id = id;
             revised.sender = Value::Object(sender);
             revised.message = body;
@@ -373,6 +377,25 @@ impl MessageStore {
         }
 
         let id = self.next_id;
+        if let Some(voice) = voice {
+            let token = format!("caligo-voice:{account_id}:{id}");
+            return self.insert_message(StoredMessage {
+                message_id: id,
+                identity,
+                real_id: id,
+                sender: Value::Object(sender),
+                message: serde_json::json!([{"type":"record","data":{"file":token}}]),
+                time,
+                native_seq: None,
+                voice: Some(VoiceInfo {
+                    peer_uid: record.peer_uid.clone(),
+                    message_id: record.msg_id.clone(),
+                    element_id: voice.element_id.clone(),
+                    size: voice.size,
+                    md5: voice.md5.clone(),
+                }),
+            }).map(Some);
+        }
         self.insert_confirmed(identity, id, Value::Object(sender), body, time, None)
             .map(Some)
     }
@@ -618,6 +641,7 @@ mod tests {
         let make_event = |source, text: &str, status| {
             let element = caligo_model::wrapper_message::WrapperElement {
                 element_type: 1,
+                voice: None,
                 text_element: Some(caligo_model::wrapper_message::WrapperText {
                     content: text.into(), at_type: 0, at_uid: String::new(),
                     at_nt_uid: String::new(), at_tiny_id: String::new(),

@@ -1,4 +1,4 @@
-//! Owned QQ wrapper text records. Contract: SnowCat 7cf025f types/msg.ts,
+//! Owned QQ wrapper text and private voice records. Contract: SnowCat 7cf025f types/msg.ts,
 //! NodeIKernelMsgListener and business-message/service-entry.ts:36–40.
 //! msgTime is Unix seconds; MSF getServerTime is a different millisecond clock.
 //! Neither a native ID nor a wrapper extension `id` proves OneBot real_id/font.
@@ -36,6 +36,28 @@ pub struct WrapperText {
 pub struct WrapperElement {
     pub element_type: u32,
     pub text_element: Option<WrapperText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<WrapperVoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WrapperVoice {
+    pub element_id: String,
+    pub size: u32,
+    pub md5: String,
+}
+
+impl WrapperVoice {
+    pub fn is_valid(&self) -> bool {
+        positive_decimal(&self.element_id)
+            && (1..=crate::capability::MAX_VOICE_BYTES).contains(&self.size)
+            && self.md5.len() == 32
+            && self
+                .md5
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +149,9 @@ impl WrapperMessageEnvelope {
         if self.source == WrapperSource::AddSend && r.sender_uin != self.binding.account {
             return Err("add_send_identity");
         }
-        self.text()?;
+        if self.voice().is_none() {
+            self.text()?;
+        }
         if serde_json::to_vec(r).map_err(|_| "record_encoding")?.len() > MAX_RECORD_BYTES {
             return Err("record_size");
         }
@@ -144,6 +168,7 @@ impl WrapperMessageEnvelope {
                 return Err("non_text");
             };
             if element.element_type != 1
+                || element.voice.is_some()
                 || t.at_type != 0
                 || !t.at_uid.is_empty()
                 || !t.at_nt_uid.is_empty()
@@ -160,6 +185,23 @@ impl WrapperMessageEnvelope {
             return Err("empty_text");
         }
         Ok(text)
+    }
+
+    /// Only a single incoming C2C voice element has an evidenced download contract.
+    pub fn voice(&self) -> Option<&WrapperVoice> {
+        let [element] = self.record.elements.as_slice() else {
+            return None;
+        };
+        let voice = element.voice.as_ref()?;
+        (element.element_type == 4
+            && element.text_element.is_none()
+            && self.source == WrapperSource::Recv
+            && self.record.chat_type == 1
+            && self.record.sender_uid == self.record.peer_uid
+            && self.record.sender_uin == self.record.peer_uin
+            && self.record.sender_uin != self.binding.account
+            && voice.is_valid())
+        .then_some(voice)
     }
 
     pub fn platform_time_seconds(&self) -> Option<u64> {

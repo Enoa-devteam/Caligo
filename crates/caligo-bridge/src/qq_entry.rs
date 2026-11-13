@@ -860,7 +860,9 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
             }
             // D8:真实监听器接线(K3 现场验证脚本,经 V8 阶梯执行;
             // 零 current / 轮转点条件不满足时显式失败,由调用方重试)。
-            HostOp::ListenerAdd => match crate::qq_v8::start_listener() {
+            HostOp::ListenerAdd => match crate::qq_v8::start_listener_with_voice(
+                self.voice_profile.then_some(self.account.as_str()),
+            ) {
                 Ok(s) if s.starts_with("ARMED") => {
                     let token = s
                         .split("lidRet=")

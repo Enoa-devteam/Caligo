@@ -120,6 +120,7 @@ fn event(native_id: &str) -> EventPayload {
         sender_uin: "10001".into(),
         send_status: Some(2),
         elements: vec![WrapperElement {
+            voice: None,
             element_type: 1,
             text_element: Some(WrapperText {
                 content: "private text".into(),

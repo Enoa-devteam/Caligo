@@ -388,6 +388,7 @@ pub const D8_START_JS: &str = r"
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
       rejected: 0, overflow: 0, listenerId: null, sendResults: {}, sends: {} };
+    var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
       if (!pending || !pending.promiseDone || !pending.readback) return;
@@ -417,6 +418,18 @@ pub const D8_START_JS: &str = r"
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
+          if (e && e.elementType === 4 && voiceAccount && src === 'recv' &&
+              m.chatType === 1 && m.elements.length === 1 && m.senderUin !== voiceAccount &&
+              m.senderUid === m.peerUid && m.senderUin === m.peerUin) {
+            var ptt = e.pttElement;
+            if (t || !ptt || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
+                !/[1-9]/.test(e.elementId) || typeof ptt.fileSize !== 'string' ||
+                !/^[1-9][0-9]{0,7}$/.test(ptt.fileSize) || Number(ptt.fileSize) > 16777216 ||
+                typeof ptt.md5HexStr !== 'string' || !/^[0-9a-fA-F]{32}$/.test(ptt.md5HexStr)) { R.rejected++; return; }
+            elements.push({elementType:4, voice:{element_id:e.elementId,
+              size:Number(ptt.fileSize),md5:ptt.md5HexStr.toLowerCase()}});
+            continue;
+          }
           if (!e || e.elementType !== 1 || !t || typeof t.content !== 'string' || t.atType !== 0 ||
               (t.atUid !== undefined && t.atUid !== '') ||
               (t.atNtUid !== undefined && t.atNtUid !== '') ||
@@ -614,11 +627,22 @@ pub fn listener_session() -> Option<String> {
 
 /// 注册监听器(D8_START_JS)。返回 "ARMED sid=.. lidRet=N" / "ALREADY .." / "ERR:.."。
 pub fn start_listener() -> Result<String, V8Error> {
+    start_listener_with_voice(None)
+}
+
+pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 同上。
-    let result = unsafe { exec_script(&syms, isolate_addr(), D8_START_JS) }?;
+    let source = account.map(|account| format!(
+        "(function(caligoVoiceAccount) {{ return {}; }})({})",
+        D8_START_JS,
+        serde_json::to_string(account).expect("serializable account")
+    ));
+    let result = unsafe {
+        exec_script(&syms, isolate_addr(), source.as_deref().unwrap_or(D8_START_JS))
+    }?;
     if let Some(session) = result
         .strip_prefix("ARMED sid=")
         .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))

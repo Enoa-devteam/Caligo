@@ -44,6 +44,7 @@ const service = {sendMsg() { throw Error('must not send'); },
   addKernelMsgListener(value) { listener = value; return 1; }};
 const session = {getSessionId: () => '1', getMsgService: () => service};
 process._linkedBinding = name => ({NodeIQQNTWrapperSession:{getNTWrapperSession: () => session}});
+const caligoVoiceAccount = '10001';
 assert.ok(eval(start).startsWith('ARMED'));
 function record(id) { return {msgId:id, msgSeq:'9007199254740993', msgRandom:'18446744073709551615',
   msgTime:'1794567890', clientSeq:'9007199254740995', guildId:'', chatType:1, msgType:2, subMsgType:0,
@@ -62,8 +63,14 @@ const empty = record('6'); empty.senderUin=''; listener.onRecvMsg([empty,record(
 const group = record('90071992547409931236');
 group.chatType=2; group.peerUid='30003'; group.peerUin='30003';
 listener.onRecvMsg([group]);
+const voice = record('90071992547409931237');
+voice.elements = [{elementType:4, elementId:'90071992547409931238',
+  pttElement:{fileSize:'1073',md5HexStr:'0123456789ABCDEF0123456789ABCDEF',filePath:'private-silk'}}];
+const wrongVoice = {...voice, msgId:'12', senderUid:'u_other'};
+listener.onRecvMsg([wrongVoice, voice]);
 const first = JSON.parse(eval(poll));
-assert.equal(first.rejected,2); assert.equal(first.overflow,1);
+assert.equal(first.rejected,3); assert.equal(first.overflow,1);
+assert.ok(!JSON.stringify(first).includes('private-silk'));
 assert.equal(JSON.parse(eval(poll)).items.length,0);
 // Item limit is explicit, not truncation; retain all admitted records byte-for-byte.
 for(let i=0;i<130;i++) { const r=record(String(100+i)); r.elements[0].textElement.content='small'; listener.onRecvMsg([r]); }
@@ -95,12 +102,12 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         wrapper_session: "nt_0".into(),
     };
     let batch = resident.ingest_wrapper_batch(&json, &binding).unwrap();
-    assert_eq!(batch.stats.rejected, 3);
+    assert_eq!(batch.stats.rejected, 4);
     assert_eq!(batch.stats.overflow, 1);
-    assert_eq!(resident.counters().wrapper_records_rejected, 3);
+    assert_eq!(resident.counters().wrapper_records_rejected, 4);
     assert_eq!(resident.counters().wrapper_records_overflow, 1);
     let events = resident.take_events();
-    assert_eq!(events.len(), 5);
+    assert_eq!(events.len(), 6);
     assert_ne!(
         events[1].source, events[2].source,
         "add and update occupy independent dedup classes"
@@ -255,7 +262,7 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         .unwrap()
     {
         CoreToControlMsg::EventsBatch { events } => {
-            assert_eq!(events.len(), 4, "old generation and replay are excluded");
+            assert_eq!(events.len(), 5, "old generation and replay are excluded");
             assert!(events.iter().all(|e| e.onebot_projection.is_none()));
             assert_eq!(events[0].direction, "self_sent");
         }
@@ -316,7 +323,7 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         Err(caligo_model::RejectReason::CapacityExhausted { .. })
     ));
     let (_, report) = AccountActor::open(&journal, RuntimeConfig::default()).unwrap();
-    assert_eq!(report.recovered_events, 5);
+    assert_eq!(report.recovered_events, 6);
     let store = caligo_core::message_store::MessageStore::open(
         journal.with_extension("messages.jsonl"),
         10001,
@@ -351,7 +358,7 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
             _ => None,
         })
         .collect();
-    assert_eq!(records.len(), 5);
+    assert_eq!(records.len(), 6);
     assert!(records.iter().all(|e| e.onebot_projection.is_none()));
     assert!(records[0].audit_only);
     assert!(records[1..].iter().all(|e| !e.audit_only));
@@ -362,6 +369,25 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     assert_eq!(raw.record.msg_time, "1794567890");
     assert_eq!(raw.text().unwrap(), events[0].text);
     assert_eq!(records[0].session_generation, 1);
+    let voice_id = reopened
+        .onebot_message_id(
+            &caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002"),
+            &events[5].native_id,
+        )
+        .unwrap();
+    let token = format!("caligo-voice:10001:{voice_id}");
+    assert_eq!(
+        reopened.get_msg(voice_id).unwrap().message,
+        serde_json::json!([{"type":"record","data":{"file":token}}])
+    );
+    let voice = records[5]
+        .wrapper_message
+        .as_ref()
+        .unwrap()
+        .voice()
+        .unwrap();
+    assert_eq!(voice.element_id, "90071992547409931238");
+    assert_eq!(voice.size, 1073);
     let recovered_update = &records[2];
     let replayed_update = caligo_model::MsgEvent {
         event_seq: 0,
