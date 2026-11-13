@@ -285,14 +285,13 @@ impl MessageStore {
 
 impl StoreReader for MessageStore {
     fn group_peers(&self) -> Vec<String> {
-        // [research] QQ 不提供群列表接口，只能从已入库的群消息里学习。
-        let mut peers = std::collections::BTreeSet::new();
-        for message in self.by_id.values() {
-            if matches!(message.identity.chat_type, ChatType::Group) {
-                peers.insert(message.identity.peer_id.clone());
+        let mut set = std::collections::BTreeSet::new();
+        for m in self.by_id.values() {
+            if matches!(m.identity.chat_type, ChatType::Group) {
+                set.insert(m.identity.peer_id.clone());
             }
         }
-        peers.into_iter().collect()
+        set.into_iter().collect()
     }
 
     fn get_msg(&self, message_id: i32) -> Option<StoredMessageView> {
@@ -456,5 +455,41 @@ mod tests {
                 .unwrap(),
             9
         );
+    }
+
+    #[test]
+    fn group_peers_are_learned_from_group_messages_only() {
+        let mut store = MessageStore::in_memory(100, None, Some(true), 1);
+        store
+            .insert_confirmed(
+                identity(100, ChatType::Group, "g1", "n1"),
+                1,
+                serde_json::json!({"user_id": 1}),
+                Value::String("a".into()),
+                1,
+                None,
+            )
+            .unwrap();
+        store
+            .insert_confirmed(
+                identity(100, ChatType::Group, "g1", "n2"),
+                2,
+                serde_json::json!({"user_id": 1}),
+                Value::String("b".into()),
+                1,
+                None,
+            )
+            .unwrap();
+        store
+            .insert_confirmed(
+                identity(100, ChatType::Private, "u_x", "n3"),
+                3,
+                serde_json::json!({"user_id": 1}),
+                Value::String("c".into()),
+                1,
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.group_peers(), vec!["g1".to_string()]);
     }
 }

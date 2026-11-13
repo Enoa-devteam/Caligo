@@ -254,19 +254,20 @@ pub fn handle_action(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
-        // [research] QQ 没有群列表接口，这里只能回放“已经从消息里学到的群”。
+        // 群列表只能从已入库的群消息里学(平台无列表接口);群名用
+        // `群 <号>` 占位,不编造平台未给出的名字。
         "get_group_list" => {
             let list: Vec<serde_json::Value> = store
                 .group_peers()
                 .into_iter()
-                .map(|peer| {
-                    let id = peer.parse::<i64>().unwrap_or(0);
-                    serde_json::json!({
+                .filter_map(|peer| {
+                    let id = peer.parse::<i64>().ok()?;
+                    Some(serde_json::json!({
                         "group_id": id,
-                        "group_name": format!("群 {}", peer),
+                        "group_name": format!("群 {peer}"),
                         "member_count": 0,
                         "max_member_count": 0
-                    })
+                    }))
                 })
                 .collect();
             ActionResponse::ok(serde_json::Value::Array(list), echo)
@@ -279,7 +280,7 @@ pub fn handle_action(
             ActionResponse::ok(
                 serde_json::json!({
                     "group_id": id,
-                    "group_name": format!("群 {}", id),
+                    "group_name": format!("群 {id}"),
                     "member_count": 0,
                     "max_member_count": 0
                 }),
@@ -528,5 +529,66 @@ mod tests {
         ))
         .unwrap();
         assert!(!version["data"]["app_version"].as_str().unwrap().is_empty());
+    }
+
+    struct GroupStore;
+
+    impl StoreReader for GroupStore {
+        fn get_msg(&self, _: i32) -> Option<StoredMessageView> {
+            None
+        }
+        fn login_info(&self) -> Option<(u64, String)> {
+            None
+        }
+        fn online_status(&self) -> Option<bool> {
+            Some(true)
+        }
+        fn group_peers(&self) -> Vec<String> {
+            vec!["1098345913".into(), "1102382705".into()]
+        }
+    }
+
+    #[test]
+    fn group_queries_use_learned_peers_without_inventing_names() {
+        assert!(is_supported_action("get_group_list"));
+        assert!(is_supported_action("get_group_info"));
+        assert!(is_supported_action("get_friend_list"));
+
+        let mut sink = FakeSink::default();
+        let list = serde_json::to_value(handle_action(
+            "get_group_list",
+            &Value::Null,
+            Value::Null,
+            &mut sink,
+            &GroupStore,
+        ))
+        .unwrap();
+        let groups = list["data"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["group_id"], 1098345913i64);
+        assert_eq!(groups[0]["group_name"], "群 1098345913");
+        assert_eq!(groups[0]["member_count"], 0);
+        assert_eq!(groups[0]["max_member_count"], 0);
+
+        let info = serde_json::to_value(handle_action(
+            "get_group_info",
+            &serde_json::json!({"group_id": 1102382705i64}),
+            Value::Null,
+            &mut sink,
+            &GroupStore,
+        ))
+        .unwrap();
+        assert_eq!(info["data"]["group_id"], 1102382705i64);
+        assert_eq!(info["data"]["group_name"], "群 1102382705");
+
+        let friends = serde_json::to_value(handle_action(
+            "get_friend_list",
+            &Value::Null,
+            Value::Null,
+            &mut sink,
+            &GroupStore,
+        ))
+        .unwrap();
+        assert_eq!(friends["data"], serde_json::json!([]));
     }
 }

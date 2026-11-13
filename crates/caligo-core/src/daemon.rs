@@ -164,14 +164,10 @@ impl Daemon {
             Ok(account_id) if account_id > 0 => {
                 let mut path = config.journal_path.clone();
                 path.set_extension("messages.jsonl");
-                Some({
-                    // [research] login_info 依赖 nickname；缺失时 get_login_info 恒 1502。
-                    let mut store = MessageStore::open(path, account_id, Some(config.account.clone()))
-                        .map_err(|e| crate::runtime::OpenError::MessageStore(e.to_string()))?;
-                    // [research] online 状态原本无人置位，get_status 恒报 online=false。
-                    store.set_online_status(Some(true));
-                    store
-                })
+                Some(
+                    MessageStore::open(path, account_id, None)
+                        .map_err(|e| crate::runtime::OpenError::MessageStore(e.to_string()))?,
+                )
             }
             _ => None,
         };
@@ -1022,7 +1018,7 @@ impl StoreReader for Daemon {
     fn group_peers(&self) -> Vec<String> {
         self.actor
             .lock()
-            .map(|actor| actor.group_peers())
+            .map(|a| a.group_peers())
             .unwrap_or_default()
     }
 }

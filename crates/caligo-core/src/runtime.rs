@@ -1334,7 +1334,7 @@ impl StoreReader for AccountActor {
     fn group_peers(&self) -> Vec<String> {
         self.message_store
             .as_ref()
-            .map(|store| store.group_peers())
+            .map(|s| s.group_peers())
             .unwrap_or_default()
     }
 }

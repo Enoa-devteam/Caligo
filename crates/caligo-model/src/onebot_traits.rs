@@ -55,7 +55,8 @@ pub trait StoreReader {
     fn login_info(&self) -> Option<(u64, String)>;
     /// Actual daemon/session state, absent until wired to the live actor.
     fn online_status(&self) -> Option<bool>;
-    /// [research] 已见过的群号（从持久消息学习）；默认空。
+    /// Group ids learned from persisted group messages; absent until observed.
+    /// Empty by default so readers without a message store stay truthful.
     fn group_peers(&self) -> Vec<String> {
         Vec::new()
     }
