@@ -4,7 +4,8 @@
 use caligo_core::daemon::{BridgeClient, ControlClient, Daemon, DaemonConfig};
 use caligo_core::runtime::RuntimeConfig;
 use caligo_model::capability::{
-    FriendInfo, HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope,
+    FriendInfo, HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, VoiceDownload,
+    VoiceInfo,
 };
 use caligo_model::ipc_v3::{
     BridgeMsg, ControlMsg, CoreToBridgeMsg, CoreToControlMsg, CAPABILITY_QUERY_REVISION,
@@ -391,5 +392,69 @@ fn malformed_and_over_budget_results_are_invalid_response() {
         reply(&bridge, id, scope.clone(), outcome);
         assert_eq!(waiter.join().unwrap(), QueryOutcome::InvalidResponse);
         assert_eq!(lab.daemon.pending_query_count(), 0);
+    }
+}
+
+#[test]
+fn voice_download_requires_scoped_advertisement_and_exact_owned_response() {
+    let lab = Lab::new();
+    let (mut bridge, scope) = lab.bridge();
+    let query = HostQuery::VoiceDownload {
+        peer_uid: "u_voice".into(),
+        message_id: "90071992547409939999".into(),
+        element_id: "9007199254740994".into(),
+    };
+    let timeout = Duration::from_secs(3);
+    advertise(&mut bridge, &scope, vec![QueryCapability::VoiceInfo]);
+    assert_eq!(
+        lab.daemon.query_host(query.clone(), timeout),
+        QueryOutcome::Unsupported
+    );
+    advertise(
+        &mut bridge,
+        &scope,
+        vec![QueryCapability::VoiceInfo, QueryCapability::VoiceDownload],
+    );
+
+    let good = VoiceDownload {
+        info: VoiceInfo {
+            peer_uid: "u_voice".into(),
+            message_id: "90071992547409939999".into(),
+            element_id: "9007199254740994".into(),
+            size: 12,
+            md5: "0123456789abcdef0123456789abcdef".into(),
+        },
+        silk_hex: "02232153494c4b5f563300ff".into(),
+    };
+    let mut wrong = good.clone();
+    wrong.info.element_id = "99".into();
+    for (data, expected) in [
+        (wrong, QueryOutcome::InvalidResponse),
+        (
+            good.clone(),
+            QueryOutcome::Success(QueryData::VoiceDownload(good)),
+        ),
+    ] {
+        let daemon = lab.daemon.clone();
+        let submitted = query.clone();
+        let waiter = std::thread::spawn(move || daemon.query_host(submitted, timeout));
+        let CoreToBridgeMsg::Query {
+            request_id,
+            scope: wire_scope,
+            query: wire_query,
+            ..
+        } = bridge.recv().unwrap()
+        else {
+            panic!("missing voice download request");
+        };
+        assert_eq!(wire_query, query);
+        assert_eq!(wire_scope, scope);
+        reply(
+            &bridge,
+            request_id,
+            scope.clone(),
+            QueryOutcome::Success(QueryData::VoiceDownload(data)),
+        );
+        assert_eq!(waiter.join().unwrap(), expected);
     }
 }

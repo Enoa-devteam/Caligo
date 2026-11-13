@@ -5,7 +5,7 @@
 
 use caligo_model::capability::{
     HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, MAX_QUERY_BYTES,
-    MAX_QUERY_TIMEOUT_MS, MAX_VOICE_BYTES,
+    MAX_QUERY_TIMEOUT_MS, MAX_VOICE_BYTES, MAX_VOICE_DOWNLOAD_BYTES,
 };
 use serde_json::Value;
 
@@ -20,11 +20,12 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::GroupList,
     QueryCapability::GroupInfo,
     QueryCapability::VoiceInfo,
+    QueryCapability::VoiceDownload,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
     // Voice operations form a suffix admitted only by the exact pilot profile.
-    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 1]
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 2]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
@@ -87,6 +88,7 @@ fn kind(query: &HostQuery) -> &'static str {
         HostQuery::UidToUin { .. } => "uid_to_uin",
         HostQuery::MessagesById { .. } => "messages_by_id",
         HostQuery::VoiceInfo { .. } => "voice_info",
+        HostQuery::VoiceDownload { .. } => "voice_download",
     }
 }
 
@@ -110,6 +112,16 @@ fn query_args(query: &HostQuery) -> String {
             element_id,
         } => format!(
             "{{peerUid:{},msgId:{},elementId:{},maxBytes:{MAX_VOICE_BYTES}}}",
+            json_string(peer_uid),
+            json_string(message_id),
+            json_string(element_id),
+        ),
+        HostQuery::VoiceDownload {
+            peer_uid,
+            message_id,
+            element_id,
+        } => format!(
+            "{{peerUid:{},msgId:{},elementId:{},maxBytes:{MAX_VOICE_DOWNLOAD_BYTES}}}",
             json_string(peer_uid),
             json_string(message_id),
             json_string(element_id),
@@ -157,6 +169,73 @@ const COMMON_JS: &str = r#"
       binding.sessionGeneration === scope.sessionGeneration && binding.connectionEpoch === scope.connectionEpoch &&
       binding.sid === String(sid);
   }
+  function startVoiceDownload(R, p, service, info) {
+    var fs = process.getBuiltinModule('node:fs');
+    var path = process.getBuiltinModule('node:path');
+    var os = process.getBuiltinModule('node:os');
+    var crypto = process.getBuiltinModule('node:crypto');
+    if (!fs || !path || !os || !crypto) throw new Error('voice file helpers unavailable');
+    var root = fs.realpathSync(os.tmpdir());
+    var directory = fs.mkdtempSync(path.join(root, 'caligo-voice-'));
+    var file = path.join(directory, 'voice.silk');
+    function cleanup() {
+      try {
+        if (!fs.lstatSync(directory).isSymbolicLink() && fs.realpathSync(directory) === directory) {
+          try { fs.unlinkSync(file); } catch (e) {}
+          fs.rmdirSync(directory);
+        }
+      } catch (e) {}
+    }
+    function complete(result) {
+      if (!result || result.msgId !== info.message_id || result.msgElementId !== info.element_id ||
+          result.chatType !== 1 || typeof result.fileErrCode !== 'string' ||
+          result.filePath !== file || R.voiceDownload !== complete) return;
+      var descriptor;
+      try {
+        if (R.stopped || R.queryPending.get(p.requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
+        if (result.fileErrCode !== '0') {
+          p.status = 'rejected'; p.code = 502; p.reason = 'native voice download rejected';
+          return;
+        }
+        var stats = fs.lstatSync(file);
+        if (!stats.isFile() || fs.realpathSync(file) !== file || stats.size !== info.size) throw new Error('voice output shape');
+        descriptor = fs.openSync(file, 'r');
+        var opened = fs.fstatSync(descriptor);
+        if (!opened.isFile() || opened.dev !== stats.dev || opened.ino !== stats.ino ||
+            opened.size !== info.size) throw new Error('voice output changed');
+        var data = Buffer.alloc(info.size);
+        var offset = 0;
+        while (offset < data.length) {
+          var count = fs.readSync(descriptor, data, offset, data.length - offset, offset);
+          if (!count) throw new Error('voice output truncated');
+          offset += count;
+        }
+        if (fs.fstatSync(descriptor).size !== info.size ||
+            crypto.createHash('md5').update(data).digest('hex') !== info.md5) throw new Error('voice output integrity');
+        if (data.subarray(0,9).toString('ascii') !== '#!SILK_V3' &&
+            !(data[0] === 2 && data.subarray(1,10).toString('ascii') === '#!SILK_V3')) throw new Error('voice output format');
+        finish(p, {kind:'voice_download',data:{info:info,silk_hex:data.toString('hex')}});
+      } catch (e) { fail(p, 'voice output validation failed'); }
+      finally {
+        if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch (e) {} }
+        cleanup();
+        R.voiceDownload = null;
+      }
+    }
+    // Keep the slot and its unique path until the exact callback, even if the
+    // caller times out. Reuse could mistake a late native completion for a retry.
+    R.voiceDownload = complete;
+    try {
+      var result = service.downloadRichMedia({msgId:info.message_id,elementId:info.element_id,
+        peerUid:info.peer_uid,chatType:1,fileModelId:'0',downSourceType:0,downloadSourceType:0,
+        triggerType:1,thumbSize:0,downloadType:1,filePath:file});
+      Promise.resolve(result).then(function(value) {
+        if (value && typeof value.result === 'number' && value.result !== 0 && R.voiceDownload === complete) {
+          fail(p, 'voice download submission rejected');
+        }
+      }, function() { fail(p, 'voice download submission outcome unknown'); });
+    } catch (e) { fail(p, 'voice download submission outcome unknown'); }
+  }
 "#;
 
 /// Build a fixed start script. Registration precedes every wrapper API call.
@@ -178,6 +257,7 @@ pub fn build_query_start_js(
     js.push_str(
         r#"  try {
     if (!R || typeof R !== 'object' || !R.session || !R.sid) return reply('not_ready', undefined, undefined, 'd8 session missing');
+    if (R.stopped) return reply('not_ready', undefined, undefined, 'd8 session stopped');
     if (!(R.queryPending instanceof Map)) {
       if (R.queryPending !== undefined) return reply('rejected', undefined, 409, 'pending store shape');
       R.queryPending = new Map();
@@ -233,10 +313,16 @@ pub fn build_query_start_js(
       });
       return reply('pending');
     }
-    if (queryKind === 'voice_info') {
+    if (queryKind === 'voice_info' || queryKind === 'voice_download') {
       var voiceService = R.session.getMsgService && R.session.getMsgService();
       if (!voiceService || typeof voiceService.getMsgsByMsgId !== 'function') return terminal(p, 'unsupported');
+      var download = queryKind === 'voice_download';
+      if (download && (typeof voiceService.downloadRichMedia !== 'function' ||
+          !R.listener || typeof R.listener.onRichMediaDownloadComplete !== 'function' ||
+          typeof process.getBuiltinModule !== 'function')) return terminal(p, 'unsupported');
+      if (download && R.voiceDownload) return terminal(p, 'rejected', 409, 'voice download already in flight');
       settle(voiceService.getMsgsByMsgId({chatType:1,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
+        if (R.stopped || R.queryPending.get(requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
         if (!value || value.result !== 0 || !Array.isArray(value.msgList) || value.msgList.length !== 1) throw new Error('voice message readback shape');
         var message = value.msgList[0];
         if (!message || message.msgId !== args.msgId || message.chatType !== 1 || message.peerUid !== args.peerUid ||
@@ -249,8 +335,14 @@ pub fn build_query_start_js(
         if (typeof voice.fileSize !== 'string' || !/^[1-9][0-9]{0,7}$/.test(voice.fileSize) ||
             Number(voice.fileSize) > args.maxBytes || typeof voice.md5HexStr !== 'string' ||
             !/^[0-9a-fA-F]{32}$/.test(voice.md5HexStr)) throw new Error('voice metadata shape');
-        finish(p, {kind:'voice_info',data:{peer_uid:args.peerUid,message_id:args.msgId,element_id:args.elementId,
-          size:Number(voice.fileSize),md5:voice.md5HexStr.toLowerCase()}});
+        var info = {peer_uid:args.peerUid,message_id:args.msgId,element_id:args.elementId,
+          size:Number(voice.fileSize),md5:voice.md5HexStr.toLowerCase()};
+        if (!download) {
+          finish(p, {kind:'voice_info',data:info});
+          return;
+        }
+        if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
+        startVoiceDownload(R, p, voiceService, info);
       });
       return reply('pending');
     }
@@ -348,7 +440,7 @@ pub fn build_query_poll_js(request_id: &str, scope: &QueryScope) -> String {
   if(p.scope.account!==account||p.scope.hostNonce!==nonce||p.scope.sessionGeneration!==gen||p.scope.connectionEpoch!==epoch||p.sid!==String(R.sid))return out('rejected',undefined,409,'request binding mismatch');
   if(p.status==='pending'&&Date.now()>=p.deadline){p.status='timeout';p.reason='query timeout';}
   if(p.status==='pending')return out('pending');
-  var result=out(p.status,p.data,p.status==='invalid_response'?422:undefined,p.reason);R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return result;
+  var result=out(p.status,p.data,p.code ?? (p.status==='invalid_response'?422:undefined),p.reason);R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return result;
 })()"#,
     );
     for (needle, value) in [
@@ -482,7 +574,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let wrapper = dir.join("wrapper.node");
         std::fs::write(&wrapper, b"synthetic module").unwrap();
-        assert!(!matches_voice_profile(&[wrapper.to_str().unwrap().to_owned()]));
+        assert!(!matches_voice_profile(&[wrapper
+            .to_str()
+            .unwrap()
+            .to_owned()]));
         std::fs::remove_file(&wrapper).unwrap();
         std::fs::remove_dir(&dir).unwrap();
     }

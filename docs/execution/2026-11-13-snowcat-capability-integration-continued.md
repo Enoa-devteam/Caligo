@@ -77,3 +77,11 @@ bridge 每次接受 HelloAck 后用同一 QueryScope 清理旧查询并发布 ad
 SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 `napi2native` 实验钩子。该证据给出 Caligo 后续自有二进制接线的对照，当前未提供 SSO backend 或 `send_packet`。
 
 首轮全仓编译发现 `QqOwnerAdapter::new` 的公开签名被改动，导致两个既有 `qq_entry_lab` 调用失败。修正为在原构造器内部检查宿主模块，保留原签名。定向语音 readback 与精确 profile 拒绝测试均通过。最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过，日志位于本机 `local-evidence/snowcat-voice-info-all-final.log`。
+
+## A2 私聊语音有界下载
+
+基于 `0affb67` 的精确回读，在相同宿主 profile 增加 `Daemon::query_host(HostQuery::VoiceDownload { ... })`。查询先重新核对入站私聊的 peer、消息和语音元素，在原 D8 listener 上登记完成处理，再调用固定 `downloadRichMedia`。回调必须匹配消息 ID、元素 ID、chat type 和本次独立临时目标。完成后打开并核对文件身份、长度、MD5 和 Silk 头，返回最多 128 KiB 的 owned 字节（IPC 内用 hex 编码）。目标路径由 bridge 生成，路径和 QQ 媒体凭据不通过查询返回。
+
+每个 owner 会话只允许一笔 native 语音下载在途。取消或超时后，等待精确完成回调回收临时目录；未收到回调时保留该槽与目标，不再次派发，也不声称 native 已停止。后续需现场核对回调路径是否与请求路径一致，以及 Windows 上的真实停止和临时资源回收。本阶段仅覆盖固定 profile 下的私聊入站 Silk 和正常 Rust 宿主查询入口。公开 `get_record`、其他媒体类型、上传、SSO 和真实 QQ 验收仍未完成。
+
+合成 owner 与命名管道回归分别覆盖同步完成、错元素/路径、损坏数据、取消、迟到、停止后禁止派发、当前能力声明及精确响应。测试夹具早期曾因 Windows 命令行长度上限无法启动 Node，改用标准输入运行同一段脚本。最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过。真实 Rust registry 覆盖检查 12/12，映射只把 `NodeIKernelMsgService.downloadRichMedia` 标为离线部分支持。

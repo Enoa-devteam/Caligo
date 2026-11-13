@@ -1497,6 +1497,87 @@
         ],
         "limits": "No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented."
       }
+    },
+    "voice_download": {
+      "status": "partial_offline",
+      "reason": "The exact-profile Caligo bridge downloads bounded private incoming Silk through a scoped daemon host query.",
+      "implementation": [
+        {
+          "path": "crates/caligo-bridge/src/qq_query.rs",
+          "symbol": "function startVoiceDownload("
+        },
+        {
+          "path": "crates/caligo-bridge/src/qq_v8.rs",
+          "symbol": "onRichMediaDownloadComplete:"
+        }
+      ],
+      "normal_entry": [
+        {
+          "path": "crates/caligo-core/src/daemon.rs",
+          "symbol": "pub fn query_host("
+        },
+        {
+          "path": "crates/caligo-bridge/src/resident.rs",
+          "symbol": "pub fn drain_queries(&self)"
+        }
+      ],
+      "permission": {
+        "requirement": "Account-scoped Caligo bridge IPC and exact host profile.",
+        "enforcement": [
+          {
+            "path": "crates/caligo-bridge/src/qq_query.rs",
+            "symbol": "fn matches_voice_profile("
+          },
+          {
+            "path": "crates/caligo-core/src/capability_broker.rs",
+            "symbol": "pub(crate) fn begin<'a>("
+          }
+        ],
+        "limits": "Available through the daemon Rust host-query API."
+      },
+      "backend_dependencies": [
+        {
+          "name": "Wrapper exact message readback, matching callback, and bounded file integrity validation",
+          "state": "offline_only",
+          "evidence": [
+            {
+              "path": "crates/caligo-bridge/src/qq_query.rs",
+              "symbol": "function startVoiceDownload("
+            }
+          ]
+        }
+      ],
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
+      "acceptance": {
+        "declared": true,
+        "implemented": true,
+        "wired": true,
+        "offline": "recorded_lab_only",
+        "native": "not_verified",
+        "field": "not_verified",
+        "production": "not_accepted",
+        "evidence": [
+          {
+            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
+            "symbol": "A2 私聊语音有界下载"
+          },
+          {
+            "path": "crates/caligo-bridge/tests/wrapper_query_contract.rs",
+            "symbol": "fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()"
+          },
+          {
+            "path": "crates/caligo-core/tests/capability_query_lab.rs",
+            "symbol": "fn voice_download_requires_scoped_advertisement_and_exact_owned_response()"
+          }
+        ],
+        "limits": "Private incoming Silk only. Group/media variants, public OneBot retrieval, and Caligo QQ field acceptance remain open."
+      }
     }
   },
   "review_basis": [
@@ -35740,9 +35821,9 @@
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.downloadRichMedia.471",
       "category": "wrapper_interfaces",
-      "status": "missing",
-      "reason": "No audited Caligo equivalent implementation/normal entry is mapped; reference declaration or name similarity is insufficient.",
-      "assessment": "missing"
+      "status": "partial_offline",
+      "reason": "The exact-profile Caligo bridge downloads bounded private incoming Silk through a scoped daemon host query.",
+      "assessment": "voice_download"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelMsgService.getFirstUnreadMsgSeq.486",
@@ -41916,9 +41997,9 @@
       "wrapper_interfaces": {
         "denominator": 1354,
         "statuses": {
-          "missing": 1344,
+          "missing": 1343,
           "unknown": 0,
-          "partial_offline": 0,
+          "partial_offline": 1,
           "registered_backend_blocked": 0,
           "wired_offline": 0,
           "implemented_pending_validation": 8,

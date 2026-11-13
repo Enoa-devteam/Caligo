@@ -6,6 +6,8 @@ pub const MAX_QUERY_BYTES: usize = 512 * 1024;
 pub const MAX_QUERY_ITEMS: usize = 2048;
 pub const MAX_QUERY_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_VOICE_BYTES: u32 = 16 * 1024 * 1024;
+/// Hex encoding plus the typed response envelope must fit one IPC frame.
+pub const MAX_VOICE_DOWNLOAD_BYTES: u32 = 128 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +20,7 @@ pub enum QueryCapability {
     UidToUin,
     MessagesById,
     VoiceInfo,
+    VoiceDownload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +59,12 @@ pub enum HostQuery {
     },
     /// Exact private incoming voice element. IDs are native decimal strings.
     VoiceInfo {
+        peer_uid: String,
+        message_id: String,
+        element_id: String,
+    },
+    /// Fetch one identified incoming private Silk element into bounded owned bytes.
+    VoiceDownload {
         peer_uid: String,
         message_id: String,
         element_id: String,
@@ -108,6 +117,7 @@ impl HostQuery {
             Self::UidToUin { .. } => QueryCapability::UidToUin,
             Self::MessagesById { .. } => QueryCapability::MessagesById,
             Self::VoiceInfo { .. } => QueryCapability::VoiceInfo,
+            Self::VoiceDownload { .. } => QueryCapability::VoiceDownload,
         }
     }
 
@@ -117,6 +127,11 @@ impl HostQuery {
             Self::UinToUid { uin } if !positive_decimal(uin) => Err("invalid UIN"),
             Self::UidToUin { uid } if !native_uid(uid) => Err("invalid UID"),
             Self::VoiceInfo {
+                peer_uid,
+                message_id,
+                element_id,
+            }
+            | Self::VoiceDownload {
                 peer_uid,
                 message_id,
                 element_id,
@@ -188,6 +203,30 @@ pub struct VoiceInfo {
     pub md5: String,
 }
 
+impl VoiceInfo {
+    fn matches(&self, peer_uid: &str, message_id: &str, element_id: &str, limit: u32) -> bool {
+        self.peer_uid == peer_uid
+            && native_uid(peer_uid)
+            && self.message_id == message_id
+            && native_message_id(message_id)
+            && self.element_id == element_id
+            && native_message_id(element_id)
+            && (1..=limit).contains(&self.size)
+            && self.md5.len() == 32
+            && self
+                .md5
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceDownload {
+    pub info: VoiceInfo,
+    pub silk_hex: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -204,6 +243,7 @@ pub enum QueryData {
     Uin(String),
     Messages(Vec<crate::wrapper_message::WrapperMessage>),
     VoiceInfo(VoiceInfo),
+    VoiceDownload(VoiceDownload),
 }
 
 impl QueryData {
@@ -253,17 +293,24 @@ impl QueryData {
                     element_id,
                 },
                 Self::VoiceInfo(info),
+            ) => info.matches(peer_uid, message_id, element_id, MAX_VOICE_BYTES),
+            (
+                HostQuery::VoiceDownload {
+                    peer_uid,
+                    message_id,
+                    element_id,
+                },
+                Self::VoiceDownload(download),
             ) => {
-                &info.peer_uid == peer_uid
-                    && &info.message_id == message_id
-                    && &info.element_id == element_id
-                    && query.validate().is_ok()
-                    && (1..=MAX_VOICE_BYTES).contains(&info.size)
-                    && info.md5.len() == 32
-                    && info
-                        .md5
+                let info = &download.info;
+                info.matches(peer_uid, message_id, element_id, MAX_VOICE_DOWNLOAD_BYTES)
+                    && download.silk_hex.len() == info.size as usize * 2
+                    && download
+                        .silk_hex
                         .bytes()
                         .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                    && (download.silk_hex.starts_with("232153494c4b5f5633")
+                        || download.silk_hex.starts_with("02232153494c4b5f5633"))
             }
             (
                 HostQuery::MessagesById {

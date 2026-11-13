@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-13 A2 语音：固定 9.9.36-53644 的 scoped `VoiceInfo` 已接精确私聊语音元素回读。仅返回匹配的字符串 ID、文件大小和 MD5。下载、上传和 SSO 仍待接线及验证。[语音回读检查点](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音精确回读)
+2026-11-13 A2 语音：`0affb67` 在固定 9.9.36-53644 profile 接入 scoped `VoiceInfo` 精确私聊语音元素回读。后续 `VoiceDownload` 在同一作用域完成回读、回调关联和有界 Silk 文件校验，接入正常 Rust 宿主查询。公开 `get_record`、上传、其他媒体、SSO 和 QQ 现场仍待验证。[语音下载检查点](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
 
 2026-11-13 SnowCat 恢复执行：`be4c87a` 接入按连接代次声明的宿主能力并刷新 5,711 项覆盖映射（真实 registry 13 key）。普通私聊和群聊入站文本已接入持久 OneBot ID 与共享事件队列，管道和重启回归覆盖跨会话同 ID、重复修订、旧代次审计及错宿主拒绝。当前登录账号/昵称仍缺可信宿主来源，原生媒体、SSO、其余扩展和部署仍有缺口。候选未冻结，产品 NOT READY。[执行与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)
 

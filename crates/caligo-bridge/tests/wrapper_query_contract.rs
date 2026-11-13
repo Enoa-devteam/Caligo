@@ -38,6 +38,7 @@ function fresh() {
   return {msgId,chatType:1,peerUid:'u_voice_peer',senderUid:'u_voice_peer',senderUin:'20002',
     elements:[{elementId,elementType:4,pttElement:{fileSize:'1073',md5HexStr:md5,filePath:'private',fileUuid:'private'}}]};
 }
+
 async function read(record) {
   const service = {getMsgsByMsgId(peer, ids) {
     assert.equal(this,service);
@@ -95,6 +96,143 @@ async function read(record) {
         .is_err());
 }
 
+#[cfg(feature = "research")]
+#[test]
+fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
+    use caligo_bridge::qq_v8::{D8_START_JS, D8_STOP_JS};
+    use caligo_model::capability::{QueryData, QueryOutcome};
+    use std::io::Write;
+    let scope = scope();
+    let query = HostQuery::VoiceDownload {
+        peer_uid: "u_voice_peer".into(),
+        message_id: "90071992547409939999".into(),
+        element_id: "9007199254740994".into(),
+    };
+    let quote = |s: &str| serde_json::to_string(s).unwrap();
+    let script = format!(
+        "const arm={}, stop={}, start={}, poll={}, cancel={};\n",
+        quote(D8_START_JS),
+        quote(D8_STOP_JS),
+        quote(&qq_query::build_query_start_js(
+            "voice", &scope, &query, 1000
+        )),
+        quote(&qq_query::build_query_poll_js("voice", &scope)),
+        quote(&qq_query::build_query_cancel_js("voice", &scope)),
+    ) + r#"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
+const silk = Buffer.from('02232153494c4b5f563300ff','hex');
+const md5 = crypto.createHash('md5').update(silk).digest('hex');
+const msgId='90071992547409939999', elementId='9007199254740994';
+let listener, requested, calls = 0, delayed, mode = 'pending';
+const service = {
+  sendMsg() {},
+  addKernelMsgListener(value) { listener=value; return 7; },
+  removeKernelMsgListener(id) { assert.equal(id,7); },
+  getMsgsByMsgId(peer, ids) {
+    assert.equal(this,service);
+    assert.deepEqual(peer,{chatType:1,peerUid:'u_voice_peer',guildId:''});
+    assert.deepEqual(ids,[msgId]);
+    const result = {result:0,msgList:[{msgId,chatType:1,peerUid:'u_voice_peer',
+      senderUid:'u_voice_peer',senderUin:'20002',elements:[{elementId,elementType:4,
+      pttElement:{fileSize:String(silk.length),md5HexStr:md5}}]}]};
+    if (mode === 'delayed') return new Promise(resolve => delayed=()=>resolve(result));
+    return Promise.resolve(result);
+  },
+  downloadRichMedia(args) {
+    assert.equal(this,service);
+    calls++; requested = args.filePath;
+    assert.ok(path.isAbsolute(requested));
+    assert.deepEqual(args,{msgId,elementId,peerUid:'u_voice_peer',chatType:1,fileModelId:'0',
+      downSourceType:0,downloadSourceType:0,triggerType:1,thumbSize:0,downloadType:1,filePath:requested});
+    if (mode === 'sync') {
+      fs.writeFileSync(requested,silk);
+      listener.onRichMediaDownloadComplete(completion());
+    }
+    return Promise.resolve({result:0});
+  },
+};
+function completion(overrides={}) {
+  return {msgId,msgElementId:elementId,chatType:1,fileErrCode:'0',filePath:requested,...overrides};
+}
+const session = {getSessionId:()=>1,getMsgService:()=>service};
+process._linkedBinding = () => ({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}});
+assert.ok(eval(arm).startsWith('ARMED'));
+const call = source => JSON.parse(eval(source));
+const tick = () => new Promise(resolve => setImmediate(resolve));
+(async () => {
+  mode='delayed';
+  assert.equal(call(start).status,'pending');
+  assert.equal(call(cancel).status,'cancelled');
+  delayed(); await tick();
+  assert.equal(calls,0,'a late readback may not start a download');
+
+  mode='pending';
+  assert.equal(call(start).status,'pending'); await tick();
+  assert.equal(calls,1);
+  listener.onRichMediaDownloadComplete(completion({msgElementId:'123'}));
+  listener.onRichMediaDownloadComplete(completion({filePath:requested+'.other'}));
+  assert.equal(call(poll).status,'pending','Promise acceptance and unmatched callbacks do not complete');
+  assert.equal(call(cancel).status,'cancelled');
+  assert.equal(call(start).code,409,'native callback is still outstanding');
+  const oldPath=requested;
+  fs.writeFileSync(oldPath,silk);
+  listener.onRichMediaDownloadComplete(completion());
+  assert.equal(fs.existsSync(path.dirname(oldPath)),false);
+
+  assert.equal(call(start).status,'pending'); await tick();
+  assert.notEqual(requested,oldPath);
+  listener.onRichMediaDownloadComplete(completion({filePath:oldPath}));
+  fs.writeFileSync(requested,Buffer.alloc(silk.length,1));
+  listener.onRichMediaDownloadComplete(completion());
+  assert.equal(call(poll).status,'invalid_response');
+
+  mode='sync';
+  assert.equal(call(start).status,'pending'); await tick();
+  const success=call(poll);
+  assert.equal(fs.existsSync(path.dirname(requested)),false);
+  assert.equal(call(poll).code,404);
+  assert.equal(calls,3);
+  mode='delayed';
+  assert.equal(call(start).status,'pending');
+  assert.ok(eval(stop).startsWith('STOPPED'));
+  delayed(); await tick();
+  assert.equal(calls,3,'stop prevents a late readback from dispatching');
+  assert.equal(call(start).status,'not_ready');
+  process.stdout.write(JSON.stringify(success));
+})().catch(error => { console.error(error); process.exitCode=1; });
+"#;
+    let mut child = std::process::Command::new("node")
+        .args(["--unhandled-rejections=strict", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = String::from_utf8(output.stdout).unwrap();
+    assert!(!json.contains("filePath"));
+    let QueryOutcome::Success(QueryData::VoiceDownload(result)) =
+        qq_query::decode_query_result(&query, &scope, &json).unwrap()
+    else {
+        panic!("expected owned voice bytes");
+    };
+    assert_eq!(result.silk_hex, "02232153494c4b5f563300ff");
+    assert_eq!(result.info.size, 12);
+}
 #[test]
 fn fixed_scripts_cover_maps_messages_directories_and_lifecycle_edges() {
     let s = scope();

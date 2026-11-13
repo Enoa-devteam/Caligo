@@ -156,12 +156,20 @@ export function initialProfiles() {
     [{ name: 'Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds', state: 'partial_offline', evidence: [src(MEDIA, 'pub fn verify_tools('), src(MEDIA, 'impl MediaProcessRunner for OsProcessRunner')] }],
     [src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS'), src('crates/caligo-core/tests/media_tool_lab.rs', '#[test]')],
     'No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented.');
+  const voiceDownload = scoped('partial_offline', 'The exact-profile Caligo bridge downloads bounded private incoming Silk through a scoped daemon host query.',
+    [src(QUERY, 'function startVoiceDownload('), src('crates/caligo-bridge/src/qq_v8.rs', 'onRichMediaDownloadComplete:')],
+    [src(DAEMON, 'pub fn query_host('), src(RESIDENT, 'pub fn drain_queries(&self)')],
+    { requirement: 'Account-scoped Caligo bridge IPC and exact host profile.', enforcement: [src(QUERY, 'fn matches_voice_profile('), src(BROKER, "pub(crate) fn begin<'a>(")], limits: 'Available through the daemon Rust host-query API.' },
+    [{ name: 'Wrapper exact message readback, matching callback, and bounded file integrity validation', state: 'offline_only', evidence: [src(QUERY, 'function startVoiceDownload(')] }],
+    [src(LEDGER, 'A2 私聊语音有界下载'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', 'fn voice_download_waits_for_correlated_callback_and_verifies_owned_file()'), src('crates/caligo-core/tests/capability_query_lab.rs', 'fn voice_download_requires_scoped_advertisement_and_exact_owned_response()')],
+    'Private incoming Silk only. Group/media variants, public OneBot retrieval, and Caligo QQ field acceptance remain open.');
+  voiceDownload.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact loaded-module files are hash checked. Caligo has only offline evidence.' };
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
   const login = { ...clone(query), status: 'partial_offline',
     reason: 'Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.',
     acceptance: { ...clone(query.acceptance), limits: 'Offline fake-store login response only; actual normal-path nickname/account result is not established.' } };
-  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool };
+  const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload };
   for (const [id, symbol, file, flag, dep] of [
     ['http', 'pub fn serve_http(', SERVER, '--onebot-http-bind', 'DaemonSendSink and shared registry'],
     ['http_post', 'pub fn run_http_post_ready(', TRANSPORT, '--onebot-http-post-url', 'Daemon ordered HTTP POST event bus and quick operations'],
@@ -218,6 +226,7 @@ export function chooseAssessment(entry, registry) {
   if (entry.id === 'message_segment.text') return 'text_segment';
   if (['event.OB11BaseMessageEvent', 'event_schema.OB11MessageSchema'].includes(entry.id)) return 'message_event';
   if (entry.category === 'wrapper_interfaces') {
+    if (entry.name === 'downloadRichMedia' && entry.reference.interface === 'NodeIKernelMsgService') return 'voice_download';
     if (entry.name === 'getUidByUin' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';
     if (entry.name === 'getUinByUid' && entry.reference.interface === 'NodeIKernelProfileService') return 'profile_service';
     if (entry.name === 'getUidByUins' && entry.reference.interface === 'NodeIKernelGroupService') return 'capability_query';

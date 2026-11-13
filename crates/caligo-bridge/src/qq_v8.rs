@@ -492,7 +492,10 @@ pub const D8_START_JS: &str = r"
     R.listener = {
       onRecvMsg: function (a) { pushList('recv', a); },
       onMsgInfoListUpdate: function (a) { pushList('update', a); },
-      onAddSendMsg: function (m) { push('add_send', m); }
+      onAddSendMsg: function (m) { push('add_send', m); },
+      onRichMediaDownloadComplete: function (result) {
+        if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
+      }
     };
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
@@ -551,6 +554,7 @@ pub const D8_STOP_JS: &str = r"
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
     var r = 'no-listener';
+    R.stopped = true;
     try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); } catch (e) { r = 'ERR:' + String(e).slice(0, 100); }
     var sid = R.sid;
     delete G.__caligo_res;

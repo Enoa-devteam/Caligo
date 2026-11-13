@@ -8,7 +8,7 @@
 
 恢复执行已完成按连接代次的能力声明、覆盖清单刷新和普通私聊/群聊入站事件接线。下一步先离线核对已登录实例可用的当前身份来源和宿主绑定，再接 `LoginInfo`；若固定参考无可用合同，保持拒绝并推进独立的媒体、SSO 或扩展动作能力。详见[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a1a2-普通私聊与群聊的事件接线)。
 
-语音检查点增加固定 profile 的 `VoiceInfo`。下载应在同一 owner/会话内再次精确回读并关联 `onRichMediaDownloadComplete` 的消息和元素身份，验证受控目标、大小和完整性。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音精确回读)
+语音检查点增加固定 profile 的 `VoiceInfo` 和 `VoiceDownload`。下一步为持久化语音元素身份、OneBot `get_record` 与独立转换合同，随后推进上传和其他媒体。固定参考 SSO 成功样本依赖实验转换钩子，自有二进制转换仍缺合同与验证。超时后保留在途下载和唯一目标至精确回调，现场仍待候选冻结。[执行记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音有界下载)
 
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 
