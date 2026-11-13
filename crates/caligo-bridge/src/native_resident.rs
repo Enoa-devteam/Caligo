@@ -168,8 +168,7 @@ fn join_owned_thread(
 /// (unknown;core 按"缺必需真实字段"处理,不误路由为私聊)。
 pub fn chat_type_for_peer(peer: &str, groups: &HashSet<u64>) -> u32 {
     match peer.parse::<u64>() {
-        // [research] 未配置群白名单时，任何可解析为 u64 的对端都按群会话处理。
-        Ok(code) if groups.is_empty() || groups.contains(&code) => 2,
+        Ok(code) if groups.contains(&code) => 2,
         _ => 0,
     }
 }
@@ -180,22 +179,15 @@ pub fn chat_type_for_peer(peer: &str, groups: &HashSet<u64>) -> u32 {
 /// because neither has a proven CPB mapping, so current CPB records stay out of
 /// the event stream.
 fn cpb_event_from_record(fields: &RecordFields, groups: &HashSet<u64>) -> Option<OwnedEvent> {
-    // [research] 当前 CPB 键表没有 native_id 的实证映射，senderUid 与 UIN 也
-    // 是不同身份域。为了让本地验证链路能跑通，这里对两者做显式兜底：
-    //   native_id  := "cpb-<seq>"（仅用于本地去重，绝不能当作平台消息号）
-    //   sender_uin := senderUid（opaque 标识，不是 QQ 号）
-    let seq_value = fields.seq?;
-    let native_owned = fields
+    let native_id = fields
         .native_id
         .as_deref()
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("cpb-{seq_value}"));
+        .filter(|value| !value.is_empty())?;
     let sender_uin = fields
         .sender_uin
         .as_deref()
-        .or(fields.sender_uid.as_deref())
         .filter(|value| !value.is_empty())?;
+    fields.seq?;
     let peer = fields
         .peer_uid
         .as_deref()
@@ -214,7 +206,7 @@ fn cpb_event_from_record(fields: &RecordFields, groups: &HashSet<u64>) -> Option
         peer_uid: peer.to_owned(),
         peer_uin: peer.to_owned(),
         sender_uin: sender_uin.to_owned(),
-        native_id: native_owned,
+        native_id: native_id.to_owned(),
         text: text.to_owned(),
         msg_time: Some(msg_time),
     })
