@@ -220,11 +220,24 @@ pub struct MsgEvent {
     pub text: String,
     /// 平台时间(若有;来源单独记录,不猜)。
     pub platform_time: Option<u64>,
+    /// Owned wrapper evidence retained through journal/recovery; absent on legacy CPB records.
+    pub wrapper_message: Option<wrapper_message::WrapperMessageEnvelope>,
     /// OneBot projection only when each numeric field is independently proven.
     pub onebot_projection: Option<OneBotMessageProjection>,
     /// 本地观察时间(unix ms,单调性不作保证,仅展示)。
     pub observed_at_unix_ms: u64,
     pub source: EventSource,
+}
+
+impl MsgEvent {
+    /// Include the retained raw record as well as the normalized text in queue budgets.
+    pub fn queue_bytes(&self) -> usize {
+        self.text.len().saturating_add(self.sender.len())
+            .saturating_add(self.native_id.0.len()).saturating_add(128)
+            .saturating_add(self.wrapper_message.as_ref().map_or(0, |raw| {
+                serde_json::to_vec(raw).map_or(usize::MAX, |bytes| bytes.len())
+            }))
+    }
 }
 
 /// 发送动作(计划 §6.6)。`payload_hash` 覆盖全部语义参数;
@@ -456,3 +469,4 @@ pub mod ipc_v2;
 pub mod ipc_v3;
 pub mod onebot_traits;
 pub mod qq_wire;
+pub mod wrapper_message;

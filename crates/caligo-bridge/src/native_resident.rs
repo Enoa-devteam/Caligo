@@ -225,6 +225,7 @@ fn cpb_event_from_record(fields: &RecordFields, groups: &HashSet<u64>) -> Option
         native_id: native_id.to_owned(),
         text: text.to_owned(),
         msg_time: Some(msg_time),
+        wrapper_message: None,
     })
 }
 

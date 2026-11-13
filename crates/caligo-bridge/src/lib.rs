@@ -882,6 +882,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     // Quarantined(写阶段日志,worker 退出)。
     {
         let r = resident.clone();
+        let wrapper_binding = caligo_model::wrapper_message::WrapperBinding {
+            account: account.clone(), session_generation,
+            host_nonce: daemon_client::host_instance_nonce(), wrapper_session: String::new(),
+        };
         qq_entry::install_drain_hook(Box::new(move || {
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
             // 重试直至成功;首次失败原因写阶段日志(不吞)。
@@ -906,9 +910,12 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             if OWNER_INIT.load(Ordering::Relaxed) {
                 match crate::qq_v8::poll_listener_json() {
                     Ok(json) if !json.starts_with("NOT_ARMED") => {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                        let mut binding = wrapper_binding.clone();
+                        binding.wrapper_session = crate::qq_v8::listener_session().unwrap_or_default();
+                        if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
                             // D9:sendResults 回收(fired 的 Promise 结果)。
-                            if let Some(sr) = v.get("sendResults").and_then(|x| x.as_object()) {
+                            {
+                                let sr = &batch.send_results;
                                 let mut done: Vec<(String, String)> = Vec::new();
                                 let mut rejected: Vec<(String, String)> = Vec::new();
                                 for (mid, st) in sr {
@@ -934,40 +941,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                                     r.complete_sends(&done, &rejected);
                                 }
                             }
-                            if let Some(items) = v.get("items").and_then(|x| x.as_array()) {
-                                for it in items {
-                                    let g = |k: &str| {
-                                        it.get(k)
-                                            .map(|x| {
-                                                if x.is_string() {
-                                                    x.as_str().unwrap_or("").to_string()
-                                                } else {
-                                                    x.to_string()
-                                                }
-                                            })
-                                            .unwrap_or_default()
-                                    };
-                                    let ev = resident::OwnedEvent {
-                                        source: if g("src") == "update" {
-                                            resident::EventSourceKind::Update
-                                        } else {
-                                            resident::EventSourceKind::Recv
-                                        },
-                                        chat_type: it
-                                            .get("chatType")
-                                            .and_then(|x| x.as_u64())
-                                            .unwrap_or(0)
-                                            as u32,
-                                        peer_uid: g("peerUid"),
-                                        peer_uin: g("peerUin"),
-                                        sender_uin: g("senderUin"),
-                                        native_id: g("msgId"),
-                                        text: g("text"),
-                                        msg_time: it.get("msgTime").and_then(|x| x.as_u64()),
-                                    };
-                                    r.ingest_event(ev);
-                                }
-                            }
+
                         }
                     }
                     Ok(_) => {}

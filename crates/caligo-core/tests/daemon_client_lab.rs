@@ -543,6 +543,7 @@ fn t07_unacked_event_replays_after_break_before_consume() {
             native_id: "EVT-T07-1".into(),
             text: "CALIGO-T07-REPLAY".into(),
             msg_time: None,
+            wrapper_message: None,
         })
         .unwrap();
 

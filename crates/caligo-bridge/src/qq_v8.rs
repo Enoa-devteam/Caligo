@@ -369,42 +369,56 @@ pub const D8_START_JS: &str = r"
     }
     if (!live) return 'ERR:no live session';
     var ms = live.getMsgService();
-    var R = { sid: sidName, session: live, ms: ms, recv: [], seq: 0, listenerId: null, sendResults: {} };
+    var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
+      rejected: 0, overflow: 0, listenerId: null, sendResults: {} };
+    var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var push = function (src, m) {
       try {
-        var txt = '';
-        var els = m.elements || [];
-        for (var j = 0; j < els.length; j++) {
-          if (els[j] && els[j].textElement) txt += els[j].textElement.content || '';
+        if (!m || typeof m !== 'object' || !Array.isArray(m.elements) ||
+            !m.elements.length || m.elements.length > 128) { R.rejected++; return; }
+        var required = ['msgId','msgSeq','msgRandom','msgTime','guildId',
+          'peerUid','peerUin','senderUid','senderUin'];
+        for (var j = 0; j < required.length; j++) {
+          if (typeof m[required[j]] !== 'string') { R.rejected++; return; }
         }
-        R.recv.push({
-          seq: R.seq++, ts: Date.now(), src: src,
-          msgId: String(m.msgId || '').slice(0, 40),
-          chatType: m.chatType,
-          peerUid: String(m.peerUid || '').slice(0, 48),
-          peerUin: String(m.peerUin || '').slice(0, 20),
-          senderUid: String(m.senderUid || '').slice(0, 48),
-          senderUin: String(m.senderUin || '').slice(0, 20),
-          msgTime: (typeof m.msgTime === 'number') ? m.msgTime : null,
-          sendStatus: m.sendStatus, msgType: m.msgType, subMsgType: m.subMsgType,
-          text: txt.slice(0, 8000)
-        });
-        if (R.recv.length > 200) R.recv.splice(0, R.recv.length - 200);
-      } catch (err) {}
+        if ((m.chatType !== 1 && m.chatType !== 2) ||
+            !Number.isInteger(m.msgType) || m.msgType < 0 ||
+            !Number.isInteger(m.subMsgType) || m.subMsgType < 0 ||
+            (m.clientSeq !== undefined && typeof m.clientSeq !== 'string') ||
+            (m.sendStatus !== undefined && !Number.isInteger(m.sendStatus))) { R.rejected++; return; }
+        var elements = [], textBytes = 0;
+        for (var j = 0; j < m.elements.length; j++) {
+          var e = m.elements[j], t = e && e.textElement;
+          if (!e || e.elementType !== 1 || !t || typeof t.content !== 'string' || t.atType !== 0 ||
+              (t.atUid !== undefined && t.atUid !== '') ||
+              (t.atNtUid !== undefined && t.atNtUid !== '') ||
+              (t.atTinyId !== undefined && t.atTinyId !== '')) { R.rejected++; return; }
+          textBytes += utf8Bytes(t.content);
+          if (textBytes > 49152) { R.overflow++; return; }
+          elements.push({elementType:1, textElement:{content:t.content, atType:0,
+            atUid:'', atNtUid:'', atTinyId:''}});
+        }
+        var record = {msgId:m.msgId, msgSeq:m.msgSeq, msgRandom:m.msgRandom,
+          msgTime:m.msgTime, clientSeq:m.clientSeq, guildId:m.guildId, chatType:m.chatType,
+          msgType:m.msgType, subMsgType:m.subMsgType,
+          peerUid:m.peerUid, peerUin:m.peerUin, senderUid:m.senderUid, senderUin:m.senderUin,
+          sendStatus:m.sendStatus, elements:elements};
+        var item = {source:src, observed_at_unix_ms:Date.now(), record:record};
+        var bytes = utf8Bytes(JSON.stringify(item));
+        if (bytes > 65536 || R.recv.length >= 128 || R.recvBytes + bytes > 393216) {
+          R.overflow++; return;
+        }
+        R.recv.push(item); R.recvBytes += bytes;
+      } catch (err) { R.rejected++; }
+    };
+    var pushList = function (src, a) {
+      if (!Array.isArray(a)) { R.rejected++; return; }
+      for (var i = 0; i < a.length; i++) push(src, a[i]);
     };
     R.listener = {
-      onRecvMsg: function (a) {
-        try {
-          var arr = Array.isArray(a) ? a : (a && a.msgList ? a.msgList : [a]);
-          for (var i = 0; i < arr.length; i++) push('recv', arr[i]);
-        } catch (err) {}
-      },
-      onMsgInfoListUpdate: function (a) {
-        try {
-          var arr = Array.isArray(a) ? a : (a && a.msgList ? a.msgList : [a]);
-          for (var i = 0; i < arr.length; i++) push('update', arr[i]);
-        } catch (err) {}
-      }
+      onRecvMsg: function (a) { pushList('recv', a); },
+      onMsgInfoListUpdate: function (a) { pushList('update', a); },
+      onAddSendMsg: function (m) { push('add_send', m); }
     };
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
@@ -420,9 +434,23 @@ pub const D8_POLL_JS: &str = r"
     var G = globalThis;
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
-    var out = JSON.stringify({ sid: R.sid, n: R.recv.length, items: R.recv, sendResults: R.sendResults || {} });
-    R.recv = [];
-    return out.slice(0, 900000);
+    var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
+      sendResults:R.sendResults || {}};
+    var json = JSON.stringify(out);
+    // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
+    if (Buffer.byteLength(json, 'utf8') > 524288) {
+      out.sendResults = {};
+      var keys = Object.keys(R.sendResults || {});
+      for (var i = 0; i < keys.length; i++) {
+        out.sendResults[keys[i]] = R.sendResults[keys[i]];
+        if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288) {
+          delete out.sendResults[keys[i]]; break;
+        }
+      }
+      json = JSON.stringify(out);
+    }
+    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0;
+    return json;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 ";
@@ -485,13 +513,24 @@ pub fn poll_listener_json() -> Result<String, V8Error> {
     unsafe { exec_script(&syms, isolate_addr(), D8_POLL_JS) }
 }
 
+static D8_SESSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Captured at successful listener acquisition, not trusted from a later batch.
+pub fn listener_session() -> Option<String> {
+    D8_SESSION.lock().ok()?.clone()
+}
+
 /// 注册监听器(D8_START_JS)。返回 "ARMED sid=.. lidRet=N" / "ALREADY .." / "ERR:.."。
 pub fn start_listener() -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 同上。
-    unsafe { exec_script(&syms, isolate_addr(), D8_START_JS) }
+    let result = unsafe { exec_script(&syms, isolate_addr(), D8_START_JS) }?;
+    if let Some(session) = result.strip_prefix("ARMED sid=").and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s)) {
+        if let Ok(mut bound) = D8_SESSION.lock() { *bound = Some(session.to_owned()); }
+    }
+    Ok(result)
 }
 
 /// 对称移除监听器(D8_STOP_JS)。返回 "STOPPED .. remove=.." / "NOT_ARMED"。

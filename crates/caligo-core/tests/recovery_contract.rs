@@ -70,6 +70,7 @@ fn event(native_id: &str, text: &str) -> MsgEvent {
         native_id: NativeMessageId(native_id.into()),
         text: text.into(),
         platform_time: None,
+        wrapper_message: None,
         onebot_projection: None,
         observed_at_unix_ms: 1,
         source: EventSource::Recv,

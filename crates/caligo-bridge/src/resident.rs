@@ -86,6 +86,30 @@ pub struct OwnedEvent {
     pub text: String,
     /// 平台时间(原生 msgTime;取不到 None)。
     pub msg_time: Option<u64>,
+    pub wrapper_message: Option<caligo_model::wrapper_message::WrapperMessageEnvelope>,
+}
+
+impl OwnedEvent {
+    pub fn from_wrapper(
+        envelope: caligo_model::wrapper_message::WrapperMessageEnvelope,
+    ) -> Result<Self, &'static str> {
+        use caligo_model::wrapper_message::WrapperSource;
+        envelope.validate()?;
+        Ok(Self {
+            source: match envelope.source {
+                WrapperSource::Recv | WrapperSource::AddSend => EventSourceKind::Recv,
+                WrapperSource::Update => EventSourceKind::Update,
+            },
+            chat_type: envelope.record.chat_type,
+            peer_uid: envelope.record.peer_uid.clone(),
+            peer_uin: envelope.record.peer_uin.clone(),
+            sender_uin: envelope.record.sender_uin.clone(),
+            native_id: envelope.record.msg_id.clone(),
+            text: envelope.text()?,
+            msg_time: envelope.platform_time_seconds(),
+            wrapper_message: Some(envelope),
+        })
+    }
 }
 
 /// 生命周期 token:回调/迟交结果必须携带;关闭后失效。
@@ -173,6 +197,9 @@ pub struct ResidentCounters {
     pub marked_unknown: u64,
     pub quarantine_events: u64,
     pub events_gap_dropped: u64,
+    pub wrapper_records_rejected: u64,
+    pub wrapper_records_overflow: u64,
+    pub wrapper_batches_rejected: u64,
     /// adapter 返回未知 request_id / 不再处于 SendPending 的响应被隔离。
     pub orphan_results_ignored: u64,
 }
@@ -693,6 +720,33 @@ impl<A: HostAdapter> Resident<A> {
             accepted += 1;
         }
         accepted
+    }
+
+    /// Decode the exact D8 wire batch used by the normal owner hook.
+    pub fn ingest_wrapper_batch(
+        &self,
+        json: &str,
+        binding: &caligo_model::wrapper_message::WrapperBinding,
+    ) -> Result<caligo_model::wrapper_message::WrapperDrain, &'static str> {
+        let batch = match caligo_model::wrapper_message::decode_d8_batch(json, binding) {
+            Ok(batch) => batch,
+            Err(error) => {
+                self.core.lock().unwrap().counters.wrapper_batches_rejected += 1;
+                return Err(error);
+            }
+        };
+        {
+            let mut c = self.core.lock().unwrap();
+            c.counters.wrapper_records_rejected = c.counters.wrapper_records_rejected.saturating_add(batch.stats.rejected);
+            c.counters.wrapper_records_overflow = c.counters.wrapper_records_overflow.saturating_add(batch.stats.overflow);
+        }
+        for event in &batch.events {
+            // Validation was completed by the shared decoder before queue admission.
+            if let Ok(event) = OwnedEvent::from_wrapper(event.clone()) {
+                self.ingest_event(event);
+            }
+        }
+        Ok(batch)
     }
 
     /// 宿主(pump/D8 排空)注入 owned 事件;有界窗口满 → 计数丢弃(不静默)。

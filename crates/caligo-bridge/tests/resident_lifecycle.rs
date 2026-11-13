@@ -660,6 +660,7 @@ fn l16_close_protocol_and_late_callbacks() {
                 native_id: "late".into(),
                 text: String::new(),
                 msg_time: None,
+                wrapper_message: None,
             },
         )
         .is_err());
@@ -1088,6 +1089,7 @@ impl HostAdapter for ReentrantHost {
                         ),
                         text: "inline".into(),
                         msg_time: None,
+                        wrapper_message: None,
                     },
                 );
                 Ok(HostOpResult::Sent {
@@ -1108,6 +1110,7 @@ impl HostAdapter for ReentrantHost {
                             native_id: "NM-LATE-CLOSE".into(),
                             text: "late-during-remove".into(),
                             msg_time: None,
+                            wrapper_message: None,
                         },
                     );
                 }

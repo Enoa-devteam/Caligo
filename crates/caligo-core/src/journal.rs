@@ -80,6 +80,8 @@ pub struct EventRecord {
     pub native_id: String,
     pub text: String,
     pub platform_time: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapper_message: Option<caligo_model::wrapper_message::WrapperMessageEnvelope>,
     /// Old journal rows remain valid and never gain guessed OneBot fields.
     #[serde(default)]
     pub onebot_projection: Option<caligo_model::OneBotMessageProjection>,

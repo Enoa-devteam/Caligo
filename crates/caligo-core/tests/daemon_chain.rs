@@ -222,6 +222,7 @@ fn spawn_bridge_agent(
                                         native_id: native_id.clone(),
                                         text: text.clone(),
                                         platform_time: Some(1_791_621_805),
+                                        wrapper_message: None,
                                         onebot_projection: Some(
                                             caligo_model::OneBotMessageProjection {
                                                 peer_id: peer,
@@ -408,6 +409,7 @@ fn event_roundtrip_through_pipe_and_journal() {
         native_id: "EVT-1".into(),
         text: "CALIGO-K5-EVT".into(),
         platform_time: Some(1234),
+        wrapper_message: None,
         onebot_projection: Some(caligo_model::OneBotMessageProjection {
             peer_id: 123456,
             sender_user_id: 10002,

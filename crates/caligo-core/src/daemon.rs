@@ -345,6 +345,11 @@ impl Daemon {
         self.onebot_events.lock().unwrap().unsubscribe(id)
     }
 
+    /// Observe queue loss without consuming the transport's events.
+    pub fn onebot_event_subscriber_dropped(&self, id: u64) -> Option<u64> {
+        self.onebot_events.lock().unwrap().subscriber_dropped(id)
+    }
+
     pub(crate) fn publish_onebot_event_json(&self, event_json: &str) {
         if self.onebot_http_post_ordered.load(Ordering::Relaxed) {
             let _ = self
@@ -987,6 +992,7 @@ impl Daemon {
             native_id: NativeMessageId(p.native_id),
             text: p.text,
             platform_time: p.platform_time,
+            wrapper_message: p.wrapper_message,
             onebot_projection: p.onebot_projection,
             observed_at_unix_ms: p.observed_at_unix_ms,
             source: match p.source.as_str() {
@@ -1047,6 +1053,7 @@ fn daemon_event_payload(ev: MsgEvent) -> EventPayload {
         native_id: ev.native_id.0,
         text: ev.text,
         platform_time: ev.platform_time,
+        wrapper_message: ev.wrapper_message,
         onebot_projection: ev.onebot_projection,
         observed_at_unix_ms: ev.observed_at_unix_ms,
         source: match ev.source {

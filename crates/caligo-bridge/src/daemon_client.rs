@@ -67,7 +67,7 @@ fn process_created_utc() -> String {
 }
 
 /// 宿主 nonce:PID 与进程存活期锚定;同进程恒定,跨进程不重复。
-fn host_instance_nonce() -> u64 {
+pub(crate) fn host_instance_nonce() -> u64 {
     static NONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *NONCE.get_or_init(|| {
         let pid = std::process::id() as u64;
@@ -772,6 +772,72 @@ pub fn run_worker<A: crate::host_adapter::HostAdapter>(
     }
 }
 
+/// Convert resident events through the production worker seam. Wrapper binding
+/// must match this authenticated host/account/session; old core generations are
+/// still audited by AccountActor when replayed from their original connection.
+pub fn event_payload(
+    cfg: &DaemonClientConfig,
+    ev: &crate::resident::OwnedEvent,
+    wire_seq: u64,
+) -> Result<EventPayload, &'static str> {
+    if let Some(wrapper) = &ev.wrapper_message {
+        wrapper.validate()?;
+        if wrapper.binding.account != cfg.account
+            || wrapper.binding.session_generation != cfg.session_generation
+            || wrapper.binding.host_nonce != cfg.host_nonce
+        { return Err("wrapper_binding_mismatch"); }
+    }
+    Ok(EventPayload {
+                event_seq: wire_seq, // wire 身份 = worker 本地 seq(EventAck 回显键)
+                session_generation: cfg.session_generation,
+                session: serde_json::json!({
+                    "account": cfg.account,
+                    // kind 零猜测:2=群、1=私聊、其他(含 native 路线的
+                    // unknown=0)如实上送,core 按"缺必需真实字段"处理。
+                    "kind": match ev.chat_type {
+                        2 => "group",
+                        1 => "private",
+                        _ => "unknown",
+                    },
+                    "peer": if ev.wrapper_message.is_some() { &ev.peer_uin } else { &ev.peer_uid },
+                }),
+                // 自发判别:account(uin)或 self_uid(uid)双域比对;
+                // 两者都未提供/不匹配 = incoming(不猜映射)。
+                direction: if (!cfg.account.is_empty() && ev.sender_uin == cfg.account)
+                    || (!cfg.self_uid.is_empty() && ev.sender_uin == cfg.self_uid)
+                {
+                    "self_sent"
+                } else {
+                    "incoming"
+                }
+                .into(),
+                sender: ev.sender_uin.clone(),
+                native_id: ev.native_id.clone(),
+                text: ev.text.clone(),
+                platform_time: ev.msg_time,
+                wrapper_message: ev.wrapper_message.clone(),
+                // Native receive fields do not currently provide a proven
+                // OneBot real_id/time/peer projection.
+                onebot_projection: None,
+                observed_at_unix_ms: ev.wrapper_message.as_ref().map_or(0, |e| e.observed_at_unix_ms),
+                source: match ev.source {
+                    crate::resident::EventSourceKind::Recv => "recv",
+                    crate::resident::EventSourceKind::Update => "update",
+                }
+                .into(),
+    })
+}
+
+fn event_wire_bytes(event: &EventPayload) -> usize {
+    serde_json::to_vec(event).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+fn pop_event_window(window: &mut VecDeque<(u64, EventPayload)>, bytes: &mut usize) -> Option<EventPayload> {
+    let (_, event) = window.pop_front()?;
+    *bytes = bytes.saturating_sub(event_wire_bytes(&event));
+    Some(event)
+}
+
 enum SessionEnd {
     CoreStopped,
     LocalStop,
@@ -887,56 +953,19 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
         while let Ok(ev) = events_rx.try_recv() {
             let wire_seq = *next_local_seq;
             *next_local_seq += 1;
-            let payload = EventPayload {
-                event_seq: wire_seq, // wire 身份 = worker 本地 seq(EventAck 回显键)
-                session_generation: cfg.session_generation,
-                session: serde_json::json!({
-                    "account": cfg.account,
-                    // kind 零猜测:2=群、1=私聊、其他(含 native 路线的
-                    // unknown=0)如实上送,core 按"缺必需真实字段"处理。
-                    "kind": match ev.chat_type {
-                        2 => "group",
-                        1 => "private",
-                        _ => "unknown",
-                    },
-                    "peer": ev.peer_uid,
-                }),
-                // 自发判别:account(uin)或 self_uid(uid)双域比对;
-                // 两者都未提供/不匹配 = incoming(不猜映射)。
-                direction: if (!cfg.account.is_empty() && ev.sender_uin == cfg.account)
-                    || (!cfg.self_uid.is_empty() && ev.sender_uin == cfg.self_uid)
-                {
-                    "self_sent"
-                } else {
-                    "incoming"
-                }
-                .into(),
-                sender: ev.sender_uin.clone(),
-                native_id: ev.native_id.clone(),
-                text: ev.text.clone(),
-                platform_time: ev.msg_time,
-                // Native receive fields do not currently provide a proven
-                // OneBot real_id/time/peer projection.
-                onebot_projection: None,
-                observed_at_unix_ms: 0,
-                source: match ev.source {
-                    crate::resident::EventSourceKind::Recv => "recv",
-                    crate::resident::EventSourceKind::Update => "update",
-                }
-                .into(),
+            let payload = match event_payload(cfg, &ev, wire_seq) {
+                Ok(payload) => payload,
+                Err(_) => { c.protocol_errors += 1; continue; }
             };
             let seq = wire_seq;
-            let bytes = payload.native_id.len() + payload.text.len() + 128;
+            let bytes = event_wire_bytes(&payload);
+            if bytes > EVENT_WINDOW_MAX_BYTES { c.events_gap_dropped += 1; continue; }
             while unacked.len() + 1 > EVENT_WINDOW_MAX_ITEMS
-                || *unacked_bytes + bytes > EVENT_WINDOW_MAX_BYTES
+                || unacked_bytes.saturating_add(bytes) > EVENT_WINDOW_MAX_BYTES
             {
-                if let Some((s, _)) = unacked.pop_front() {
-                    if let Some((_, e)) = unacked.front() {
-                        *unacked_bytes -= e.native_id.len() + e.text.len() + 128;
-                    }
-                    let _ = s;
+                if pop_event_window(unacked, unacked_bytes).is_some() {
                     c.events_gap_dropped += 1;
-                }
+                } else { break; }
             }
             unacked.push_back((seq, payload.clone()));
             *unacked_bytes += bytes;
@@ -1027,8 +1056,7 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                     .map(|(s, _)| *s <= *acked_high)
                     .unwrap_or(false)
                 {
-                    if let Some((_, e)) = unacked.pop_front() {
-                        *unacked_bytes -= e.native_id.len() + e.text.len() + 128;
+                    if pop_event_window(unacked, unacked_bytes).is_some() {
                         c.events_acked += 1;
                     }
                 }
@@ -1093,6 +1121,27 @@ fn peer_uid_from_target(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_window_releases_the_popped_record_with_different_sizes() {
+        let event = EventPayload {
+            event_seq: 1, session_generation: 1,
+            session: serde_json::json!({"account":"10001","kind":"private","peer":"20002"}),
+            direction: "incoming".into(), sender: "20002".into(), native_id: "1".into(),
+            text: "x".repeat(10000), platform_time: None, wrapper_message: None,
+            onebot_projection: None, observed_at_unix_ms: 1, source: "recv".into(),
+        };
+        let first_bytes = event_wire_bytes(&event);
+        let mut second = event.clone(); second.event_seq=2; second.text="tiny".into();
+        let second_bytes=event_wire_bytes(&second);
+        let mut window=VecDeque::from([(1,event),(2,second)]);
+        let mut bytes=first_bytes+second_bytes;
+        assert_eq!(pop_event_window(&mut window,&mut bytes).unwrap().event_seq,1);
+        assert_eq!(bytes,second_bytes);
+        assert_eq!(pop_event_window(&mut window,&mut bytes).unwrap().event_seq,2);
+        assert_eq!(bytes,0);
+        assert!(pop_event_window(&mut window,&mut bytes).is_none());
+    }
 
     fn framed(msg: &CoreToBridgeMsg) -> Vec<u8> {
         encode_frame(&serde_json::to_vec(msg).unwrap()).unwrap()
