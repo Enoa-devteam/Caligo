@@ -702,7 +702,8 @@ pub struct QqUidMapProbeCtx {
     /// NUL-terminated UTF-16 path under the workspace's ignored local-evidence directory.
     pub output_path: usize,
     pub timeout_ms: u32,
-    /// 0 = round-trip resolver query; 1 = GroupService surface only.
+    /// 0 = GroupService round trip; 1 = GroupService surface only;
+    /// 2 = exact-build ProfileService round trip.
     pub mode: u32,
 }
 
@@ -712,6 +713,9 @@ pub struct QqUidMapProbeCtx {
 /// the selected QQNT wrapper methods run from the established K4 owner loop.
 /// Round-trip results contain raw identity values; all output stays under
 /// `local-evidence/`.
+///
+/// The loader must verify the exact loaded QQNT, major and wrapper module
+/// identities for mode 2 before invoking this entry.
 #[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx) -> u32 {
@@ -720,11 +724,9 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
     }
     // SAFETY: loader supplies this fixed repr(C) context in target process memory.
     let view = unsafe { &*ctx };
-    let surface_only = match view.mode {
-        0 if view.uin > 0 => false,
-        1 if view.uin == 0 => true,
-        _ => return uid_map_probe::code::ERR_BAD_MODE,
-    };
+    if !matches!((view.mode, view.uin), (1, 0) | (0 | 2, 1..)) {
+        return uid_map_probe::code::ERR_BAD_MODE;
+    }
     if view.output_path == 0 {
         return uid_map_probe::code::ERR_REPORT;
     }
@@ -732,10 +734,11 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
         return uid_map_probe::code::ERR_REPORT;
     };
     let output = std::path::PathBuf::from(path);
-    if surface_only {
-        uid_map_probe::run_surface_only(output, view.timeout_ms)
-    } else {
-        uid_map_probe::run(view.uin, output, view.timeout_ms)
+    match view.mode {
+        0 => uid_map_probe::run(view.uin, output, view.timeout_ms),
+        1 => uid_map_probe::run_surface_only(output, view.timeout_ms),
+        2 => uid_map_probe::run_profile(view.uin, output, view.timeout_ms),
+        _ => uid_map_probe::code::ERR_BAD_MODE,
     }
 }
 

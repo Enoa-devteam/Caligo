@@ -34,6 +34,7 @@ Caligo 是 Windows x64 Rust 工作区：自有 bridge 接入官方 QQ 会话，
 | 改模块边界、IPC 或收发调用链 | [架构指南](docs/guides/architecture.md) |
 | 改 Rust、测试、构建或启动脚本 | [开发与验证](docs/guides/development.md) |
 | 改 FFI、QQ 适配、响应消费者或考虑现场实验 | [原生研究边界](docs/guides/native-research.md) |
+| 改代码或需要调用图/影响分析 | [GitNexus 代码智能指南](docs/guides/gitnexus.md) |
 | 改文档、规则、状态或交接文件 | [文档维护](docs/guides/documentation.md) |
 | 找旧计划、事故、研究合同或验收样本 | [文档索引](docs/README.md)，只读相关条目 |
 

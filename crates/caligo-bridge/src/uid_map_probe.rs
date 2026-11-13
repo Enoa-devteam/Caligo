@@ -28,12 +28,19 @@ const V8: usize = 1;
 const STATE: usize = 2;
 const BINDING: usize = 3;
 const WRAPPERS: usize = 4;
-const GROUP: usize = 5;
+const SERVICE: usize = 5;
 const METHODS: usize = 6;
 const QUERY: usize = 7;
 const POLL: usize = 8;
 const DONE: usize = 9;
 const MAX_RESULT_BYTES: usize = 128 * 1024;
+
+#[derive(Clone, Copy)]
+enum Resolver {
+    GroupSurface,
+    Group(u64),
+    Profile(u64),
+}
 
 fn run_owner_step<F>(
     stage: &AtomicUsize,
@@ -115,16 +122,21 @@ where
 /// `output_path` is supplied by the CLI and must point into ignored local-evidence.
 /// The output intentionally contains the exact IDs so they remain available for local review.
 pub fn run(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
-    run_inner(Some(uin), output_path, timeout_ms)
+    run_inner(Resolver::Group(uin), output_path, timeout_ms)
 }
 
 /// Record only whether the active wrapper session exposes a GroupService object.
 /// This mode never reads or calls UID/UIN resolver methods.
 pub fn run_surface_only(output_path: PathBuf, timeout_ms: u32) -> u32 {
-    run_inner(None, output_path, timeout_ms)
+    run_inner(Resolver::GroupSurface, output_path, timeout_ms)
 }
 
-fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u32 {
+/// Run the read-only ProfileService contract selected by the exact-build loader.
+pub(crate) fn run_profile(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u32 {
+    run_inner(Resolver::Profile(uin), output_path, timeout_ms)
+}
+
+fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if timeout_ms < 1_000 || timeout_ms > 180_000 {
         return code::ERR_BAD_TIMEOUT;
     }
@@ -144,10 +156,12 @@ fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u
     let last_logged_stage = Arc::new(AtomicUsize::new(usize::MAX));
     let hook_last_logged_stage = last_logged_stage.clone();
     let hook_cancelled = cancelled.clone();
-    let surface_only = query_uin.is_none();
-    let hook_surface_only = surface_only;
-    let query_uin = query_uin.map(|uin| uin.to_string());
-    let hook_uin = query_uin.clone().unwrap_or_default();
+    let hook_surface_only = matches!(resolver, Resolver::GroupSurface);
+    let profile = matches!(resolver, Resolver::Profile(_));
+    let uin = match resolver {
+        Resolver::Group(uin) | Resolver::Profile(uin) => uin.to_string(),
+        Resolver::GroupSurface => String::new(),
+    };
     let hook_output = output_path.clone();
     let hook_tx = tx.clone();
 
@@ -209,17 +223,28 @@ fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u
                 &hook_last_logged_stage,
                 &hook_tx,
                 WRAPPERS,
-                GROUP,
+                SERVICE,
                 "uid_map_session_entered",
                 "uid_map_session_ready",
                 "SESSION_READY",
                 crate::qq_v8::start_uid_map_session,
             ),
-            GROUP => run_owner_step(
+            SERVICE if profile => run_owner_step(
                 &hook_stage,
                 &hook_last_logged_stage,
                 &hook_tx,
-                GROUP,
+                SERVICE,
+                QUERY,
+                "uid_map_profile_service_entered",
+                "uid_map_profile_service_ready",
+                "PROFILE_READY",
+                crate::qq_v8::start_uid_map_profile,
+            ),
+            SERVICE => run_owner_step(
+                &hook_stage,
+                &hook_last_logged_stage,
+                &hook_tx,
+                SERVICE,
                 METHODS,
                 "uid_map_group_service_entered",
                 "uid_map_group_service_ready",
@@ -246,7 +271,7 @@ fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u
                 "uid_map_methods_entered",
                 "uid_map_methods_ready",
                 "METHODS_READY",
-                || crate::qq_v8::start_uid_map_methods(&hook_uin),
+                || crate::qq_v8::start_uid_map_methods(&uin),
             ),
             QUERY if hook_surface_only => {
                 hook_stage.store(DONE, Ordering::Release);
@@ -262,7 +287,13 @@ fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u
                 "uid_map_api_entered",
                 "uid_map_api_dispatched",
                 "DISPATCHED",
-                crate::qq_v8::start_uid_map_query,
+                || {
+                    if profile {
+                        crate::qq_v8::query_uid_map_profile(&uin)
+                    } else {
+                        crate::qq_v8::start_uid_map_query()
+                    }
+                },
             ),
             POLL => match crate::qq_v8::poll_uid_map_probe() {
                 Ok(v) if v == "PENDING" => 1,
@@ -311,11 +342,11 @@ fn run_inner(query_uin: Option<u64>, output_path: PathBuf, timeout_ms: u32) -> u
                             "schema": 1,
                             "captured_unix_ms": captured_unix_ms,
                             "pid": std::process::id(),
-                            "requested_uin": query_uin.clone().unwrap_or_default(),
-                            "forward_api": "nodeIKernelGroupService/getUidByUins",
-                            "forward_payload_shape": "[[uin]]",
-                            "reverse_api": "nodeIKernelGroupService/getUinByUids",
-                            "reverse_payload_shape": "[uidList]",
+                            "requested_uin": uin,
+                            "forward_api": if profile { "nodeIKernelProfileService/getUidByUin" } else { "nodeIKernelGroupService/getUidByUins" },
+                            "forward_payload_shape": if profile { "[callFrom, [uin]]" } else { "[[uin]]" },
+                            "reverse_api": if profile { "nodeIKernelProfileService/getUinByUid" } else { "nodeIKernelGroupService/getUinByUids" },
+                            "reverse_payload_shape": if profile { "[callFrom, [uid]]" } else { "[uidList]" },
                             "route": result.get("route").cloned().unwrap_or(Value::Null),
                             "api_call_attempted": result
                                 .get("apiCallAttempted")

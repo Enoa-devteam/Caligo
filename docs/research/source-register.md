@@ -37,3 +37,9 @@
 | S16 | 本机静态证据树 `E:/stella/_reference/qq-native-r3-p1-20261008/`（phaseA–J 反编译导出、字节级扫描脚本、外部 manifest） | 内部调查产物 | 目录内 artifact 清单；wrapper 锚点仅对 SHA `63112ab9…` 有效 | 2026-10-08 | adopted（P1/P2 证据基础） | 线程/寿命合同与 capability profile 的证据来源；Ghidra 伪代码不是符号事实，ABI 以汇编为凭 |
 | S17 | `caligo-cli observe-msf`（本仓库 `crates/caligo-cli/src/observe_msf.rs`） | 自有工具 | 随仓库提交 6f85350+ | 2026-10-08 | adopted | 外部只读现场观测（RPM，零注入）；输出即 P1/P6 证据格式 |
 | S18 | 实例 47524 现场观测（创建 2026-10-08T11:58:14Z UTC） | 受控现场证据 | `docs/execution/2026-10-08-native-contract-recovery/evidence/p1-observe-field-47524-t{1,2,3}.json` | 2026-10-08 | adopted（一次性证据） | 运行时 switch 分支、transport/dispatcher 拓扑的现场确认；不构成发送/接收准入（profile `gates` 为准） |
+
+## SnowCat 研究增补（2026-11-13）
+
+| ID | 来源 | 类型 | 版本/Commit 固定 | 登记时间 | 状态 | 用途与边界 |
+|---|---|---|---|---|---|---|
+| S19 | [Napcat-Snowluma-research](https://github.com/Eternal-Wanderer-Vegetable/Napcat-Snowluma-research/tree/7cf025fe1e7f9c609e02a8643c6e6398eeec0d64) | 私有研究归档 | `7cf025fe1e7f9c609e02a8643c6e6398eeec0d64` | 2026-11-13 | reference | Wrapper 服务调用参数、结果及场景对照。Caligo 自有 Rust bridge 复用既有 owner pump，未引入归档中的反编译 C、重建 C/C++、脚本或二进制依赖。 |

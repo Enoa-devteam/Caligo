@@ -29,6 +29,8 @@ struct QqEntryArgs {
     uid_map_uin: Option<u64>,
     /// Inspect only whether the active session exposes GroupService.
     uid_map_surface_only: bool,
+    /// Use the hash-bound ProfileService round-trip contract.
+    uid_map_profile_service: bool,
     uid_map_result: Option<PathBuf>,
     uid_map_timeout_ms: u32,
 }
@@ -77,6 +79,7 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
             }
             "--uid-map-result" => a.uid_map_result = next(&mut i).map(PathBuf::from),
             "--uid-map-surface-only" => a.uid_map_surface_only = true,
+            "--uid-map-profile-service" => a.uid_map_profile_service = true,
             "--uid-map-timeout-ms" => {
                 a.uid_map_timeout_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(60_000)
             }
@@ -128,7 +131,7 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
 }
 
@@ -156,8 +159,8 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
-    if !need_env && a.uid_map_surface_only {
-        eprintln!("[uid-map] surface-only mode is available only through qq-entry");
+    if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service) {
+        eprintln!("[uid-map] surface-only and ProfileService modes require qq-entry");
         return Err(ExitCode::FAILURE);
     }
     let uid_map_mode_valid = if need_env {
@@ -172,7 +175,7 @@ fn gates(
     } else {
         a.uid_map_uin.is_some() == a.uid_map_result.is_some()
     };
-    if !uid_map_mode_valid {
+    if !uid_map_mode_valid || (a.uid_map_profile_service && a.uid_map_uin.is_none()) {
         eprintln!("[uid-map] 请选择 round-trip(--uid-map-uin + --uid-map-result)、surface-only(--uid-map-surface-only + --uid-map-result)，或不启用 UID-map");
         return Err(ExitCode::FAILURE);
     }
@@ -227,6 +230,71 @@ fn gates(
     }
     println!("[gate 2] PASS — 执行者已确认 PID {pid} 为指定测试实例");
     Ok((pid, bridge, report, env.unwrap_or(0), wait_s, wait_ms, a))
+}
+
+#[cfg(feature = "research")]
+fn verify_uid_map_profile_build(pid: u32, manifest_path: &Path) -> Result<(), String> {
+    // Bind this resolver to the host already investigated in Caligo and the
+    // wrapper used by the reference probe. The general manifest gate runs first.
+    const MODULES: [(&str, &str, &str); 3] = [
+        (
+            "node-runtime",
+            "QQNT.dll",
+            "75B19E58A123B0513E99DF4DF3EBC6524478535BA44651024D6A20821F5086E5",
+        ),
+        (
+            "business-js-native",
+            "major.node",
+            "4564E402D1CF43A0F15982411596CF38B8D9B8FBC78F5E7CA717E27C24C74A07",
+        ),
+        (
+            "session-shell-wrapper",
+            "wrapper.node",
+            caligo_bridge::g3::G3_PROFILE_9936_WRAPPER_SHA256,
+        ),
+    ];
+    let manifest: super::Manifest =
+        serde_json::from_slice(&std::fs::read(manifest_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let mut sizes = [0; MODULES.len()];
+    for ((role, _, expected_hash), size) in MODULES.into_iter().zip(&mut sizes) {
+        let mut entries = manifest.modules.iter().filter(|module| module.role == role);
+        let entry = entries
+            .next()
+            .ok_or_else(|| format!("missing {role} in manifest"))?;
+        if entries.next().is_some()
+            || !entry.hash_checked
+            || !entry.sha256.eq_ignore_ascii_case(expected_hash)
+        {
+            return Err(format!("unsupported {role} manifest for ProfileService"));
+        }
+        *size = entry.size_bytes;
+    }
+    let processes = winutil::list_processes("QQ.exe")?;
+    let process = processes
+        .iter()
+        .find(|process| process.pid == pid)
+        .ok_or("designated QQ process is unavailable")?;
+    for ((_, name, expected_hash), expected_size) in MODULES.into_iter().zip(sizes) {
+        let mut loaded = process.modules.iter().map(Path::new).filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|file_name| file_name.eq_ignore_ascii_case(name))
+        });
+        let path = loaded
+            .next()
+            .ok_or_else(|| format!("{name} is not loaded"))?;
+        if loaded.next().is_some() {
+            return Err(format!("multiple loaded modules named {name}"));
+        }
+        let (hash, size) = super::sha256_file(path)?;
+        if !hash.eq_ignore_ascii_case(expected_hash) || size != expected_size {
+            return Err(format!(
+                "loaded {name} does not match the ProfileService build"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn print_report(report: &Path) {
@@ -370,6 +438,18 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         Err(c) => return c,
     };
     #[cfg(feature = "research")]
+    if extra.uid_map_profile_service {
+        let manifest = extra
+            .manifest
+            .as_deref()
+            .expect("manifest checked by gates");
+        if let Err(error) = verify_uid_map_profile_build(pid, manifest) {
+            eprintln!("[uid-map-profile] exact-build gate rejected: {error}");
+            return ExitCode::from(2);
+        }
+        println!("[uid-map-profile] exact loaded-module hashes verified");
+    }
+    #[cfg(feature = "research")]
     let uid_map = match (
         extra.uid_map_uin,
         extra.uid_map_surface_only,
@@ -470,7 +550,10 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
         let (uin, mode, output, surface_only) = match request {
-            UidMapRequest::RoundTrip { uin, output } => (uin, 0, output, false),
+            UidMapRequest::RoundTrip { uin, output } => {
+                let mode = if extra.uid_map_profile_service { 2 } else { 0 };
+                (uin, mode, output, false)
+            }
             UidMapRequest::SurfaceOnly { output } => (0, 1, output, true),
         };
         let query = unsafe {

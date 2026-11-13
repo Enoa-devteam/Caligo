@@ -503,7 +503,7 @@ pub fn stop_listener() -> Result<String, V8Error> {
     unsafe { exec_script(&syms, isolate_addr(), D8_STOP_JS) }
 }
 
-/// 固定语义 UID/UIN 双向查询：直接复用 QQNT wrapper session 的 GroupService。
+/// 固定语义 UID/UIN 双向查询：直接复用 QQNT wrapper session 的服务。
 /// 会话、服务、方法表面和 API 调用分 owner-pump 阶段执行，以便定位阻塞点。
 const UID_MAP_SANITY_JS: &str = r#"
 (function () { return typeof globalThis === 'object' ? 'V8_READY' : 'V8_MISSING'; })()
@@ -569,7 +569,7 @@ const UID_MAP_SESSION_JS: &str = r#"
       return 'SURFACE_DONE';
     }
     S.sessionName = name;
-    S.phase = 'group';
+    S.phase = 'service';
     return 'SESSION_READY';
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -579,7 +579,7 @@ const UID_MAP_GROUP_JS: &str = r#"
 (function () {
   try {
     var G = globalThis, S = G.__caligo_uid_map_main;
-    if (!S || S.phase !== 'group') return 'ERR:group stage is not ready';
+    if (!S || S.phase !== 'service') return 'ERR:group stage is not ready';
     var session = S.Sessions.getNTWrapperSession(S.sessionName);
     if (!session || typeof session.getGroupService !== 'function') {
       S.phase = 'done'; S.status = 'group_service_accessor_missing';
@@ -612,6 +612,112 @@ const UID_MAP_SURFACE_DONE_JS: &str = r#"
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 "#;
+
+// QQ 9.9.36-53644 wrapper: SnowCat's owner-thread probe exercised
+// ProfileService with the FriendsServiceImpl call source and keyed Maps.
+const UID_MAP_PROFILE_METHODS_JS: &str = r#"
+(function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state || state.phase !== 'service') return 'ERR:profile stage is not ready';
+  state.route = 'QQNT NodeIQQNTWrapperSession.getProfileService';
+  function unavailable(status) {
+    state.status = status;
+    state.phase = 'done';
+    return 'SURFACE_DONE';
+  }
+  try {
+    var session = state.Sessions.getNTWrapperSession(state.sessionName);
+    if (!session || typeof session.getProfileService !== 'function') {
+      return unavailable('profile_service_accessor_missing');
+    }
+    // Keep the wrapper owner alive across the service/query/poll pump ticks.
+    state.session = session;
+    var service = session.getProfileService();
+    if (!service) return unavailable('profile_service_missing');
+    var forward = service.getUidByUin;
+    var reverse = service.getUinByUid;
+    if (typeof forward !== 'function' || typeof reverse !== 'function') {
+      return unavailable('profile_methods_unavailable');
+    }
+    state.profile = service;
+    state.forwardMethod = forward;
+    state.reverseMethod = reverse;
+    state.forward_arity = forward.length;
+    state.reverse_arity = reverse.length;
+    state.phase = 'profile_ready';
+    return 'PROFILE_READY';
+  } catch (_) {
+    delete globalThis.__caligo_uid_map_main;
+    return 'ERR:profile service acquisition failed';
+  }
+})()
+"#;
+
+fn build_profile_uid_map_query_js(uin: &str) -> String {
+    let argument = serde_json::to_string(uin).expect("string serialization is infallible");
+    format!("({UID_MAP_PROFILE_QUERY_JS})({argument})")
+}
+
+const UID_MAP_PROFILE_QUERY_JS: &str = r#"
+function (uin) {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state || state.phase !== 'profile_ready') return 'ERR:profile resolver is not ready';
+  if (!/^[1-9][0-9]{0,19}$/.test(uin)) return 'ERR:invalid UIN';
+  function finish(status) {
+    state.status = status;
+    state.phase = 'done';
+    return 'DISPATCHED';
+  }
+  state.phase = 'querying';
+  state.apiCallAttempted = true;
+  var source = 'FriendsServiceImpl';
+  function lookup(method, key) {
+    var result = method.call(state.profile, source, [key]);
+    if (!(result instanceof Map)) {
+      // Assimilate foreign-context Promises/thenables before rejecting the
+      // unsupported async shape, so a later rejection cannot escape to QQ.
+      Promise.prototype.then.call(Promise.resolve(result), undefined, function () {});
+      return null;
+    }
+    return { value: Map.prototype.get.call(result, key) };
+  }
+  var forward;
+  try { forward = lookup(state.forwardMethod, uin); }
+  catch (_) { return finish('forward_threw'); }
+  if (!forward) return finish('forward_result_not_map');
+  var uid = forward.value;
+  if (uid === undefined) return finish('forward_no_uid');
+  if (typeof uid !== 'string' || !/^u_[A-Za-z0-9_-]{1,128}$/.test(uid)) {
+    return finish('forward_invalid_uid');
+  }
+  state.uidCandidates = [uid];
+  var reverse;
+  try { reverse = lookup(state.reverseMethod, uid); }
+  catch (_) { return finish('reverse_threw'); }
+  if (!reverse) return finish('reverse_result_not_map');
+  var resolved = reverse.value;
+  if (resolved === undefined) return finish('reverse_no_uin');
+  if (typeof resolved !== 'string' || !/^[1-9][0-9]{0,19}$/.test(resolved)) {
+    return finish('reverse_invalid_uin');
+  }
+  state.reverseUinValues = [resolved];
+  return finish(resolved === uin ? 'roundtrip_match' : 'roundtrip_no_match');
+}
+"#;
+
+pub(crate) fn start_uid_map_profile() -> Result<String, V8Error> {
+    let Some(syms) = symbols() else {
+        return Err(V8Error::NoCurrentContext);
+    };
+    unsafe { exec_script(&syms, isolate_addr(), UID_MAP_PROFILE_METHODS_JS) }
+}
+
+pub(crate) fn query_uid_map_profile(uin: &str) -> Result<String, V8Error> {
+    let Some(syms) = symbols() else {
+        return Err(V8Error::NoCurrentContext);
+    };
+    unsafe { exec_script(&syms, isolate_addr(), &build_profile_uid_map_query_js(uin)) }
+}
 
 pub fn build_uid_map_methods_js(uin: &str) -> String {
     let uin_json = serde_json::to_string(uin).unwrap_or_else(|_| "\"\"".into());
@@ -1049,7 +1155,8 @@ mod exec_script_lab_tests {
 #[cfg(test)]
 mod uid_map_script_tests {
     use super::{
-        build_uid_map_methods_js, UID_MAP_BINDING_JS, UID_MAP_GROUP_JS, UID_MAP_QUERY_JS,
+        build_profile_uid_map_query_js, build_uid_map_methods_js, UID_MAP_BINDING_JS,
+        UID_MAP_GROUP_JS, UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS, UID_MAP_QUERY_JS,
         UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS, UID_MAP_SURFACE_DONE_JS,
         UID_MAP_WRAPPERS_JS,
     };
@@ -1097,6 +1204,132 @@ mod uid_map_script_tests {
         assert!(!UID_MAP_SURFACE_DONE_JS.contains("getUidByUins"));
         assert!(!UID_MAP_SURFACE_DONE_JS.contains("getUinByUids"));
         assert!(!UID_MAP_SURFACE_DONE_JS.contains(".call("));
+    }
+
+    #[test]
+    fn profile_uid_map_checks_exact_keys_and_rejects_unexpected_results() {
+        let surface = serde_json::to_string(UID_MAP_PROFILE_METHODS_JS).unwrap();
+        let query =
+            serde_json::to_string(&build_profile_uid_map_query_js("9007199254740993")).unwrap();
+        let poll = serde_json::to_string(UID_MAP_POLL_JS).unwrap();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const uin = '9007199254740993';
+const uid = 'u_synthetic-uid';
+
+function prepare(service) {
+  const session = { getProfileService: () => service };
+  globalThis.__caligo_uid_map_main = {
+    phase: 'service', sessionName: 'fixture',
+    Sessions: { getNTWrapperSession(name) {
+      assert.equal(name, 'fixture');
+      return session;
+    } }
+  };
+  const outcome = eval(surface);
+  if (outcome === 'PROFILE_READY') {
+    assert.equal(globalThis.__caligo_uid_map_main.session, session);
+    assert.equal(globalThis.__caligo_uid_map_main.profile, service);
+  }
+  return outcome;
+}
+
+function verify(forward, reverse, expected, expectReverse) {
+  const calls = [];
+  const service = {
+    getUidByUin(source, keys) {
+      assert.equal(this, service);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uin]);
+      calls.push('forward');
+      return forward();
+    },
+    getUinByUid(source, keys) {
+      assert.equal(this, service);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uid]);
+      calls.push('reverse');
+      return reverse();
+    }
+  };
+  assert.equal(prepare(service), 'PROFILE_READY');
+  assert.deepEqual(calls, []);
+  assert.equal(eval(query), 'DISPATCHED');
+  assert.equal(eval(query).startsWith('ERR:'), true);
+  assert.deepEqual(calls, expectReverse ? ['forward', 'reverse'] : ['forward']);
+  const result = JSON.parse(eval(poll));
+  assert.equal(result.status, expected);
+  assert.equal(result.apiCallAttempted, true);
+  assert.deepEqual(result.uidCandidates, expectReverse ? [uid] : []);
+  assert.equal(globalThis.__caligo_uid_map_main, undefined);
+}
+
+assert.equal(prepare(null), 'SURFACE_DONE');
+assert.equal(eval(query).startsWith('ERR:'), true);
+let result = JSON.parse(eval(poll));
+assert.equal(result.status, 'profile_service_missing');
+assert.equal(result.apiCallAttempted, false);
+assert.equal(prepare({ getUidByUin() { throw new Error('must not call'); } }), 'SURFACE_DONE');
+result = JSON.parse(eval(poll));
+assert.equal(result.status, 'profile_methods_unavailable');
+assert.equal(result.apiCallAttempted, false);
+
+const found = () => new Map([[uin, uid]]);
+const inverse = () => new Map([[uid, uin]]);
+verify(found, inverse, 'roundtrip_match', true);
+verify(() => new Map([['other', uid]]), inverse, 'forward_no_uid', false);
+verify(() => new Map([[uin, 'u_masked*']]), inverse, 'forward_invalid_uid', false);
+verify(() => Promise.reject(new Error('unexpected async provider')), inverse, 'forward_result_not_map', false);
+verify(() => vm.runInNewContext('Promise.resolve(new Map())'), inverse, 'forward_result_not_map', false);
+verify(() => vm.runInNewContext('Promise.reject(new Error("foreign rejection"))'), inverse, 'forward_result_not_map', false);
+verify(() => ({ then(resolve, reject) { setImmediate(() => reject(new Error('late rejection'))); } }), inverse, 'forward_result_not_map', false);
+verify(() => { throw new Error('lookup failed'); }, inverse, 'forward_threw', false);
+verify(found, () => ({ [uid]: uin }), 'reverse_result_not_map', true);
+verify(found, () => new Map([['u_other', uin]]), 'reverse_no_uin', true);
+verify(found, () => new Map([[uid, Number(uin)]]), 'reverse_invalid_uin', true);
+verify(found, () => new Map([[uid, '9007199254740992']]), 'roundtrip_no_match', true);
+verify(found, () => vm.runInNewContext('Promise.resolve(new Map())'), 'reverse_result_not_map', true);
+verify(found, () => vm.runInNewContext('Promise.reject(new Error("foreign rejection"))'), 'reverse_result_not_map', true);
+verify(found, () => ({ then(resolve, reject) { setImmediate(() => reject(new Error('late rejection'))); } }), 'reverse_result_not_map', true);
+
+function acquisitionThrows(getSession) {
+  globalThis.__caligo_uid_map_main = {
+    phase: 'service', sessionName: 'fixture',
+    Sessions: { getNTWrapperSession: getSession }
+  };
+  assert.equal(eval(surface), 'ERR:profile service acquisition failed');
+  assert.equal(globalThis.__caligo_uid_map_main, undefined);
+  // A failed acquisition must not poison the next state's BUSY guard.
+  assert.equal(prepare({ getUidByUin() {}, getUinByUid() {} }), 'PROFILE_READY');
+  delete globalThis.__caligo_uid_map_main;
+}
+function fail() { throw new Error('synthetic acquisition failure'); }
+acquisitionThrows(fail);
+acquisitionThrows(() => ({ get getProfileService() { return fail(); } }));
+acquisitionThrows(() => ({ getProfileService: fail }));
+for (const name of ['getUidByUin', 'getUinByUid']) {
+  const service = { getUidByUin() {}, getUinByUid() {} };
+  Object.defineProperty(service, name, { get: fail });
+  acquisitionThrows(() => ({ getProfileService: () => service }));
+  const arityService = { getUidByUin() {}, getUinByUid() {} };
+  arityService[name] = new Proxy(function () {}, {
+    get(target, key) { if (key === 'length') return fail(); return Reflect.get(target, key); }
+  });
+  acquisitionThrows(() => ({ getProfileService: () => arityService }));
+}
+"#;
+        let script =
+            format!("const surface = {surface}, query = {query}, poll = {poll};\n{fixture}");
+        let output = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .expect("Node.js is required for the research JavaScript fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
