@@ -58,6 +58,214 @@ pub const RET_BAD_REQUEST: i32 = 1440;
 pub const RET_NOT_CONFIRMED: i32 = 1501;
 pub const RET_NOT_READY: i32 = 1502;
 
+/// Capability metadata, not an authorization check. Frontends enforce access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionPermission {
+    Read,
+    Write,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendTargetKind {
+    Group,
+    Private,
+    Inferred,
+}
+
+/// Exhaustive dispatch key shared by discovery and execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ActionHandlerKind {
+    Send {
+        target: SendTargetKind,
+        allow_async: bool,
+    },
+    GetMessage,
+    GetLoginInfo,
+    GetStatus,
+    GetVersionInfo,
+}
+
+/// Input contracts for normal requests. Serializes as JSON Schema for tool
+/// discovery; existing handlers remain responsible for runtime validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionInputSchema {
+    Empty,
+    GroupMessage,
+    PrivateMessage,
+    Message,
+    MessageId,
+}
+
+impl ActionInputSchema {
+    pub fn to_json_schema(self) -> Value {
+        let id = serde_json::json!({"type":"integer", "minimum":0, "maximum":u64::MAX});
+        let message = serde_json::json!({
+            "description":"Literal text or text segments; other segment types are unsupported",
+            "anyOf":[
+                {"type":"string"},
+                {"type":"array", "minItems":1, "items":{
+                    "type":"object", "required":["type", "data"],
+                    "properties":{
+                        "type":{"const":"text"},
+                        "data":{"type":"object", "required":["text"],
+                            "properties":{"text":{"type":"string"}}}
+                    }
+                }}
+            ]
+        });
+        let mut schema = serde_json::json!({"type":"object", "properties":{}});
+        match self {
+            Self::Empty => {}
+            Self::GroupMessage | Self::PrivateMessage => {
+                let key = if self == Self::GroupMessage {
+                    "group_id"
+                } else {
+                    "user_id"
+                };
+                schema["properties"][key] = id;
+                schema["properties"]["message"] = message;
+                schema["required"] = serde_json::json!([key, "message"]);
+            }
+            Self::Message => {
+                schema["properties"] = serde_json::json!({
+                    "group_id":id, "user_id":id, "message":message,
+                    "message_type":{"type":"string", "enum":["group", "private"],
+                        "description":"Optional; inferred from group_id first, then user_id"}
+                });
+                schema["required"] = serde_json::json!(["message"]);
+                schema["anyOf"] = serde_json::json!([
+                    {"required":["group_id"], "properties":{"message_type":{"const":"group"}}},
+                    {"required":["user_id"], "properties":{"message_type":{"const":"private"}}}
+                ]);
+            }
+            Self::MessageId => {
+                schema["properties"]["message_id"] = serde_json::json!({
+                    "type":"integer", "minimum":i32::MIN, "maximum":i32::MAX
+                });
+                schema["required"] = serde_json::json!(["message_id"]);
+            }
+        }
+        schema
+    }
+}
+
+impl Serialize for ActionInputSchema {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_json_schema().serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ActionDefinition {
+    pub name: &'static str,
+    /// Shared capability name. Async aliases retain their distinct acceptance
+    /// response policy in `handler.allow_async`; they are not confirmed sends.
+    pub canonical: &'static str,
+    pub permission: ActionPermission,
+    pub handler: ActionHandlerKind,
+    pub input_schema: ActionInputSchema,
+}
+
+/// Implemented action names only. Availability still depends on the actual
+/// sink/store; registration does not claim native or live QQ acceptance.
+pub static ACTION_REGISTRY: &[ActionDefinition] = &[
+    ActionDefinition {
+        name: "send_group_msg",
+        canonical: "send_group_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Group,
+            allow_async: false,
+        },
+        input_schema: ActionInputSchema::GroupMessage,
+    },
+    ActionDefinition {
+        name: "send_private_msg",
+        canonical: "send_private_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Private,
+            allow_async: false,
+        },
+        input_schema: ActionInputSchema::PrivateMessage,
+    },
+    ActionDefinition {
+        name: "send_msg",
+        canonical: "send_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Inferred,
+            allow_async: false,
+        },
+        input_schema: ActionInputSchema::Message,
+    },
+    ActionDefinition {
+        name: "send_group_msg_async",
+        canonical: "send_group_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Group,
+            allow_async: true,
+        },
+        input_schema: ActionInputSchema::GroupMessage,
+    },
+    ActionDefinition {
+        name: "send_private_msg_async",
+        canonical: "send_private_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Private,
+            allow_async: true,
+        },
+        input_schema: ActionInputSchema::PrivateMessage,
+    },
+    ActionDefinition {
+        name: "send_msg_async",
+        canonical: "send_msg",
+        permission: ActionPermission::Write,
+        handler: ActionHandlerKind::Send {
+            target: SendTargetKind::Inferred,
+            allow_async: true,
+        },
+        input_schema: ActionInputSchema::Message,
+    },
+    ActionDefinition {
+        name: "get_msg",
+        canonical: "get_msg",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetMessage,
+        input_schema: ActionInputSchema::MessageId,
+    },
+    ActionDefinition {
+        name: "get_login_info",
+        canonical: "get_login_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetLoginInfo,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_status",
+        canonical: "get_status",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetStatus,
+        input_schema: ActionInputSchema::Empty,
+    },
+    ActionDefinition {
+        name: "get_version_info",
+        canonical: "get_version_info",
+        permission: ActionPermission::Read,
+        handler: ActionHandlerKind::GetVersionInfo,
+        input_schema: ActionInputSchema::Empty,
+    },
+];
+
+pub fn resolve_action(name: &str) -> Option<&'static ActionDefinition> {
+    ACTION_REGISTRY.iter().find(|entry| entry.name == name)
+}
+
 fn get_u64(params: &Value, key: &str) -> Result<u64, ActionResponse> {
     params
         .get(key)
@@ -106,14 +314,14 @@ fn dispatch_send(
 }
 
 fn send_payload(
-    action: &str,
+    target_kind: SendTargetKind,
     params: &Value,
     sink: &mut dyn SendSink,
     echo: Value,
     allow_async: bool,
 ) -> ActionResponse {
-    let (target, text) = match action {
-        "send_group_msg" | "send_group_msg_async" => {
+    let (target, text) = match target_kind {
+        SendTargetKind::Group => {
             let group_id = match get_u64(params, "group_id") {
                 Ok(v) => v,
                 Err(mut r) => {
@@ -130,7 +338,7 @@ fn send_payload(
             };
             (SendTarget::Group { group_id }, text)
         }
-        "send_private_msg" | "send_private_msg_async" => {
+        SendTargetKind::Private => {
             let user_id = match get_u64(params, "user_id") {
                 Ok(v) => v,
                 Err(mut r) => {
@@ -147,7 +355,7 @@ fn send_payload(
             };
             (SendTarget::Private { user_id }, text)
         }
-        "send_msg" | "send_msg_async" => {
+        SendTargetKind::Inferred => {
             let inferred_type = if params.get("group_id").is_some() {
                 "group"
             } else if params.get("user_id").is_some() {
@@ -191,26 +399,13 @@ fn send_payload(
             };
             (target, text)
         }
-        _ => unreachable!("send_payload called for registered send action"),
     };
     dispatch_send(sink, echo, SendPayload { target, text }, allow_async)
 }
 
 /// Whether an action name belongs to the implemented public API surface.
 pub fn is_supported_action(action: &str) -> bool {
-    matches!(
-        action,
-        "send_group_msg"
-            | "send_private_msg"
-            | "send_msg"
-            | "send_group_msg_async"
-            | "send_private_msg_async"
-            | "send_msg_async"
-            | "get_msg"
-            | "get_login_info"
-            | "get_status"
-            | "get_version_info"
-    )
+    resolve_action(action).is_some()
 }
 
 /// Process one action through the shared action registry.
@@ -221,14 +416,15 @@ pub fn handle_action(
     sink: &mut dyn SendSink,
     store: &dyn StoreReader,
 ) -> ActionResponse {
-    match action {
-        "send_group_msg" | "send_private_msg" | "send_msg" => {
-            send_payload(action, params, sink, echo, false)
-        }
-        "send_group_msg_async" | "send_private_msg_async" | "send_msg_async" => {
-            send_payload(action, params, sink, echo, true)
-        }
-        "get_msg" => {
+    let Some(definition) = resolve_action(action) else {
+        return ActionResponse::failed(RET_UNSUPPORTED, "未支持动作", echo);
+    };
+    match definition.handler {
+        ActionHandlerKind::Send {
+            target,
+            allow_async,
+        } => send_payload(target, params, sink, echo, allow_async),
+        ActionHandlerKind::GetMessage => {
             let Some(mid) = params
                 .get("message_id")
                 .and_then(Value::as_i64)
@@ -251,14 +447,14 @@ pub fn handle_action(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
-        "get_login_info" => match store.login_info() {
+        ActionHandlerKind::GetLoginInfo => match store.login_info() {
             Some((user_id, nickname)) => ActionResponse::ok(
                 serde_json::json!({"user_id": user_id, "nickname": nickname}),
                 echo,
             ),
             None => ActionResponse::failed(RET_NOT_READY, "账号身份尚未就绪", echo),
         },
-        "get_version_info" => ActionResponse::ok(
+        ActionHandlerKind::GetVersionInfo => ActionResponse::ok(
             serde_json::json!({
                 "app_name": "Caligo",
                 "app_version": env!("CARGO_PKG_VERSION"),
@@ -268,13 +464,12 @@ pub fn handle_action(
             }),
             echo,
         ),
-        "get_status" => match store.online_status() {
+        ActionHandlerKind::GetStatus => match store.online_status() {
             Some(online) => {
                 ActionResponse::ok(serde_json::json!({"online": online, "good": online}), echo)
             }
             None => ActionResponse::failed(RET_NOT_READY, "daemon/session 状态尚未就绪", echo),
         },
-        _ => ActionResponse::failed(RET_UNSUPPORTED, "未支持动作", echo),
     }
 }
 
@@ -330,6 +525,275 @@ mod tests {
         }
         fn online_status(&self) -> Option<bool> {
             Some(false)
+        }
+    }
+
+    #[test]
+    fn registry_has_unique_names_and_resolvable_canonical_actions() {
+        let names: std::collections::HashSet<_> =
+            ACTION_REGISTRY.iter().map(|entry| entry.name).collect();
+        assert_eq!(names.len(), ACTION_REGISTRY.len());
+        assert_eq!(
+            names,
+            std::collections::HashSet::from([
+                "send_group_msg",
+                "send_private_msg",
+                "send_msg",
+                "send_group_msg_async",
+                "send_private_msg_async",
+                "send_msg_async",
+                "get_msg",
+                "get_login_info",
+                "get_status",
+                "get_version_info",
+            ])
+        );
+        for entry in ACTION_REGISTRY {
+            assert!(is_supported_action(entry.name));
+            assert_eq!(resolve_action(entry.name), Some(entry));
+            let canonical = resolve_action(entry.canonical).unwrap();
+            assert_eq!(canonical.name, canonical.canonical);
+            assert_eq!(entry.permission, canonical.permission);
+            assert_eq!(entry.input_schema, canonical.input_schema);
+        }
+        for name in [
+            "",
+            "GET_MSG",
+            "delete_msg",
+            "get_group_list",
+            "get_group_info",
+            "get_friend_list",
+        ] {
+            assert!(!is_supported_action(name));
+            let mut sink = FakeSink {
+                ready: true,
+                ..Default::default()
+            };
+            let echo = serde_json::json!({"unsupported":name});
+            let response = handle_action(name, &Value::Null, echo.clone(), &mut sink, &FakeStore);
+            assert_eq!(response.retcode, RET_UNSUPPORTED);
+            assert_eq!(response.echo, echo);
+            assert!(sink.last.is_empty());
+        }
+    }
+
+    #[derive(Default)]
+    struct ConfirmedSink(Vec<SendPayload>);
+    impl SendSink for ConfirmedSink {
+        fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
+            self.0.push(payload.clone());
+            Ok(SendDisposition::Confirmed { message_id: 42 })
+        }
+    }
+
+    #[test]
+    fn every_registered_action_reaches_its_normal_handler() {
+        for entry in ACTION_REGISTRY {
+            let mut sink = ConfirmedSink::default();
+            let params = match entry.input_schema {
+                ActionInputSchema::GroupMessage | ActionInputSchema::Message => {
+                    serde_json::json!({"group_id":7,"message":"hello"})
+                }
+                ActionInputSchema::PrivateMessage => {
+                    serde_json::json!({"user_id":8,"message":"hello"})
+                }
+                ActionInputSchema::MessageId => serde_json::json!({"message_id":42}),
+                ActionInputSchema::Empty => serde_json::json!({}),
+            };
+            let echo = serde_json::json!([entry.name, {"seq":1}]);
+            let response = handle_action(entry.name, &params, echo.clone(), &mut sink, &FakeStore);
+            assert_eq!(response.status, "ok", "{}: {response:?}", entry.name);
+            assert_eq!(response.retcode, 0, "{}", entry.name);
+            assert_eq!(response.echo, echo);
+            match entry.handler {
+                ActionHandlerKind::Send { target, .. } => {
+                    let target = match target {
+                        SendTargetKind::Group | SendTargetKind::Inferred => {
+                            SendTarget::Group { group_id: 7 }
+                        }
+                        SendTargetKind::Private => SendTarget::Private { user_id: 8 },
+                    };
+                    assert_eq!(
+                        sink.0,
+                        [SendPayload {
+                            target,
+                            text: "hello".into()
+                        }]
+                    );
+                    assert_eq!(response.data, serde_json::json!({"message_id":42}));
+                }
+                ActionHandlerKind::GetMessage => {
+                    assert_eq!(response.data["message_id"], 42);
+                    assert_eq!(response.data["real_id"], 398263);
+                }
+                ActionHandlerKind::GetLoginInfo => assert_eq!(
+                    response.data,
+                    serde_json::json!({"user_id":1694717255u64,"nickname":"caligo"})
+                ),
+                ActionHandlerKind::GetStatus => assert_eq!(
+                    response.data,
+                    serde_json::json!({"online":false,"good":false})
+                ),
+                ActionHandlerKind::GetVersionInfo => {
+                    assert_eq!(response.data["app_name"], "Caligo");
+                    assert_eq!(response.data["protocol_version"], "v11");
+                }
+            }
+            if entry.permission == ActionPermission::Read {
+                assert!(sink.0.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn async_aliases_share_payload_and_terminal_results_with_canonical_actions() {
+        struct ResultSink {
+            result: SendDisposition,
+            calls: Vec<SendPayload>,
+        }
+        impl SendSink for ResultSink {
+            fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
+                self.calls.push(payload.clone());
+                Ok(self.result.clone())
+            }
+        }
+        for alias in ACTION_REGISTRY
+            .iter()
+            .filter(|entry| entry.name != entry.canonical)
+        {
+            let canonical = resolve_action(alias.canonical).unwrap();
+            let ActionHandlerKind::Send {
+                target,
+                allow_async: true,
+            } = alias.handler
+            else {
+                panic!("unexpected alias: {}", alias.name);
+            };
+            assert_eq!(
+                canonical.handler,
+                ActionHandlerKind::Send {
+                    target,
+                    allow_async: false
+                }
+            );
+            for params in [
+                serde_json::json!({"group_id":7,"user_id":8,"message":"hello"}),
+                serde_json::json!({"message_type":"private","user_id":8,"message":[{"type":"text","data":{"text":"hello"}}]}),
+            ] {
+                // Direct sends require their own target; supply it for both cases.
+                let mut params = params;
+                params["group_id"] = serde_json::json!(7);
+                for disposition in [
+                    SendDisposition::Confirmed { message_id: 42 },
+                    SendDisposition::DeliveryUnknown {
+                        reason: "unknown; do not retry".into(),
+                    },
+                    SendDisposition::Unsupported {
+                        reason: "mapping unavailable".into(),
+                    },
+                    SendDisposition::AcceptedUnconfirmed,
+                ] {
+                    let mut standard_sink = ResultSink {
+                        result: disposition.clone(),
+                        calls: vec![],
+                    };
+                    let mut alias_sink = ResultSink {
+                        result: disposition.clone(),
+                        calls: vec![],
+                    };
+                    let echo = serde_json::json!({"alias":alias.name});
+                    let standard = handle_action(
+                        canonical.name,
+                        &params,
+                        echo.clone(),
+                        &mut standard_sink,
+                        &FakeStore,
+                    );
+                    let asynchronous = handle_action(
+                        alias.name,
+                        &params,
+                        echo.clone(),
+                        &mut alias_sink,
+                        &FakeStore,
+                    );
+                    assert_eq!(standard_sink.calls.len(), 1);
+                    assert_eq!(standard_sink.calls, alias_sink.calls);
+                    assert_eq!(asynchronous.echo, echo);
+                    if disposition == SendDisposition::AcceptedUnconfirmed {
+                        assert_eq!(standard.retcode, RET_NOT_CONFIRMED);
+                        assert_eq!(standard.data, Value::Null);
+                        assert_eq!(asynchronous, ActionResponse::async_accepted(echo));
+                    } else {
+                        assert_eq!(standard, asynchronous);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn registry_permissions_and_serialized_input_schemas_describe_implemented_inputs() {
+        let serialized = serde_json::to_value(ACTION_REGISTRY).unwrap();
+        for (entry, metadata) in ACTION_REGISTRY.iter().zip(serialized.as_array().unwrap()) {
+            let schema = &metadata["input_schema"];
+            assert_eq!(schema["type"], "object");
+            let expected_schema = match entry.handler {
+                ActionHandlerKind::Send { target, .. } => {
+                    assert_eq!(entry.permission, ActionPermission::Write);
+                    assert_eq!(metadata["permission"], "write");
+                    assert_eq!(
+                        schema["properties"]["message"]["anyOf"][0]["type"],
+                        "string"
+                    );
+                    assert_eq!(
+                        schema["properties"]["message"]["anyOf"][1]["items"]["properties"]["type"]
+                            ["const"],
+                        "text"
+                    );
+                    let key = if target == SendTargetKind::Private {
+                        "user_id"
+                    } else {
+                        "group_id"
+                    };
+                    assert_eq!(schema["properties"][key]["minimum"], 0);
+                    assert_eq!(schema["properties"][key]["maximum"], u64::MAX);
+                    match target {
+                        SendTargetKind::Group => {
+                            assert_eq!(
+                                schema["required"],
+                                serde_json::json!(["group_id", "message"])
+                            );
+                            ActionInputSchema::GroupMessage
+                        }
+                        SendTargetKind::Private => {
+                            assert_eq!(
+                                schema["required"],
+                                serde_json::json!(["user_id", "message"])
+                            );
+                            ActionInputSchema::PrivateMessage
+                        }
+                        SendTargetKind::Inferred => {
+                            assert_eq!(schema["required"], serde_json::json!(["message"]));
+                            assert_eq!(schema["anyOf"].as_array().unwrap().len(), 2);
+                            ActionInputSchema::Message
+                        }
+                    }
+                }
+                handler => {
+                    assert_eq!(entry.permission, ActionPermission::Read);
+                    assert_eq!(metadata["permission"], "read");
+                    if handler == ActionHandlerKind::GetMessage {
+                        assert_eq!(schema["required"], serde_json::json!(["message_id"]));
+                        assert_eq!(schema["properties"]["message_id"]["minimum"], i32::MIN);
+                        assert_eq!(schema["properties"]["message_id"]["maximum"], i32::MAX);
+                        ActionInputSchema::MessageId
+                    } else {
+                        assert_eq!(schema["properties"], serde_json::json!({}));
+                        ActionInputSchema::Empty
+                    }
+                }
+            };
+            assert_eq!(entry.input_schema, expected_schema);
         }
     }
 
