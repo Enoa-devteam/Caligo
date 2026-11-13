@@ -52,6 +52,7 @@
 
 ## 收发与响应研究
 
+- 9.9.33 本地链路研究：[2026-11-11 收发验证](research/2026-11-11-9.9.33-local-verification.md)。研究报告含明确标注的伪身份字段，不构成生产实现或现场验收。
 - 接收：[receive-design](research/qq-native-receive-design.md)。
 - 发送实验合同：[send-probe-design](research/qq-native-send-probe-design.md)。
 - 响应消费者历史起点：[response-consumer-scope](research/response-consumer-scope.md)。

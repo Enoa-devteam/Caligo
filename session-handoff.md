@@ -1,5 +1,8 @@
 # 会话交接
 
+## 2026-11-13 PR #2 conflict integration
+
+PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.
 ## Current Objective
 
 - 继续执行 [N4 响应恢复计划](docs/plans/2026-10-11-gitnexus-plan-caligo-n4-response-recovery.md)，当前单一工作块仍为 N4-R2。最近提交 `e40c9ac` 记录 manager-state getter 的 29 个直接 caller；固定-hash直接 setup 入口仅为 MSFService/CoreService slot 16。Docker GitNexus post-commit 已在该 HEAD up-to-date，schema-4 runner current，all-scope detect 0 changed，39 个计划引用路径 clean。该静态 caller map 没找到 primary slot 0/1 teardown entry，但不排除 indirect/non-primary cleanup。manager final owner、successful wait、callback execution/thread 与 quiescence 仍未证明，R3 identity 和历史 AV 仍开放。
