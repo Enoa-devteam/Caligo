@@ -20,6 +20,14 @@
 
 原生合同停止点见[下一原生合同门](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#下一原生合同门)：当前登录身份、强制资料刷新回调及自有 SSO bytes 不能从 TypeScript 类型或配置补出成功。需要新指定 QQ/profile 的有界只读合同证据时再进入独立研究；这不是已准入 B2。其他格式/文件视频/扩展动作/CLI SDK 部署仍有离线工作，不能概括成全计划只差 QQ。历史 unknown、未证寿命和 feat-005/006 blocked 保留。
 
+2026-11-14 已在用户指定的两现有登录实例完成首轮有界 ProfileService 取证。两边均 `profile_service_missing`，resolver 零派发，owner pump 已关，bridge 仍映射。先核对固定参考直接交付的 session 和 Caligo 通过 `nt` 重取的 wrapper，再核实 D8 的 `nt_*` 选择及当前账号归属。一次性入口须在新的干净目标代次验证，当前两个 PID 不重复加载或热卸载。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-双账号-profileservice-现场探针)
+
+已按固定归档晚接入实现修正 research mode 2 的 session 来源，下一轮在干净的已登录根用相同 `qq-entry --uid-map-profile-service` 入口核对加载状态、ProfileService 和精确往返。仅在获得独立当前身份来源后绑定 session，资料刷新 listener 与 SSO 继续按各自合同取证。[修正与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-会话来源修正)
+
+新版已在重启后的 A（PID 35864）完成 `roundtrip_match`，owner pump 已关且 bridge 仍映射。后续先验证宿主提供的当前 UIN/UID 与 `nt_1`/host nonce 的绑定，再按独立合同验证资料刷新回调。现有探针输入来自本机资料卡记录，不能将往返值直接当 LoginInfo。[现场复验](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-修正后现场复验)
+
+当前身份研究已在 A（PID 50100）无 UIN 输入取得 `nt_1` 的 `onSelfStatusChanged` 身份，精确映射及独立对照匹配，owner pump 正常关闭。下一工作块补已证 UID 的昵称、生产 host nonce/会话代次绑定和失效合同，再决定接入 LoginInfo。资料刷新及 SSO 各自留待受控合同。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-当前登录身份通知现场复验)
+
 ## 2026-11-13 PR #2 conflict integration（历史合并记录）
 
 PR integration branch contains `main` snapshot `8191d68` (`55b11c5`) plus fail-closed corrections (`6154b6c`). The current main group-query implementation is retained; fake CPB IDs/sender mappings and the request-derived OneBot success ID were removed. `init.ps1 -Mode all` passes after this correction. GitNexus compare reports medium risk with two affected flows; its index also reports incomplete process recall, so absent graph paths are not proof of no call. No QQ field actions or product acceptance were performed; status remains NOT READY. The 2026-11-11 report is historical for its source commit and includes an integration caveat. For continuing Caligo work, the existing N4 objective below remains the active scope.

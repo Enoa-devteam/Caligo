@@ -236,3 +236,51 @@ GitNexus 绑定仓库/工作目录 `E:/stella/Caligo`，起点索引/HEAD `a3546
 这是新增原生合同的取证边界，不是完整 A4/B1/B2 验收完成。其他格式、视频/文件、管理/通知与扩展动作、CLI/SDK/便携部署等仍有离线实现工作，继续以覆盖清单逐项推进；不能把所有 missing 项统称为“只差 QQ”。完整候选未冻结，B2 集中验收仍未开始，产品 NOT READY。
 
 最终收尾包含 smoke 证据目录修正及原生合同门记录：GitNexus staged/all 各 14 files / 89 symbols / 21 flows，完整返回且风险 CRITICAL，结果为 `snowcat-members-detect-*-final.json`。`init.ps1 -Mode docs` PASS（15 live docs / 266 local links / 35 historical entries / 10 features），Windows staged/all diff 检查通过。
+
+## 2026-11-14 双账号 ProfileService 现场探针
+
+用户指定两个现有登录实例，本轮以 A、B 记录。通过两个 QQ 主窗口的当前账号资料卡独立确认 UIN、昵称及账号差异，窗口句柄与主进程 PID 和创建时间关联。A 为 PID 31112（`2026-11-13T07:28:25.1407405Z`），B 为 PID 45824（`2026-11-13T07:28:25.6469536Z`）。真实身份、窗口对应和输入保存在 ignored `local-evidence/snowcat-field-20261114/designation.private.json`。QQ 资料卡只作为当前账号的独立对照。
+
+使用 `e9c291a` 源码构建隔离 research release CLI/bridge，`cargo build -p caligo-cli -p caligo-bridge --release --features caligo-cli/research,caligo-bridge/research --locked --offline --target-dir target-harness/snowcat-field-20261114` 通过。CLI SHA-256 为 `38B9C80F8F4DC0D62D82E7F8431485FE56DE0BFAE6B11E381206B138CE24AC79`，bridge 为 `F87FD9CA1EE7479AFFA8C07B251A2D2CB6051D9B69B0781145D16F9882B01EA5`。本机 pilot 清单五项通过。每个 PID 在注入前通过已知 backend/临时模块 PE 审计，按已记录的试点指纹执行 `envscan --vtable 0xA804990 --context 0`，各有唯一候选、零读失败。CLI 另核对目标实际加载的 QQNT.dll、major.node 和 wrapper.node 哈希。
+
+顺序各跑一次现有 `qq-entry --uid-map-profile-service`，仅将对应资料卡 UIN 作为查询输入。A、B 均有 18 条成功的阶段记录，覆盖 bootstrap、V8、binding、wrapper session 阶段及 shutdown。两边进入 ProfileService 服务获取阶段后均返回 `profile_service_missing`，即 `getProfileService()` 未提供可用对象。两边均 `api_call_attempted=false`、UID 候选 0、CLI exit 2。探针退出后 PID 和创建时间未变，两边仍响应，owner pump 已正常关闭，bridge 留至 QQ 退出。B 的第一次准备因 PowerShell 自动转换 JSON 时间戳在 preflight 提前停止，经保留原时间字符串修正后才开始其唯一一次探针。未派发资料刷新或 SSO，未发送测试消息。
+
+原始证据在同一本机目录的 `{a,b}-pre-attach-*`、`{a,b}-probe.log`、`{a,b}-profile.private.json` 和 `{a,b}-entry.jsonl`。两份阶段报告 SHA-256 分别为 `F2E413D7813C99DAD159A1771ED95B73540CA28E964ADE72D5143FCD94A556C1` 和 `18026CC502B18485FF88220035283B2933962680770331996D7942E52C2CFBB2`。
+
+固定参考 `7cf025f` 的 `business-message/probe.cjs` 从 `initializeNapCat(session, login)` 获得宿主直接交付的 session。Caligo 此探针经 `Startup.create().getSessionIdList()` 取 `nt`，再用 `getNTWrapperSession` 重取 wrapper。两条路径的 session 等价性尚无证据。下一步为固定 hash 下核对两条 session 来源及 Caligo D8 使用的已知 `nt_*` 选择逻辑，先证明候选属于当前登录身份，再做一次有界服务表面对照。资料刷新仍需要 ProfileService 与 listener 寿命证据。SSO 继续依赖独立自有二进制合同及准入。现有两个 PID 已有 bridge 映射，当前一次性入口会拒绝重复使用。B2 候选与产品验收门仍待闭合，`feat-005/006` 保持 blocked，产品 NOT READY。
+
+收尾运行 `init.ps1 -Mode docs`（15 live docs / 268 local links / 35 historical entries / 10 features）与 `git diff --check`，均通过。此次只新增现场证据与交接记录，未重跑 Cargo 全仓测试。
+
+### 2026-11-14 ProfileService 会话来源修正
+
+固定归档 `7cf025f` 的 [晚接入实现](https://github.com/Eternal-Wanderer-Vegetable/Napcat-Snowluma-research/blob/7cf025fe1e7f9c609e02a8643c6e6398eeec0d64/research/native-reconstruction/recovered/napiloader/napi_runtime.cpp#L96) 记录了已运行 QQ 上的公开加载路径：在宿主 N-API 回调中使用 `require` 或带 receiver 的 `process.mainModule.require`，按进程实际加载路径取得 `wrapper.node`，再用 `getNTWrapperSession('nt_1')` 取得 session。归档保留了原有 hook 捕获路径，真实初始化记录未区分两条路径的 session 来源。因此归档能支持本次选择该公开入口，现场仍需核对 Caligo 的 V8 owner 上下文能否走通。
+
+Caligo 的 research mode 2 现在由自身 Rust bridge 重查 QQNT、major 与 wrapper 三个已加载模块的 SHA-256，携带快照中唯一 wrapper 路径，从 K4 owner pump 使用上述公开加载面和固定 `nt_1` 获取 ProfileService。缺少 require、加载失败、缺少 wrapper accessor 或 ProfileService 都在 resolver 派发前结束。现有 UIN↔UID 精确键匹配仍是查询判据，给定 UIN 的往返结果无法单独证明当前登录账号。mode 0/1 仍使用原 GroupService 阶段链。生产 D8/D9 与 LoginInfo 仍依赖各自合同。
+
+旧版脚本不能通过新会话来源夹具。改后 5 项 UID-map 脚本测试通过，覆盖精确路径、`nt_1`、require receiver、不可用路径零派发、映射结果和异常清理；将 `nt_1` 改回 `nt` 的变异检查也被该夹具拒绝。串行 `init.ps1 -Mode all` 的 default/research 全仓、隔离 research release、最终 docs 和 diff 检查通过。新版 CLI/bridge 在 `target-harness/snowcat-profile-session-20261114/release/`，SHA-256 分别为 `9AF78959D8E6B12F611A0A8EDE51ADD9D396306A9959D95398576C7F1671A5C0` 和 `0EA7AB9E7613087636C36CFDD4D69394EDA73B28B91CDA36DE127F1088FDA5F9`。阶段图在 `e9c291a` 刷新。GitNexus 对 `run_inner` 的上游为 LOW，`start_uid_map_profile` 的函数值调用边为 UNKNOWN，经源码确认调用点在 UID-map owner pump。全量 detect 报 HIGH，7 条关联流，均为 UID-map export 和查询脚本调用链。完整构建和检查输出保存在本机 `local-evidence/snowcat-field-20261114/session-*.log`。
+
+两个已指定实例仍映射上一轮的 bridge。新版尚无 QQ 现场结果。下一轮需干净的已登录 QQ 根，重跑同一有界探针，对照 `profile_require_missing`、`profile_wrapper_require_failed`、`profile_service_missing` 或实际往返结果，再单独核对当前身份与会话的绑定。
+
+### 2026-11-14 ProfileService 修正后现场复验
+
+用户确认重启账号 A。旧 A 的 PID 31112 已退出，唯一新增 QQ 主进程为 PID 35864，创建时间 `2026-11-13T23:23:21.5532160Z`。以用户确认、上一轮资料卡的本地账号记录和主进程创建时间指定测试对象。账号 B 继续使用原 PID 45824。新版 CLI/bridge 与上一节记录的 SHA-256 一致。五项 pilot manifest、PE backend/临时模块审计以及三项实际加载模块校验通过，外部只读 Environment 扫描唯一命中、零读失败。
+
+在 A 上运行一次 `qq-entry --uid-map-profile-service`。实际路径为 `wrapper.node nt_1 NodeIQQNTWrapperSession.getProfileService`，服务获取与查询派发阶段均成功。正向精确键得到一个 UID，逆向精确键得到与查询输入相同的 UIN。结果为 `roundtrip_match`、`api_call_attempted=true`、CLI exit 0。共 14 条成功阶段记录，V8、服务获取和查询均在同一个 owner TID 执行。owner pump 正常关闭，A 同一 PID 仍响应，bridge 留至 QQ 退出。本轮只调用 A，未发送测试消息。
+
+原始记录仅在本机 `local-evidence/snowcat-field-20261114/session-retest-35864/`。结果 `profile.private.json` 的 SHA-256 为 `EA4B2EC9ED13D9FF495FE160DB55EE06A9C332B758457210BA163E415FB40389`，阶段记录 `entry.jsonl` 为 `490A9D95BF293DB48F463BBEF1AD92EA9420A0B66AC3BBC2ED611CB7470E81EC`。
+
+本次通过的是固定构建、一个登录实例、已知输入的 ProfileService 映射。独立的当前登录身份来源及 wrapper session/host nonce 绑定仍待验证。资料刷新回调、SSO、B2 集中验收仍开放，`feat-005/006` 状态保持 blocked。收尾更新进度、交接和 feature 证据，运行 `init.ps1 -Mode docs` 与 `git diff --check`。
+
+### 2026-11-14 当前登录身份通知现场复验
+
+使用精确 `9.9.36-53644` wrapper SHA-256 `0D8B94448F4DAFE7337B88D6A568B004224C37FCBE2BD1142C1AF7624FBD534C`。零参数 `getSelfStatus` JS 描述符/入口为 RVA `0x41C9680/0xF65B32`。用户第一次重启 A 后，PID 18856 的实际 Promise 返回数值 `result`，未提供直接身份字段或 `statusInfo`，探针拒绝并正常关闭。后续固定映像追踪确认 `0x22A0AB0` 的 Promise resolver 写 `result` 与 `errMsg`。身份字段来自 `onSelfStatusChanged` 转换链 `0x23F8E01 → 0xEBEBCE`，转换器写 `uid`、十进制字符串 `uin`、`status`。listener add/remove 描述符分别定位 `0xF60E60/0xF6131C`，add 以十进制字符串返回注册 ID，remove 将原字符串按十进制解析。固定映像脚本、反汇编与首轮负结果在 ignored `local-evidence/snowcat-field-20261114/current-login/`。
+
+自有 research `qq-entry --current-login` 在精确模块校验后复用 K4 owner pump 与已验证的 `wrapper.node nt_1` 获取路径。此入口拒绝用户 UIN 和 daemon 账号输入。使用一笔 `getSelfStatus()` 及同一 ProfileService 的 `onSelfStatusChanged`，由 Promise 确认操作结果，从通知提取有界字段。在 owner tick 核对同一 session ID 与精确双向映射。捕获后以原字符串 ID 移除 listener。代码按探针状态丢弃迟到通知，停止或超时尝试在 owner 上移除 listener，清理无法确认时拒绝结果，bridge 随 QQ 生命周期保留。
+
+用户第二次重启 A 后，选中唯一新增主进程 PID 50100（`2026-11-13T23:41:31.7396013Z`）。先后通过模块 PE 审计、五项 pilot manifest、三项实际加载模块 hash 和唯一 Environment 候选，扫描零读失败。运行一轮无 UIN 输入探针得到 `current_login_match`、操作结果 `0`，同一 wrapper session ID 在查询前后匹配。通知提供的 UIN 和 UID 都匹配 PID 35864 现场映射的独立本机对照。listener 移除调用正常返回，owner pump 正常关闭，CLI exit 0。A 与 B（PID 45824）仍响应，本轮未调用 B、未发送消息、未热卸载。
+
+最终 CLI/bridge SHA-256 为 `E833092A1B2AE9A04FF97B697AEEBD2571BD333DD31698E1446B1D48B98344C5` / `3DA7D9D4D10AC5724754F84094E773D5496332B4673C01B01A46A62F74DC6C53`。现场证据在本机 `current-login/listener-50100/`，结果与阶段报告 SHA-256 为 `9F76C9830621B2D89852E7F9A11BCF1D1933C6E4AEB8AA26BE1667A3D5EC9A72` / `A0A59B8D4ACA5AED1505CB494FE81F3F35E4D319D340D9B6ED1B5BCA67C3CAE7`。
+
+此次证据覆盖固定构建、A 的单次现有登录、宿主通知提供身份、会话 ID 稳定和移除 API 返回。生产 host nonce、昵称、换号/断线撤权、跨账号隔离和原生 listener 全局静默仍待验证。通知无请求 ID，此样本不能证明通知的唯一请求因果关系。B2、资料刷新与 SSO 仍待验收，`feat-005/006` 保持 blocked。
+
+最终 listener 构建通过 6 项 UID-map 定向测试、6 组无效 CLI 参数拒绝、隔离 research release、串行 `init.ps1 -Mode all`（default/research）、最终 docs（15 live docs / 274 links / 35 historical entries / 10 features）和 `git diff --check`。样本与构建日志均保存在上述本机目录。

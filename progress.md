@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-14 当前登录身份通知现场复验：无 UIN 输入的 research 探针在重启后的 A（PID 50100）取得 `nt_1` 的宿主通知，UIN/UID 精确双向映射及独立对照匹配。CLI exit 0，listener 移除返回，owner pump 正常关闭。生产 host nonce、昵称、换号撤权、资料刷新和 SSO 仍待验证。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-当前登录身份通知现场复验)
+
+2026-11-14 ProfileService 修正后现场复验：重启后的账号 A（PID 35864）从精确哈希的 `wrapper.node` 取得 `nt_1` ProfileService，已知 UIN 经精确键查询得到一个 UID，反查匹配输入。CLI exit 0，owner pump 正常关闭，QQ 仍响应。当前登录身份绑定、资料刷新、SSO 与 B2 集中验收仍待验证。[现场复验](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-修正后现场复验)
+
+2026-11-14 ProfileService 会话来源修正（离线）：研究探针按固定归档的公开晚接入路径，从精确哈希匹配的已加载 `wrapper.node` 取 `nt_1`，经 K4 owner pump 获取服务。新增路径夹具与 UID-map 共 5/5 通过。新版 QQ 现场待干净的已登录根。 [修正与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-profileservice-会话来源修正)
+
+2026-11-14 双账号 ProfileService 现场探针：QQ 资料卡分别核对两个登录身份，9.9.36-53644 pilot 清单、两根 PE 审计与唯一 Environment 候选通过。Caligo 两轮均完成 owner bootstrap 与 shutdown，但当前重取的 wrapper 未提供 ProfileService，resolver 零派发。两实例仍响应，bridge 保留映射。当前身份与 wrapper/host nonce 的绑定、资料刷新和自有 SSO 仍待补证，B2 集中验收未开始。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-双账号-profileservice-现场探针)
+
 2026-11-13 A2 群成员：新增当前 scope 的完整成员快照查询、共享 `get_group_member_list` 和 `get_group_member_info`，绑定精确 pilot，校验 Map/身份/角色/预算并去除私有字段。wrapper 合同 6/6、正常 pipe/action 8/8、串行 default/research 与独立并行 research 全仓及覆盖 12/12 通过；未启动 QQ。[群成员接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-群成员查询接线)
 
 2026-11-13 A2 PNG 发送接线：单 PNG 已经共享 OneBot、持久请求、scoped IPC、owner 和 D9 精确回读贯通；私聊/群聊独立能力，成功 ID 等待消息入库，unknown 不重发。修复查询能力 9 项上限拒绝当前 11 项声明的问题。串行 default/research 和独立并行 research 全仓、覆盖 12/12 通过；并发端口及 PID 复用导致的旧测试隔离问题已修正，继续排除离线阻塞，未启动 QQ。[PNG 发送接线](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-png-图片发送接线)

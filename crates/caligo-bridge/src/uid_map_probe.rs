@@ -21,6 +21,7 @@ pub mod code {
     pub const ERR_REPORT: u32 = 7;
     pub const ERR_BAD_TIMEOUT: u32 = 8;
     pub const ERR_BAD_MODE: u32 = 9;
+    pub const ERR_PROFILE_BUILD: u32 = 10;
 }
 
 const START: usize = 0;
@@ -40,6 +41,7 @@ enum Resolver {
     GroupSurface,
     Group(u64),
     Profile(u64),
+    CurrentLogin,
 }
 
 fn run_owner_step<F>(
@@ -136,6 +138,10 @@ pub(crate) fn run_profile(uin: u64, output_path: PathBuf, timeout_ms: u32) -> u3
     run_inner(Resolver::Profile(uin), output_path, timeout_ms)
 }
 
+pub(crate) fn run_current_login(output_path: PathBuf, timeout_ms: u32) -> u32 {
+    run_inner(Resolver::CurrentLogin, output_path, timeout_ms)
+}
+
 fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if timeout_ms < 1_000 || timeout_ms > 180_000 {
         return code::ERR_BAD_TIMEOUT;
@@ -143,6 +149,27 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if !crate::qq_entry::is_ready() {
         return code::ERR_NOT_BOOTSTRAPPED;
     }
+    let current_login = matches!(resolver, Resolver::CurrentLogin);
+    let profile = matches!(resolver, Resolver::Profile(_) | Resolver::CurrentLogin);
+    let profile_wrapper = if profile {
+        let (modules, snapshot_ok) = crate::collect_host_snapshot();
+        if !snapshot_ok || !crate::qq_query::matches_voice_profile(&modules) {
+            return code::ERR_PROFILE_BUILD;
+        }
+        // The profile check requires a unique exact-hash wrapper. Pass that
+        // snapshot path to the owner thread, without an install path fallback.
+        let Some(path) = modules.into_iter().find(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("wrapper.node"))
+        }) else {
+            return code::ERR_PROFILE_BUILD;
+        };
+        Some(path)
+    } else {
+        None
+    };
     let qqnt_base = crate::qq_entry::qqnt_base();
     let Some(syms) = crate::qq_v8::V8Symbols::resolve(qqnt_base, "") else {
         return code::ERR_V8_RESOLVE;
@@ -157,17 +184,24 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     let hook_last_logged_stage = last_logged_stage.clone();
     let hook_cancelled = cancelled.clone();
     let hook_surface_only = matches!(resolver, Resolver::GroupSurface);
-    let profile = matches!(resolver, Resolver::Profile(_));
     let uin = match resolver {
         Resolver::Group(uin) | Resolver::Profile(uin) => uin.to_string(),
-        Resolver::GroupSurface => String::new(),
+        Resolver::GroupSurface | Resolver::CurrentLogin => String::new(),
     };
     let hook_output = output_path.clone();
     let hook_tx = tx.clone();
 
     let installed = crate::qq_entry::try_install_drain_hook(Box::new(move || {
         if hook_cancelled.load(Ordering::Acquire) {
-            let _ = crate::qq_v8::cancel_uid_map_probe();
+            let cleanup = crate::qq_v8::cancel_uid_map_probe();
+            if current_login {
+                let returned = matches!(cleanup.as_deref(), Ok("CANCELLED"));
+                crate::qq_entry::append_stage_simple(
+                    "current_login_cancel",
+                    returned,
+                    if returned { "owner cancellation returned" } else { "listener cleanup unknown" },
+                );
+            }
             hook_stage.store(DONE, Ordering::Release);
             let _ = hook_tx.try_send(Err(code::ERR_TIMEOUT));
             return 1;
@@ -195,6 +229,20 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 "uid_map_state_ready",
                 "STATE_READY",
                 crate::qq_v8::start_uid_map_state,
+            ),
+            STATE if profile => run_owner_step(
+                &hook_stage,
+                &hook_last_logged_stage,
+                &hook_tx,
+                STATE,
+                QUERY,
+                "uid_map_profile_service_entered",
+                "uid_map_profile_service_ready",
+                "PROFILE_READY",
+                || {
+                    let path = profile_wrapper.as_deref().expect("verified ProfileService path");
+                    crate::qq_v8::start_uid_map_profile(path)
+                },
             ),
             STATE => run_owner_step(
                 &hook_stage,
@@ -228,17 +276,6 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 "uid_map_session_ready",
                 "SESSION_READY",
                 crate::qq_v8::start_uid_map_session,
-            ),
-            SERVICE if profile => run_owner_step(
-                &hook_stage,
-                &hook_last_logged_stage,
-                &hook_tx,
-                SERVICE,
-                QUERY,
-                "uid_map_profile_service_entered",
-                "uid_map_profile_service_ready",
-                "PROFILE_READY",
-                crate::qq_v8::start_uid_map_profile,
             ),
             SERVICE => run_owner_step(
                 &hook_stage,
@@ -278,6 +315,17 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 let _ = hook_tx.try_send(Err(code::ERR_BAD_MODE));
                 1
             }
+            QUERY if current_login => run_owner_step(
+                &hook_stage,
+                &hook_last_logged_stage,
+                &hook_tx,
+                QUERY,
+                POLL,
+                "current_login_status_entered",
+                "current_login_status_dispatched",
+                "DISPATCHED",
+                crate::qq_v8::start_current_login_probe,
+            ),
             QUERY => run_owner_step(
                 &hook_stage,
                 &hook_last_logged_stage,
@@ -295,7 +343,17 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                     }
                 },
             ),
-            POLL => match crate::qq_v8::poll_uid_map_probe() {
+            POLL => match if current_login {
+                crate::qq_v8::finish_current_login_probe().and_then(|status| {
+                    if status == "POLL" {
+                        crate::qq_v8::poll_uid_map_probe()
+                    } else {
+                        Ok(status)
+                    }
+                })
+            } else {
+                crate::qq_v8::poll_uid_map_probe()
+            } {
                 Ok(v) if v == "PENDING" => 1,
                 Ok(v) if v.starts_with("ERR:") => {
                     hook_stage.store(DONE, Ordering::Release);
@@ -325,7 +383,21 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_millis())
                         .unwrap_or_default();
-                    let report = if hook_surface_only {
+                    let report = if current_login {
+                        json!({
+                            "schema": 1,
+                            "captured_unix_ms": captured_unix_ms,
+                            "pid": std::process::id(),
+                            "route": result.get("route"),
+                            "status": status,
+                            "api_call_attempted": result.get("apiCallAttempted"),
+                            "current_login": result.get("currentLogin"),
+                            "self_status_result": result.get("selfStatusResult"),
+                            "listener_registration": result.get("listenerRegistration"),
+                            "raw_identity_values_written": result.get("currentLogin").is_some(),
+                            "raw_chat_text_written": false
+                        })
+                    } else if hook_surface_only {
                         json!({
                             "schema": 1,
                             "captured_unix_ms": captured_unix_ms,
@@ -377,6 +449,8 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                                 true,
                                 if hook_surface_only {
                                     "GroupService surface result written; resolver API not dispatched"
+                                } else if current_login {
+                                    "one current-login probe result written to local evidence"
                                 } else {
                                     "one read-only batch round-trip result written to local evidence"
                                 },

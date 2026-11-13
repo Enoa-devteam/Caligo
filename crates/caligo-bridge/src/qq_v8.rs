@@ -851,20 +851,31 @@ const UID_MAP_SURFACE_DONE_JS: &str = r#"
 })()
 "#;
 
-// QQ 9.9.36-53644 wrapper: SnowCat's owner-thread probe exercised
-// ProfileService with the FriendsServiceImpl call source and keyed Maps.
+// QQ 9.9.36-53644 late attachment resolves nt_1 from the loaded wrapper
+// module. The QQNT linked binding's startup-session route is separate.
 const UID_MAP_PROFILE_METHODS_JS: &str = r#"
-(function () {
+function (wrapperPath) {
   var state = globalThis.__caligo_uid_map_main;
-  if (!state || state.phase !== 'service') return 'ERR:profile stage is not ready';
-  state.route = 'QQNT NodeIQQNTWrapperSession.getProfileService';
+  if (!state || state.phase !== 'binding') return 'ERR:profile stage is not ready';
+  state.route = 'wrapper.node nt_1 NodeIQQNTWrapperSession.getProfileService';
   function unavailable(status) {
     state.status = status;
     state.phase = 'done';
     return 'SURFACE_DONE';
   }
   try {
-    var session = state.Sessions.getNTWrapperSession(state.sessionName);
+    var main = typeof process === 'object' && process && process.mainModule;
+    var load = typeof globalThis.require === 'function' ? globalThis.require :
+      (main && typeof main.require === 'function' ? main.require.bind(main) : null);
+    if (!load) return unavailable('profile_require_missing');
+    var wrapper;
+    try { wrapper = load(wrapperPath); }
+    catch (_) { return unavailable('profile_wrapper_require_failed'); }
+    var sessions = wrapper && wrapper.NodeIQQNTWrapperSession;
+    if (!sessions || typeof sessions.getNTWrapperSession !== 'function') {
+      return unavailable('profile_wrapper_accessor_missing');
+    }
+    var session = sessions.getNTWrapperSession('nt_1');
     if (!session || typeof session.getProfileService !== 'function') {
       return unavailable('profile_service_accessor_missing');
     }
@@ -888,7 +899,7 @@ const UID_MAP_PROFILE_METHODS_JS: &str = r#"
     delete globalThis.__caligo_uid_map_main;
     return 'ERR:profile service acquisition failed';
   }
-})()
+}
 "#;
 
 fn build_profile_uid_map_query_js(uin: &str) -> String {
@@ -943,11 +954,13 @@ function (uin) {
 }
 "#;
 
-pub(crate) fn start_uid_map_profile() -> Result<String, V8Error> {
+pub(crate) fn start_uid_map_profile(wrapper_path: &str) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
-    unsafe { exec_script(&syms, isolate_addr(), UID_MAP_PROFILE_METHODS_JS) }
+    let argument = serde_json::to_string(wrapper_path).expect("string serialization is infallible");
+    let source = format!("({UID_MAP_PROFILE_METHODS_JS})({argument})");
+    unsafe { exec_script(&syms, isolate_addr(), &source) }
 }
 
 pub(crate) fn query_uid_map_profile(uin: &str) -> Result<String, V8Error> {
@@ -955,6 +968,131 @@ pub(crate) fn query_uid_map_profile(uin: &str) -> Result<String, V8Error> {
         return Err(V8Error::NoCurrentContext);
     };
     unsafe { exec_script(&syms, isolate_addr(), &build_profile_uid_map_query_js(uin)) }
+}
+
+const CURRENT_LOGIN_START_JS: &str = r#"
+(function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state || state.phase !== 'profile_ready') return 'ERR:profile stage is not ready';
+  state.route = 'wrapper.node nt_1 NodeIKernelProfileService.getSelfStatus';
+  function fail(status) {
+    state.status = status;
+    state.phase = 'done';
+  }
+  try {
+    var id = state.session.getSessionId();
+    if (!((typeof id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(id) && id !== '0') ||
+          (Number.isSafeInteger(id) && id > 0))) {
+      fail('current_session_id_invalid');
+      return 'SURFACE_DONE';
+    }
+    state.sessionId = id;
+    if (typeof state.profile.getSelfStatus !== 'function' ||
+        typeof state.profile.addKernelProfileListener !== 'function' ||
+        typeof state.profile.removeKernelProfileListener !== 'function') {
+      fail('self_status_listener_surface_missing');
+      return 'SURFACE_DONE';
+    }
+    var listener = new Proxy({
+      onSelfStatusChanged: function (info) {
+        if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_status_pending') return;
+        try {
+          if (!info || typeof info.uid !== 'string' || !/^u_[A-Za-z0-9_-]{1,125}$/.test(info.uid) ||
+              typeof info.uin !== 'string' || !/^[1-9][0-9]{4,12}$/.test(info.uin) ||
+              !Number.isSafeInteger(info.status) || info.status <= 0 || info.status === 20) return;
+          var prior = state.selfStatus;
+          if (prior && (prior.uid !== info.uid || prior.uin !== info.uin)) {
+            fail('self_status_conflict');
+            return;
+          }
+          state.selfStatus = {uid: info.uid, uin: info.uin, status: info.status};
+        } catch (_) { fail('self_status_event_invalid'); }
+      }
+    }, {
+      get: function (target, key) {
+        if (typeof key !== 'string') return undefined;
+        return key === 'onSelfStatusChanged' ? target[key] : function () {};
+      }
+    });
+    // This build returns a decimal string from the native add wrapper.
+    state.listener = listener;
+    state.listenerRegistration = 'unknown';
+    var listenerId = state.profile.addKernelProfileListener(listener);
+    if (typeof listenerId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(listenerId)) {
+      fail('self_status_listener_id_invalid');
+      return 'SURFACE_DONE';
+    }
+    state.listenerId = listenerId;
+    state.listenerRegistration = 'registered';
+    state.phase = 'self_status_pending';
+    state.apiCallAttempted = true;
+    Promise.resolve(state.profile.getSelfStatus()).then(function (value) {
+      if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_status_pending') return;
+      if (!value || !Number.isSafeInteger(value.result)) {
+        fail('self_status_ack_invalid');
+      } else {
+        state.selfStatusResult = value.result;
+        if (value.result !== 0) fail('self_status_ack_failed');
+      }
+    }, function () {
+      if (globalThis.__caligo_uid_map_main === state && state.phase === 'self_status_pending') {
+        fail('self_status_rejected');
+      }
+    });
+  } catch (_) {
+    fail('self_status_threw');
+    if (!state.apiCallAttempted) return 'SURFACE_DONE';
+  }
+  return 'DISPATCHED';
+})()
+"#;
+
+// Promise handlers only record settlement. QQ calls and result extraction stay
+// in the owner tick, so timeout/cancel never dispatch a late mapping query.
+const CURRENT_LOGIN_FINISH_JS: &str = r#"
+(function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (!state) return 'ERR:no current-login state';
+  if (state.phase !== 'self_status_pending' || state.selfStatusResult !== 0 || !state.selfStatus) {
+    return 'POLL';
+  }
+  function finish(status) {
+    state.status = status;
+    state.phase = 'done';
+    delete state.selfStatus;
+    return 'POLL';
+  }
+  try {
+    var identity = state.selfStatus;
+    var uin = identity.uin, uid = identity.uid;
+    if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+    var mapped = state.forwardMethod.call(state.profile, 'FriendsServiceImpl', [uin]);
+    if (Object.prototype.toString.call(mapped) !== '[object Map]') {
+      Promise.resolve(mapped).catch(function () {});
+      return finish('self_forward_not_map');
+    }
+    if (Map.prototype.get.call(mapped, uin) !== uid) return finish('self_forward_mismatch');
+    var reverse = state.reverseMethod.call(state.profile, 'FriendsServiceImpl', [uid]);
+    if (Object.prototype.toString.call(reverse) !== '[object Map]') {
+      Promise.resolve(reverse).catch(function () {});
+      return finish('self_reverse_not_map');
+    }
+    if (Map.prototype.get.call(reverse, uid) !== uin) return finish('self_reverse_mismatch');
+    if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+    state.currentLogin = {uin: uin, uid: uid, status: identity.status, session_id: state.sessionId};
+    return finish('current_login_match');
+  } catch (_) { return finish('current_login_check_failed'); }
+})()
+"#;
+
+pub(crate) fn start_current_login_probe() -> Result<String, V8Error> {
+    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+    unsafe { exec_script(&syms, isolate_addr(), CURRENT_LOGIN_START_JS) }
+}
+
+pub(crate) fn finish_current_login_probe() -> Result<String, V8Error> {
+    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+    unsafe { exec_script(&syms, isolate_addr(), CURRENT_LOGIN_FINISH_JS) }
 }
 
 pub fn build_uid_map_methods_js(uin: &str) -> String {
@@ -1092,6 +1230,17 @@ const UID_MAP_POLL_JS: &str = r#"
     var G = globalThis, S = G.__caligo_uid_map_main;
     if (!S) return 'ERR:no uid-map state';
     if (S.phase !== 'done') return 'PENDING';
+    if (S.listenerRegistration === 'registered') {
+      S.listenerRegistration = 'remove_unknown';
+      try {
+        S.profile.removeKernelProfileListener(S.listenerId);
+        S.listenerRegistration = 'remove_returned';
+      } catch (_) {}
+    }
+    if (S.listenerRegistration && S.listenerRegistration !== 'remove_returned') {
+      S.status = 'self_status_listener_cleanup_unverified';
+      delete S.currentLogin;
+    }
     var done = {
       status: S.status,
       route: S.route,
@@ -1102,7 +1251,10 @@ const UID_MAP_POLL_JS: &str = r#"
       reverseUinValues: S.reverseUinValues || [],
       forward: S.forward,
       reverse: S.reverse,
-      error: S.error
+      error: S.error,
+      currentLogin: S.currentLogin,
+      selfStatusResult: S.selfStatusResult,
+      listenerRegistration: S.listenerRegistration
     };
     delete G.__caligo_uid_map_main;
     return JSON.stringify(done);
@@ -1112,8 +1264,20 @@ const UID_MAP_POLL_JS: &str = r#"
 
 const UID_MAP_CANCEL_JS: &str = r#"
 (function () {
+  var state = globalThis.__caligo_uid_map_main;
+  if (state) {
+    state.phase = 'cancelled';
+    if (state.listenerRegistration === 'registered') {
+      state.listenerRegistration = 'remove_unknown';
+      try {
+        state.profile.removeKernelProfileListener(state.listenerId);
+        state.listenerRegistration = 'remove_returned';
+      } catch (_) {}
+    }
+  }
   delete globalThis.__caligo_uid_map_main;
-  return 'CANCELLED';
+  return state && state.listenerRegistration && state.listenerRegistration !== 'remove_returned'
+    ? 'CLEANUP_UNKNOWN' : 'CANCELLED';
 })()
 "#;
 
@@ -1393,11 +1557,130 @@ mod exec_script_lab_tests {
 #[cfg(test)]
 mod uid_map_script_tests {
     use super::{
-        UID_MAP_BINDING_JS, UID_MAP_GROUP_JS, UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS,
+        CURRENT_LOGIN_FINISH_JS, CURRENT_LOGIN_START_JS, UID_MAP_BINDING_JS, UID_MAP_CANCEL_JS, UID_MAP_GROUP_JS,
+        UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS,
         UID_MAP_QUERY_JS, UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS,
         UID_MAP_SURFACE_DONE_JS, UID_MAP_WRAPPERS_JS, build_profile_uid_map_query_js,
         build_uid_map_methods_js,
     };
+
+    #[test]
+    fn current_login_uses_host_identity_and_rejects_drift_or_late_settlement() {
+        let start = serde_json::to_string(CURRENT_LOGIN_START_JS).unwrap();
+        let finish = serde_json::to_string(CURRENT_LOGIN_FINISH_JS).unwrap();
+        let poll = serde_json::to_string(UID_MAP_POLL_JS).unwrap();
+        let cancel = serde_json::to_string(UID_MAP_CANCEL_JS).unwrap();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const uin = '1234567890', uid = 'u_synthetic';
+const selfStatus = {uin, uid, status: 10};
+let sessionId = 'nt_1', mappings = 0, reverseUin = uin, listener, removed = 0;
+function prepare(getSelfStatus) {
+  const profile = {
+    getSelfStatus,
+    addKernelProfileListener(value) {
+      assert.equal(typeof value.onProfileDetailInfoChanged, 'function');
+      listener = value;
+      return '9007199254740993';
+    },
+    removeKernelProfileListener(id) {
+      assert.equal(id, '9007199254740993');
+      removed++;
+    }
+  };
+  const state = {
+    phase: 'profile_ready', profile, session: {getSessionId: () => sessionId},
+    forwardMethod(source, keys) {
+      assert.equal(this, profile);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uin]);
+      mappings++;
+      return new Map([[uin, uid]]);
+    },
+    reverseMethod(source, keys) {
+      assert.equal(this, profile);
+      assert.equal(source, 'FriendsServiceImpl');
+      assert.deepEqual(keys, [uid]);
+      mappings++;
+      return new Map([[uid, reverseUin]]);
+    }
+  };
+  globalThis.__caligo_uid_map_main = state;
+  return state;
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+async function run(event, result = 0, eventFirst = true) {
+  prepare(function () {
+    assert.equal(arguments.length, 0);
+    if (eventFirst && event) listener.onSelfStatusChanged(event);
+    return Promise.resolve({result, errMsg: ''});
+  });
+  assert.equal(eval(start), 'DISPATCHED');
+  assert.equal(eval(finish), 'POLL');
+  assert.equal(eval(poll), 'PENDING');
+  await tick();
+  if (!eventFirst && event) listener.onSelfStatusChanged(event);
+  assert.equal(eval(finish), 'POLL');
+  return JSON.parse(eval(poll));
+}
+(async () => {
+  let result = await run(selfStatus);
+  assert.equal(result.status, 'current_login_match');
+  assert.deepEqual(result.currentLogin, {...selfStatus, session_id: 'nt_1'});
+  assert.equal(result.listenerRegistration, 'remove_returned');
+  assert.equal(mappings, 2);
+  assert.equal((await run(selfStatus, 0, false)).status, 'current_login_match');
+  assert.equal((await run(selfStatus, 1)).status, 'self_status_ack_failed');
+  assert.equal(mappings, 4);
+  reverseUin = '1234567891';
+  result = await run(selfStatus);
+  assert.equal(result.status, 'self_reverse_mismatch');
+  assert.equal(result.currentLogin, undefined);
+  let resolveStatus;
+  const old = prepare(() => new Promise(resolve => {resolveStatus = resolve;}));
+  assert.equal(eval(start), 'DISPATCHED');
+  listener.onSelfStatusChanged(selfStatus);
+  sessionId = 'nt_2';
+  resolveStatus({result: 0});
+  await tick();
+  eval(finish);
+  assert.equal(JSON.parse(eval(poll)).status, 'current_session_changed');
+  assert.equal(mappings, 6);
+  const cancelled = prepare(() => new Promise(resolve => {resolveStatus = resolve;}));
+  assert.equal(eval(start), 'DISPATCHED');
+  const late = listener;
+  assert.equal(eval(cancel), 'CANCELLED');
+  const newer = prepare(() => selfStatus);
+  late.onSelfStatusChanged(selfStatus);
+  resolveStatus({result: 0});
+  await tick();
+  assert.equal(cancelled.phase, 'cancelled');
+  assert.equal(cancelled.selfStatus, undefined);
+  assert.equal(newer.phase, 'profile_ready');
+  assert.equal(old.currentLogin, undefined);
+  assert.equal(mappings, 6);
+  assert.equal(removed, 6);
+  prepare(() => Promise.resolve({result: 0}));
+  assert.equal(eval(start), 'DISPATCHED');
+  await tick();
+  eval(finish);
+  assert.equal(eval(poll), 'PENDING');
+  assert.equal(eval(cancel), 'CANCELLED');
+  assert.equal(removed, 7);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+        let script =
+            format!("const start = {start}, finish = {finish}, poll = {poll}, cancel = {cancel};\n{fixture}");
+        let output = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .expect("Node.js is required for the research JavaScript fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn uid_map_probe_uses_the_direct_qqnt_wrapper_surface_and_two_fixed_methods() {
@@ -1445,6 +1728,72 @@ mod uid_map_script_tests {
     }
 
     #[test]
+    fn profile_uid_map_uses_the_loaded_wrapper_and_reference_session_key() {
+        let surface = serde_json::to_string(UID_MAP_PROFILE_METHODS_JS).unwrap();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const path = String.raw`D:\QQ NT\wrapper.node`;
+const calls = [];
+const profile = {
+  getUidByUin() { assert.fail('surface must not dispatch a resolver'); },
+  getUinByUid() { assert.fail('surface must not dispatch a resolver'); }
+};
+const session = { getProfileService() { assert.equal(this, session); return profile; } };
+const sessions = {
+  getNTWrapperSession(key) {
+    assert.equal(this, sessions);
+    calls.push(key);
+    return session;
+  }
+};
+const host = {
+  __caligo_uid_map_main: {phase: 'binding'},
+  process: {
+    _linkedBinding() { assert.fail('ProfileService must not use the startup wrapper'); },
+    mainModule: {
+      require(candidate) {
+        assert.equal(this, host.process.mainModule);
+        calls.push(candidate);
+        return { NodeIQQNTWrapperSession: sessions };
+      }
+    }
+  }
+};
+const run = () => vm.runInNewContext('(' + surface + ')(' + JSON.stringify(path) + ')', host);
+assert.equal(run(), 'PROFILE_READY');
+assert.deepEqual(calls, [path, 'nt_1']);
+assert.equal(host.__caligo_uid_map_main.session, session);
+assert.equal(host.__caligo_uid_map_main.profile, profile);
+
+host.__caligo_uid_map_main = {phase: 'binding'};
+host.require = candidate => {
+  assert.equal(candidate, path);
+  return {};
+};
+assert.equal(run(), 'SURFACE_DONE');
+assert.equal(host.__caligo_uid_map_main.status, 'profile_wrapper_accessor_missing');
+assert.equal(host.__caligo_uid_map_main.apiCallAttempted, undefined);
+
+host.__caligo_uid_map_main = {phase: 'binding'};
+delete host.require;
+delete host.process.mainModule;
+assert.equal(run(), 'SURFACE_DONE');
+assert.equal(host.__caligo_uid_map_main.status, 'profile_require_missing');
+"#;
+        let script = format!("const surface = {surface};\n{fixture}");
+        let output = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .expect("Node.js is required for the research JavaScript fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn profile_uid_map_checks_exact_keys_and_rejects_unexpected_results() {
         let surface = serde_json::to_string(UID_MAP_PROFILE_METHODS_JS).unwrap();
         let query =
@@ -1455,17 +1804,27 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const uin = '9007199254740993';
 const uid = 'u_synthetic-uid';
+const wrapperPath = String.raw`D:\QQ NT\wrapper.node`;
+function acquire(getSession) {
+  globalThis.__caligo_uid_map_main = { phase: 'binding' };
+  const sandbox = {
+    __caligo_uid_map_main: globalThis.__caligo_uid_map_main,
+    require(path) {
+      assert.equal(path, wrapperPath);
+      return { NodeIQQNTWrapperSession: { getNTWrapperSession: getSession } };
+    }
+  };
+  const result = vm.runInNewContext('(' + surface + ')(' + JSON.stringify(wrapperPath) + ')', sandbox);
+  if (sandbox.__caligo_uid_map_main === undefined) delete globalThis.__caligo_uid_map_main;
+  return result;
+}
 
 function prepare(service) {
   const session = { getProfileService: () => service };
-  globalThis.__caligo_uid_map_main = {
-    phase: 'service', sessionName: 'fixture',
-    Sessions: { getNTWrapperSession(name) {
-      assert.equal(name, 'fixture');
-      return session;
-    } }
-  };
-  const outcome = eval(surface);
+  const outcome = acquire(name => {
+    assert.equal(name, 'nt_1');
+    return session;
+  });
   if (outcome === 'PROFILE_READY') {
     assert.equal(globalThis.__caligo_uid_map_main.session, session);
     assert.equal(globalThis.__caligo_uid_map_main.profile, service);
@@ -1532,11 +1891,7 @@ verify(found, () => vm.runInNewContext('Promise.reject(new Error("foreign reject
 verify(found, () => ({ then(resolve, reject) { setImmediate(() => reject(new Error('late rejection'))); } }), 'reverse_result_not_map', true);
 
 function acquisitionThrows(getSession) {
-  globalThis.__caligo_uid_map_main = {
-    phase: 'service', sessionName: 'fixture',
-    Sessions: { getNTWrapperSession: getSession }
-  };
-  assert.equal(eval(surface), 'ERR:profile service acquisition failed');
+  assert.equal(acquire(getSession), 'ERR:profile service acquisition failed');
   assert.equal(globalThis.__caligo_uid_map_main, undefined);
   // A failed acquisition must not poison the next state's BUSY guard.
   assert.equal(prepare({ getUidByUin() {}, getUinByUid() {} }), 'PROFILE_READY');

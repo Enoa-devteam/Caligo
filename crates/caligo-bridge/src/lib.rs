@@ -705,7 +705,7 @@ pub struct QqUidMapProbeCtx {
     pub output_path: usize,
     pub timeout_ms: u32,
     /// 0 = GroupService round trip; 1 = GroupService surface only;
-    /// 2 = exact-build ProfileService round trip.
+    /// 2 = exact-build ProfileService round trip; 3 = current-login probe.
     pub mode: u32,
 }
 
@@ -717,7 +717,7 @@ pub struct QqUidMapProbeCtx {
 /// `local-evidence/`.
 ///
 /// The loader must verify the exact loaded QQNT, major and wrapper module
-/// identities for mode 2 before invoking this entry.
+/// identities for modes 2 and 3 before invoking this entry.
 #[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx) -> u32 {
@@ -726,7 +726,7 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
     }
     // SAFETY: loader supplies this fixed repr(C) context in target process memory.
     let view = unsafe { &*ctx };
-    if !matches!((view.mode, view.uin), (1, 0) | (0 | 2, 1..)) {
+    if !matches!((view.mode, view.uin), (1 | 3, 0) | (0 | 2, 1..)) {
         return uid_map_probe::code::ERR_BAD_MODE;
     }
     if view.output_path == 0 {
@@ -740,6 +740,7 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
         0 => uid_map_probe::run(view.uin, output, view.timeout_ms),
         1 => uid_map_probe::run_surface_only(output, view.timeout_ms),
         2 => uid_map_probe::run_profile(view.uin, output, view.timeout_ms),
+        3 => uid_map_probe::run_current_login(output, view.timeout_ms),
         _ => uid_map_probe::code::ERR_BAD_MODE,
     }
 }
