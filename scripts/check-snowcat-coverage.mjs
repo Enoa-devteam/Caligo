@@ -183,11 +183,11 @@ export function initialProfiles() {
     actionPermission, clone(send.backend_dependencies), registryLab,
     'Input supports text only. Incoming event requires explicit projection/time/identity/subtype/font; native producer completeness and reference parity remain open.');
   profiles.message_event = scoped('partial_offline', 'OneBot incoming private/group text projection and daemon fanout exist with explicit required-field gates.',
-    [src(EVENTS, 'pub fn message_event_json(')], [src(DAEMON, 'publish_onebot_message')],
+    [src(EVENTS, 'pub fn message_event_json('), src('crates/caligo-core/src/message_store.rs', 'pub fn projection_for_event(')], [src(DAEMON, 'publish_onebot_message')],
     { requirement: 'Authenticated event consumer; explicit account/session identity.', enforcement: [src(EVENTS, 'pub fn message_event_json(')], limits: 'No notice/request/meta-event production is inferred.' },
-    [{ name: 'Persisted MsgEvent with OneBotMessageProjection, incoming Recv direction and strong IDs', state: 'offline_only', evidence: [src(EVENTS, 'event.onebot_projection.as_ref()?')] }],
-    [src(LEDGER, 'default/research 全仓 PASS'), src(EVENTS, '#[cfg(test)]')],
-    'Synthetic projection/fanout does not prove real QQ native event decoding or all reference message fields.');
+    [{ name: 'Current wrapper binding, durable message identity and incoming receive event', state: 'offline_only', evidence: [src(DAEMON, 'actor.wrapper_message_projection(&event)'), src(EVENTS, 'event.onebot_projection.as_ref()?')] }],
+    [src(LEDGER, '普通私聊与群聊的事件接线'), src('crates/caligo-core/tests/wrapper_message_chain.rs', 'fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()')],
+    'Coverage is limited to ordinary private and group incoming text. Self-sent notifications, temporary chat, additional fields and real QQ acceptance remain open.');
   profiles.profile_service = scoped('research_lab', 'Research-only exact-key ProfileService UIN/UID round-trip exists; normal persistent backend wiring and field result remain open.',
     [src('crates/caligo-bridge/src/uid_map_probe.rs', 'pub(crate) fn run_profile('), src('crates/caligo-bridge/src/qq_v8.rs', 'fn build_profile_uid_map_query_js(')],
     [src('crates/caligo-cli/src/qqentry.rs', '--uid-map-profile-service')],

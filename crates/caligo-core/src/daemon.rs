@@ -472,17 +472,29 @@ impl Daemon {
         let _ = self.onebot_events.lock().unwrap().publish(event_json);
     }
 
-    fn publish_onebot_message(&self, event: &MsgEvent) {
-        let message_id = self
-            .actor
-            .lock()
-            .unwrap()
-            .onebot_message_id(&event.session, &event.native_id.0);
-        let Some(message_id) = message_id else {
+    fn publish_onebot_message(&self, mut event: MsgEvent) {
+        if event.direction != Direction::Incoming || event.source != EventSource::Recv {
             return;
+        }
+        let message_id = {
+            let actor = self.actor.lock().unwrap();
+            if event.wrapper_message.is_some() {
+                let Some(projection) = actor.wrapper_message_projection(&event) else {
+                    return;
+                };
+                let message_id = projection.real_id;
+                event.onebot_projection = Some(projection);
+                message_id
+            } else {
+                let Some(message_id) = actor.onebot_message_id(&event.session, &event.native_id.0)
+                else {
+                    return;
+                };
+                message_id
+            }
         };
         let Some(json) = self.config.account.parse::<u64>().ok().and_then(|self_id| {
-            crate::onebot_events::message_event_json(self_id, message_id, event)
+            crate::onebot_events::message_event_json(self_id, message_id, &event)
         }) else {
             return;
         };
@@ -875,7 +887,7 @@ impl Daemon {
                         if matches!(&receipt, Ok(crate::runtime::EventReceipt::Published { .. })) {
                             // The actor journal and MessageStore append have both
                             // succeeded before any network transport sees it.
-                            self.publish_onebot_message(&accepted_event);
+                            self.publish_onebot_message(accepted_event);
                         }
                         let (seq, suppressed) = match receipt {
                             Ok(r) => match r {

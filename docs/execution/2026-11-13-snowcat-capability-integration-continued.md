@@ -55,3 +55,15 @@ bridge 每次接受 HelloAck 后用同一 QueryScope 清理旧查询并发布 ad
 - 初次覆盖测试失败 4 项，原因包括 13-key 映射未刷新、证据锚点漂移、评审 fixture 与 refresh 合同不一致。修正后用真实 Rust exporter 重生成 5,711 项映射并验证 12/12。固定参考重生成 6/6。保留显式评审，自动重算派生行，媒体映射限于已实现的 PCM 解码重叠部分。
 - 串行 `init.ps1 -Mode all` 在开始工作时通过。调整声明后，research bridge 声明 1/1、default query pipe 8/8、私聊发送 2/2、IPC 14/14 通过。
 - GitNexus 1.6.12 带 PDG 刷新。Windows 全文索引构建和修复均在 `Union.union_fts` 失败，随后用 `--skip-fts` 重建符号、调用和 PDG 索引。能力声明影响报告为 CRITICAL（2 个直接调用方，5 条执行流），包含正常 bridge 会话循环。
+
+## A1/A2 普通私聊与群聊的事件接线
+
+固定参考 `7cf025f` 的 `packages/snowcat-core/types/msg.ts:201–215` 和 `packages/snowcat-onebot/api/msg.ts:1097–1165` 将 C2C（1）映射为 `friend`，普通群（2）映射为 `normal`，字体字段用兼容默认 14。临时群聊另有独立类型。Caligo 从当前账号、宿主 nonce 和会话代次绑定的 wrapper 记录取消息字段，journal 和 MessageStore 写入成功后才向共用事件队列发布，`message_id` 与 `get_msg` 一致。仅发布普通私聊和群聊的首次入站文本。自发消息、历史回填、修订和旧代次仅保留各自已有处理路径。
+
+实时和恢复使用相同的账号/会话/peer/native ID 去重键，同 native ID 的跨会话消息分别入库。重复旧修订不会覆盖当前版本。新增旧代次日志记录写入可选 `audit_only` 并在恢复时跳过消息索引和去重登记。历史日志缺少该字段时按原语义读取，无法从旧记录可靠回判其入账时的代次。
+
+新增真实管道回归先复现订阅超时，接线后通过，覆盖同一持久 ID、双订阅者、普通私聊/群聊、同 ID 跨会话、更新和重复抑制、错宿主拒绝、旧代次审计及恢复。影响检查对 journal/recovery 路径报 CRITICAL，完整兼容性验证以正常入口和工作区回归为准。
+
+本阶段 research 定向 pipe 5/5、SSE 8/8、recovery 10/10、runtime 11/11、wrapper chain 1/1。串行 `init.ps1 -Mode all` 退出 0，覆盖默认和 research 全仓。真实 registry 覆盖检查 12/12，`init.ps1 -Mode docs` 与 `git diff --check` 通过。输出保留在 ignored `local-evidence/snowcat-event-all.log` 等本机证据中。
+
+登录仍缺已登录 QQ 实例的当前账号来源。固定参考 Framework/Shell 从扫码成功回调获得 UIN/UID，但回调留下空昵称。双账号研究从 `getLoginList` 按已知昵称选账号，并有额外宿主及样本约束。现有 Caligo wrapper session ID、配置账号、历史登录列表或目录查询均不足以绑定当前已登录身份，`LoginInfo` 继续不声明。

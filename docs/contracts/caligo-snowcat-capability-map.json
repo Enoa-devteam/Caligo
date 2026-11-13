@@ -816,6 +816,10 @@
         {
           "path": "crates/caligo-core/src/onebot_events.rs",
           "symbol": "pub fn message_event_json("
+        },
+        {
+          "path": "crates/caligo-core/src/message_store.rs",
+          "symbol": "pub fn projection_for_event("
         }
       ],
       "normal_entry": [
@@ -836,9 +840,13 @@
       },
       "backend_dependencies": [
         {
-          "name": "Persisted MsgEvent with OneBotMessageProjection, incoming Recv direction and strong IDs",
+          "name": "Current wrapper binding, durable message identity and incoming receive event",
           "state": "offline_only",
           "evidence": [
+            {
+              "path": "crates/caligo-core/src/daemon.rs",
+              "symbol": "actor.wrapper_message_projection(&event)"
+            },
             {
               "path": "crates/caligo-core/src/onebot_events.rs",
               "symbol": "event.onebot_projection.as_ref()?"
@@ -858,14 +866,14 @@
         "evidence": [
           {
             "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
-            "symbol": "default/research 全仓 PASS"
+            "symbol": "普通私聊与群聊的事件接线"
           },
           {
-            "path": "crates/caligo-core/src/onebot_events.rs",
-            "symbol": "#[cfg(test)]"
+            "path": "crates/caligo-core/tests/wrapper_message_chain.rs",
+            "symbol": "fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out()"
           }
         ],
-        "limits": "Synthetic projection/fanout does not prove real QQ native event decoding or all reference message fields."
+        "limits": "Coverage is limited to ordinary private and group incoming text. Self-sent notifications, temporary chat, additional fields and real QQ acceptance remain open."
       }
     },
     "profile_service": {

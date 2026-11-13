@@ -404,17 +404,16 @@ impl MessageStore {
     }
 
     /// Build compatibility fields from a durable wrapper-backed local message ID.
-    /// The font value is a OneBot compatibility default, not a native observation;
-    /// subtype remains absent until an authoritative source is available.
+    /// The pinned SnowCat contract maps C2C to friend and group to normal, with font 14.
     pub fn projection_for_event(&self, event: &MsgEvent) -> Option<caligo_model::OneBotMessageProjection> {
         let envelope = event.wrapper_message.as_ref()?;
         envelope.validate().ok()?;
         let account_id = event.session.account.0.parse::<u64>().ok()?;
         let peer_id = envelope.record.peer_uin.parse::<u64>().ok()?;
         let sender_user_id = envelope.record.sender_uin.parse::<u64>().ok()?;
-        let chat_type = match event.session.kind {
-            SessionKind::Private if envelope.record.chat_type == 1 => ChatType::Private,
-            SessionKind::Group if envelope.record.chat_type == 2 => ChatType::Group,
+        let (chat_type, sub_type) = match (event.session.kind, envelope.record.chat_type) {
+            (SessionKind::Private, 1) => (ChatType::Private, "friend"),
+            (SessionKind::Group, 2) => (ChatType::Group, "normal"),
             _ => return None,
         };
         let identity = MessageIdentity {
@@ -436,13 +435,16 @@ impl MessageStore {
         }
         let message_id = self.by_identity.get(&identity).copied()?;
         let stored = self.by_id.get(&message_id)?;
+        if stored.sender.get("user_id")?.as_u64()? != sender_user_id {
+            return None;
+        }
         Some(caligo_model::OneBotMessageProjection {
             peer_id,
-            sender_user_id: stored.sender.get("user_id")?.as_u64()?,
+            sender_user_id,
             real_id: message_id,
             time: stored.time,
             sender_nickname: stored.sender.get("nickname").and_then(Value::as_str).map(str::to_owned),
-            sub_type: None,
+            sub_type: Some(sub_type.into()),
             font: Some(14),
         })
     }
@@ -664,7 +666,7 @@ mod tests {
         let before = store.projection_for_event(&first).unwrap();
         assert_eq!(before.real_id, id);
         assert_eq!(before.font, Some(14));
-        assert_eq!(before.sub_type, None);
+        assert_eq!(before.sub_type.as_deref(), Some("friend"));
 
         let update = make_event(EventSource::Update, "sent", Some(2));
         assert_eq!(store.insert_event(&update).unwrap(), Some(id));
