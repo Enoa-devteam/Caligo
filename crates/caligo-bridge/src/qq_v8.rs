@@ -389,6 +389,7 @@ pub const D8_START_JS: &str = r"
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
       rejected: 0, overflow: 0, listenerId: null, sendResults: {}, sends: {} };
     var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
+    R.voiceAccount = voiceAccount;
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
       if (!pending || !pending.promiseDone || !pending.readback) return;
@@ -415,6 +416,13 @@ pub const D8_START_JS: &str = r"
             !Number.isInteger(m.subMsgType) || m.subMsgType < 0 ||
             (m.clientSeq !== undefined && typeof m.clientSeq !== 'string') ||
             (m.sendStatus !== undefined && !Number.isInteger(m.sendStatus))) { R.rejected++; return; }
+        // A self-sent voice receipt is used by D9; D8 only publishes incoming voice.
+        if ((src === 'add_send' || src === 'update') && voiceAccount &&
+            m.chatType === 1 && m.senderUin === voiceAccount &&
+            m.elements.length === 1 && m.elements[0] && m.elements[0].elementType === 4) {
+          correlateSend(R, m, src);
+          return;
+        }
         var elements = [], textBytes = 0;
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
@@ -453,44 +461,63 @@ pub const D8_START_JS: &str = r"
         R.recv.push(item); R.recvBytes += bytes;
       } catch (err) { R.rejected++; }
     };
+    var matchesSendElement = function (record, send) {
+      if (!record || !Array.isArray(record.elements) || record.elements.length !== 1 ||
+          !record.elements[0]) return false;
+      var element = record.elements[0];
+      if (!send.voice) return element.textElement && element.textElement.content === send.text;
+      var ptt = element.pttElement;
+      return element.elementType === 4 && !element.textElement && ptt &&
+        typeof element.elementId === 'string' && /^[0-9]{1,128}$/.test(element.elementId) &&
+        /[1-9]/.test(element.elementId) && ptt.fileSize === String(send.voice.size) &&
+        typeof ptt.md5HexStr === 'string' && ptt.md5HexStr.toLowerCase() === send.voice.md5;
+    };
     var correlateSend = function (R, m, src) {
+      if (R.stopped) return;
       var keys = Object.keys(R.sends);
       for (var k = 0; k < keys.length; k++) {
         var key = keys[k], send = R.sends[key];
         if (!send || send.done || send.failed || m.guildId !== send.cookie || m.chatType !== send.chat ||
             m.peerUid !== send.peer || typeof m.msgId !== 'string' || !m.msgId || m.msgId === '0' ||
-            m.senderUin !== send.selfUin || !Array.isArray(m.elements) || m.elements.length !== 1 ||
-            !m.elements[0].textElement || m.elements[0].textElement.content !== send.text) continue;
+            m.senderUin !== send.selfUin || !matchesSendElement(m, send) ||
+            (send.voice && (!/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
-          if (send.addId && send.addId !== m.msgId) {
+          if (send.addId && (send.addId !== m.msgId ||
+              (send.voice && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
             send.readback = {status:'unknown', reason:'multiple_add_send_ids'};
             R.sendResults[key] = {status:'unknown', reason:'multiple_add_send_ids'};
             settleSendResult(R, key, send);
-          } else send.addId = m.msgId;
+          } else {
+            send.addId = m.msgId;
+            if (send.voice) send.addElementId = m.elements[0].elementId;
+          }
         }
-        if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted) {
+        if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
+            (!send.voice || send.addElementId === m.elements[0].elementId)) {
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
             Promise.resolve().then(function () {
+              if (R.stopped) return null;
               return service.getMsgsByMsgId({chatType:pending.chat, peerUid:pending.peer,
                 guildId:pending.cookie}, [pending.updateId]);
             }).then(function (response) {
+              if (R.stopped) return;
               var list = response && response.msgList;
               if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
                 pending.readback = {status:'unknown', reason:'exact_query_miss'};
               } else {
                 var record = list[0];
-                var body = record && Array.isArray(record.elements) && record.elements.length === 1 &&
-                  record.elements[0].textElement && record.elements[0].textElement.content;
-                pending.readback = record.msgId === pending.updateId && record.chatType === pending.chat &&
+                pending.readback = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
                   record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
-                  record.sendStatus === 2 && body === pending.text
+                  record.sendStatus === 2 && matchesSendElement(record, pending) &&
+                  (!pending.voice || record.elements[0].elementId === pending.addElementId)
                     ? {status:'readback', msgId:record.msgId}
                     : {status:'unknown', reason:'exact_query_identity_mismatch'};
               }
               settleSendResult(R, key, pending);
             }, function () {
+              if (R.stopped) return;
               pending.readback = {status:'unknown', reason:'exact_query_rejected'};
               settleSendResult(R, key, pending);
             });
@@ -498,6 +525,7 @@ pub const D8_START_JS: &str = r"
         }
       }
     };
+    R.settleSendResult = settleSendResult;
     var pushList = function (src, a) {
       if (!Array.isArray(a)) { R.rejected++; return; }
       for (var i = 0; i < a.length; i++) push(src, a[i]);
@@ -1493,7 +1521,47 @@ for (const name of ['getUidByUin', 'getUinByUid']) {
     }
 }
 
-/// D9 fixed wrapper send. Correlation stays local; a native ID is returned
+/// D9 private voice submission consumes owned bytes. Its caller must use the exact
+/// profile gate when arming the listener and the durable send path for dispatch.
+pub fn build_voice_send_js(
+    account: &str,
+    peer_uin: &str,
+    request_id: &str,
+    wire_seq: u32,
+    timeout_ms: u64,
+    silk: &[u8],
+) -> Option<String> {
+    const MAX_SILK_BYTES: usize = 128 * 1024;
+    const MAX_PACKETS: usize = 50;
+    let mut packets = silk.strip_prefix(b"\x02#!SILK_V3")?;
+    if silk.len() > MAX_SILK_BYTES || packets.is_empty() {
+        return None;
+    }
+    // Fixed reference envelope for a short Tencent SILK v3 voice message.
+    // Validate framing here; decoding and codec errors belong to media tooling.
+    let mut count = 0;
+    while !packets.is_empty() {
+        let (len, rest) = packets.split_first_chunk::<2>()?;
+        let size = i16::from_le_bytes(*len);
+        count += 1;
+        if size <= 0 || count > MAX_PACKETS {
+            return None;
+        }
+        packets = rest.get(size as usize..)?;
+    }
+    let mut hex = String::with_capacity(silk.len() * 2);
+    use std::fmt::Write;
+    for byte in silk {
+        write!(hex, "{byte:02x}").expect("writing to String is infallible");
+    }
+    let args = serde_json::json!({
+        "account": account, "peerUin": peer_uin, "requestId": request_id,
+        "wireSeq": wire_seq, "timeoutMs": timeout_ms, "silk": hex
+    });
+    Some(format!("({})({args})", include_str!("qq_voice_send.js")))
+}
+
+/// D9 fixed wrapper text send. Correlation stays local; a native ID is returned
 /// only after exact event identity and getMsgsByMsgId readback agree.
 pub fn build_send_js(
     chat_type: u32,

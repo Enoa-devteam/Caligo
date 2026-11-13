@@ -107,3 +107,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 承接 `099db2a`。共享 `get_record` 根据当前会话的有界下载结果核对持久化语音元数据，然后按配置返回 WAV 或 OGG。省略 `out_format` 继续返回原始 Silk。转码走显式配置的独立工具，两个子进程执行前重新核对哈希，停止信号与账号 daemon 共用。PCM 和输出均最多 4 MiB。单账号从 `--media-config` 加载，多账号从各账号私有目录中的 `voice-media.json` 加载，并固定各自的临时目录。
 
 定向合成 wrapper → IPC → daemon → OneBot 回归覆盖 WAV、OGG、原始 Silk、错指纹、工具被替换、错误码和任务目录清理。真实 `caligod` 通过 OneBot HTTP、合成命名管道宿主和固定解码工具返回原始 682 字节 Silk、9,678 字节 WAV 和 924 字节 Ogg，控制管道正常停止，临时目录清空。真实 `caligo-manager` 双账号启动验证已配置账号使用独立私有工作目录，管理 API 正常停止两账号。串行 `init.ps1 -Mode all` 通过默认和 research 全仓，真实 Rust registry 覆盖检查 12/12。现场尚待候选冻结。下一工作块核对语音上传的关联合同，随后推进其他媒体和 SSO。
+
+## A2 私聊语音发送宿主合同
+
+固定参考 `7cf025f` 的 `live-testing/business-message/probe.cjs` 和 `packages/snowcat-core/apis/file.ts` 表明，`getRichMediaFilePathForGuild` 返回宿主缓存路径。私聊语音通过 wrapper 的 `sendMsg` 提交，稳定消息 ID 由发送事件和 `getMsgsByMsgId` 回读提供。参考样本还在接收端匹配消息指纹并核对下载 SHA-256。见[固定参考的双账号验收](https://github.com/Eternal-Wanderer-Vegetable/Napcat-Snowluma-research/blob/7cf025fe1e7f9c609e02a8643c6e6398eeec0d64/research/native-reconstruction/live-testing/business-message/RESULTS.md)。
+
+新增 research 内部脚本构造器，输入限于有界的腾讯前缀 SILK v3 短样本。桥在绑定账号上解析目标 UIN，独占写入宿主分配的缓存路径。若缓存已存在，仅在文件身份和 SHA-256 一致时复用。发送前登记请求，Promise 受理、同一消息与元素的发送事件、终态更新和精确回读均匹配时才产出 native ID。提交抛异常或结果冲突保留 unknown。宿主缓存文件交由宿主生命周期管理。该检查点的合成宿主用例覆盖错误账号、损坏帧、缓存冲突、错指纹、错元素、歧义、超时和停止。语音发送仍待接入 scoped IPC、持久请求和 OneBot。

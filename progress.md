@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-13 A2 语音发送：research 脚本已完成绑定账号、缓存校验、提交关联和精确回读的合成宿主验证。正常 IPC、持久化发送请求和 OneBot 入口尚待接线。[私聊语音发送宿主合同](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音发送宿主合同)
+
 2026-11-13 A2 转码：`099db2a` 的独立解码器通过合成腾讯 SILK v3 到 WAV/OGG 的真实工具验证。共享 `get_record` 已接可选 WAV/OGG，正常单账号与多账号启动均可加载本机工具配置。合成命名管道覆盖下载、转换及失败返回，QQ 现场未开始。[OneBot 语音转码](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音转码)
 
 2026-11-13 A2 OneBot 语音：`e1b4420` 持久化入站私聊语音身份，`318e46d` 把同一 `record` 文件标识接入共享事件与 `get_record`。原始 Silk 通过当前 bridge 读取并返回 Base64，上传和真实 QQ 验收仍待推进。[OneBot 语音读取](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-onebot-语音读取)
