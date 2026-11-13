@@ -193,7 +193,7 @@ const COMMON_JS: &str = r#"
     var crypto = process.getBuiltinModule('node:crypto');
     if (!fs || !path || !os || !crypto) throw new Error('voice file helpers unavailable');
     var root = fs.realpathSync(os.tmpdir());
-    var image = info.pic_type === 1001;
+    var image = info.pic_type === 1001 || info.pic_type === 1000;
     var directory = fs.mkdtempSync(path.join(root, 'caligo-media-'));
     var file = path.join(directory, image ? 'image.png' : 'voice.silk');
     function cleanup() {
@@ -397,7 +397,7 @@ pub fn build_query_start_js(
         if (!element || element.elementId !== args.elementId || element.elementType !== 2 ||
             !element.picElement) throw new Error('image element identity');
         var pic = element.picElement;
-        if (pic.picType !== 1001 || pic.picSubType !== 0) throw new Error('unsupported image format or subtype');
+        if ((pic.picType !== 1001 && !(m.senderUin === scope.account && pic.picType === 1000)) || pic.picSubType !== 0) throw new Error('unsupported image format or subtype');
         var size = pic.fileSize;
         if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
         if (!Number.isInteger(size) || size < 33 || size > args.maxBytes ||

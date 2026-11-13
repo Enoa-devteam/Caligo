@@ -336,7 +336,7 @@ impl ImageInfo {
                 .md5
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-            && self.pic_type == 1001
+            && matches!(self.pic_type, 1000 | 1001)
             && (1..=32768).contains(&self.width)
             && (1..=32768).contains(&self.height)
             && u64::from(self.width) * u64::from(self.height) <= 100_000_000
@@ -421,10 +421,11 @@ impl QueryData {
             (HostQuery::UinToUid { .. }, Self::Uid(uid)) => native_uid(uid),
             (HostQuery::UidToUin { .. }, Self::Uin(uin)) => positive_decimal(uin),
             (HostQuery::ImageInfo { .. }, Self::ImageInfo(info)) => {
-                info.matches(query, MAX_IMAGE_BYTES)
+                info.matches(query, MAX_IMAGE_BYTES) && (info.pic_type == 1001 || info.sender_uin == scope.account)
             }
             (HostQuery::ImageDownload { .. }, Self::ImageDownload(download)) => {
                 download.info.matches(query, MAX_IMAGE_DOWNLOAD_BYTES)
+                    && (download.info.pic_type == 1001 || download.info.sender_uin == scope.account)
                     && download.png_hex.len() == download.info.size as usize * 2
                     && download
                         .png_hex

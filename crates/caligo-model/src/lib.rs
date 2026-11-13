@@ -472,3 +472,4 @@ pub mod onebot_traits;
 pub mod qq_wire;
 pub mod wrapper_message;
 pub mod voice;
+pub mod png;

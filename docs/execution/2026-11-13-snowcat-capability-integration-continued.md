@@ -174,3 +174,19 @@ GitNexus 初次增量索引出现异常 target UID 与同名合并，按 UNKNOWN
 中间编译发现新增枚举未同步两个穷尽匹配，以及测试 WrapperElement 重复 image 初始化；修正测试后 unit 通过。首轮 all 在 `onebot_query_lab` 的旧 registry 数量 14 断言失败（5 PASS / 1 FAIL），显式更新为实际的 15 后，最终串行 `$env:RUST_TEST_THREADS='1'; .\init.ps1 -Mode all` 和默认并发 research 全仓均退出 0。失败/最终结果分别保存在 ignored `local-evidence/snowcat-image-onebot-compile.log`、`snowcat-image-onebot-all.log`、`snowcat-image-onebot-all-final.log`、`snowcat-image-onebot-parallel.log`，未用重跑覆盖原报告。
 
 文档检查 PASS（15 live docs / 260 local links / 35 historical entries / 10 features），Windows `git diff --check` 通过。本块提交前对 staged/all 分别执行完整结构化变更图检查，保留 CRITICAL 风险与索引召回限制。没有启动 QQ；完整候选与剩余任务继续未完成，feat-008 保持 in-progress，产品 NOT READY。
+
+
+## A2 PNG 发送构造与 D9 合同
+
+从 `051a035` 继续离线实现。固定参考 `7cf025f` 的 `apis/file.ts:147–185` 提供宿主缓存路径/拷贝行为，`snowcat-onebot/api/file.ts:61–87` 提供发送元素，`helper/msg.ts` 当前对 PNG 走默认 picType=1000。Caligo 自有 `png::dimensions` 验证不超过 128 KiB 的普通 PNG chunk 边界、CRC、IHDR 尺寸/颜色深度、PLTE/IDAT/IEND 顺序，拒绝 APNG、坏 CRC、截断和尾随数据；这不是像素解码。
+
+新增 research `build_image_send_js` 固定构造器和自有 `qq_image_send.js`。脚本用既有媒体账号绑定、UID 查询、服务器时间和 QQ cookie，独占创建宿主返回的 MD5.png 缓存目标，复用旧文件前核对类型、真实路径、长度、文件身份和 SHA-256；文件交给宿主后保留，不按 Promise 或 timeout 删除。发送元素按参考合同采用 picType=1000。D9 关联 cookie、chat/peer/sender、消息/元素、MD5/大小/尺寸，并在 Promise 受理且 add/update/精确回读一致后才产生 owned 自发图片记录。歧义、拒绝、超时和停止继续保留 unknown 层级。
+
+自发回读仅在同账号 scope 允许 picType=1000/1001；原入站合同仍只接 1001，下载仍校验真实 PNG 头与尺寸。初次放宽模型时原入站 pic_type 拒绝回归失败，随后在 QueryData 校验中增加账号条件，未将收到的 JPEG/任意 1000 元素放行。原失败日志为 ignored `local-evidence/snowcat-png-send-initial.log`。
+
+当前只有固定构造器/D9 合同与合成宿主覆盖，尚未接 HostOp、scoped image dispatch、core 持久派发或 OneBot image 发送，也不声明图片发送能力。真实 QQ 与缓存实际寿命仍待统一验收。不能把本检查点计为公开图片上传贯通。
+
+
+实际检查：PNG framing unit 1/1；research 新 `wrapper_image_send` 1/1、原 `wrapper_send` 2/2、`wrapper_image_contract` 4/4 通过。新发送场景覆盖两种会话、缓存冲突/错路径、重复、Promise 与精确回读先后、元素/消息歧义、超时及 stop，并将成功的两条自发记录送入生产 Rust D8 decoder，核对同一 native/element/MD5/尺寸。新增自发 picType=1000 下载回归也通过，继续返回真实 PNG owned bytes。
+
+串行 `init.ps1 -Mode all` 与默认并发 research 全仓均退出 0，覆盖检查含实际 exporter 12/12。日志在 ignored `local-evidence/snowcat-png-send-contract.log`、`snowcat-png-send-all.log`、`snowcat-png-send-parallel.log`、`snowcat-png-send-download.log` 和 `snowcat-png-send-coverage.log`。docs PASS（15 live docs / 262 local links / 35 historical entries / 10 features）；Windows diff 检查通过。GitNexus 按实际变更重新 force/index-only/PDG 刷新；字符串脚本与方法匹配 UNKNOWN 由源码补证，完整 staged/all 报告保留本机，未将缺失图边当作无影响。没有新增公开 action、image 发送 capability 或现场准入，候选仍未冻结。

@@ -225,7 +225,9 @@ function finish(data=png,extra={}){const target=requested;fs.writeFileSync(targe
   await begin(group);finish();assert.equal(call(poll).data.data.info.chat_type,2);
   chatType=1;peerUid='u_image_peer';peerUin='20002';senderUin='10001';
   mutate=m=>m.sendStatus=1;await begin(sent);assert.equal(call(poll).status,'invalid_response');mutate=m=>{};
-  mode='sync';await begin(sent);assert.equal(call(poll).data.data.info.sender_uin,'10001');
+  mode='sync';mutate=m=>m.elements[0].picElement.picType=1000;
+  await begin(sent);const own=call(poll);assert.equal(own.data.data.info.sender_uin,'10001');
+  assert.equal(own.data.data.info.pic_type,1000);assert.equal(own.data.data.png_hex,png.toString('hex'));mutate=m=>{};
   senderUin='20002';mode='pending';await begin();const retained=requested;
   assert.ok(eval(stop).startsWith('STOPPED'));assert.equal(fs.existsSync(path.dirname(retained)),true);
   finish();assert.equal(fs.existsSync(path.dirname(retained)),false);assert.equal(call(start).status,'not_ready');

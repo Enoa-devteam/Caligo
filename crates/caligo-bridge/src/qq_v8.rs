@@ -396,7 +396,7 @@ pub const D8_START_JS: &str = r"
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
           (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
-      } else if (pending.voice && !push('add_send', pending.readback.record, true)) {
+      } else if ((pending.voice || pending.image) && !push('add_send', pending.readback.record, true)) {
         R.sendResults[key] = {status:'unknown', reason:'verified_voice_projection_rejected'};
       } else {
         R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
@@ -421,7 +421,7 @@ pub const D8_START_JS: &str = r"
         // The unverified self-sent callback only feeds D9 correlation.
         if (!verifiedVoice && (src === 'add_send' || src === 'update') && voiceAccount &&
             m.senderUin === voiceAccount &&
-            m.elements.length === 1 && m.elements[0] && m.elements[0].elementType === 4) {
+            m.elements.length === 1 && m.elements[0] && (m.elements[0].elementType === 4 || m.elements[0].elementType === 2)) {
           correlateSend(R, m, src);
           return;
         }
@@ -429,13 +429,13 @@ pub const D8_START_JS: &str = r"
         for (var j = 0; j < m.elements.length; j++) {
           var e = m.elements[j], t = e && e.textElement;
           if (e && e.elementType === 2 && voiceAccount && m.elements.length === 1 &&
-              src === 'recv' && m.senderUin !== voiceAccount &&
+              (verifiedVoice || (src === 'recv' && m.senderUin !== voiceAccount &&
               ((m.chatType === 1 && m.senderUid === m.peerUid && m.senderUin === m.peerUin) ||
-               (m.chatType === 2 && m.peerUid === m.peerUin))) {
+               (m.chatType === 2 && m.peerUid === m.peerUin))))) {
             var pic = e.picElement, size = pic && pic.fileSize;
             if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
             if (t || !pic || typeof e.elementId !== 'string' || !/^[0-9]{1,128}$/.test(e.elementId) ||
-                !/[1-9]/.test(e.elementId) || pic.picType !== 1001 || pic.picSubType !== 0 ||
+                !/[1-9]/.test(e.elementId) || (pic.picType !== 1001 && !(verifiedVoice && pic.picType === 1000)) || pic.picSubType !== 0 ||
                 !Number.isInteger(size) || size < 33 || size > 16777216 ||
                 !Number.isInteger(pic.picWidth) || pic.picWidth < 1 || pic.picWidth > 32768 ||
                 !Number.isInteger(pic.picHeight) || pic.picHeight < 1 || pic.picHeight > 32768 ||
@@ -443,7 +443,7 @@ pub const D8_START_JS: &str = r"
                 !/^[0-9a-fA-F]{32}$/.test(pic.md5HexStr)) { R.rejected++; return; }
             elements.push({elementType:2,image:{chat_type:m.chatType,peer_uid:m.peerUid,
               sender_uin:m.senderUin,message_id:m.msgId,element_id:e.elementId,size:size,
-              md5:pic.md5HexStr.toLowerCase(),width:pic.picWidth,height:pic.picHeight,pic_type:1001}});
+              md5:pic.md5HexStr.toLowerCase(),width:pic.picWidth,height:pic.picHeight,pic_type:pic.picType}});
             continue;
           }
           if (e && e.elementType === 4 && voiceAccount && m.elements.length === 1 &&
@@ -487,6 +487,15 @@ pub const D8_START_JS: &str = r"
       if (!record || !Array.isArray(record.elements) || record.elements.length !== 1 ||
           !record.elements[0]) return false;
       var element = record.elements[0];
+      if (send.image) {
+        var pic=element.picElement;
+        return element.elementType === 2 && !element.textElement && pic &&
+          typeof element.elementId === 'string' && /^[0-9]{1,128}$/.test(element.elementId) && /[1-9]/.test(element.elementId) &&
+          (pic.picType === 1000 || pic.picType === 1001) && pic.picSubType === 0 &&
+          (pic.fileSize === String(send.image.size) || pic.fileSize === send.image.size) &&
+          pic.picWidth === send.image.width && pic.picHeight === send.image.height &&
+          typeof pic.md5HexStr === 'string' && pic.md5HexStr.toLowerCase() === send.image.md5;
+      }
       if (!send.voice) return element.textElement && element.textElement.content === send.text;
       var ptt = element.pttElement;
       return element.elementType === 4 && !element.textElement && ptt &&
@@ -502,22 +511,22 @@ pub const D8_START_JS: &str = r"
         if (!send || send.done || send.failed || m.guildId !== send.cookie || m.chatType !== send.chat ||
             m.peerUid !== send.peer || typeof m.msgId !== 'string' || !m.msgId || m.msgId === '0' ||
             m.senderUin !== send.selfUin || !matchesSendElement(m, send) ||
-            (send.voice && (m.peerUin !== send.peerUin ||
+            ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
               !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
           if (send.addId && (send.addId !== m.msgId ||
-              (send.voice && send.addElementId !== m.elements[0].elementId))) {
+              ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
             send.readback = {status:'unknown', reason:'multiple_add_send_ids'};
             R.sendResults[key] = {status:'unknown', reason:'multiple_add_send_ids'};
             settleSendResult(R, key, send);
           } else {
             send.addId = m.msgId;
-            if (send.voice) send.addElementId = m.elements[0].elementId;
+            if (send.voice || send.image) send.addElementId = m.elements[0].elementId;
           }
         }
         if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
-            (!send.voice || send.addElementId === m.elements[0].elementId)) {
+            (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
             Promise.resolve().then(function () {
@@ -534,10 +543,10 @@ pub const D8_START_JS: &str = r"
                 var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
                   record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
                   record.sendStatus === 2 && matchesSendElement(record, pending) &&
-                  (!pending.voice || (record.peerUin === pending.peerUin &&
+                  (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
                     record.elements[0].elementId === pending.addElementId));
                 var owned;
-                if (matched && pending.voice) {
+                if (matched && (pending.voice || pending.image)) {
                   owned = {};
                   var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
                     'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
@@ -545,8 +554,12 @@ pub const D8_START_JS: &str = r"
                     var value = record[fields[f]];
                     if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
                   }
-                  owned.elements = [{elementType:4, elementId:pending.addElementId,
-                    pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
+                  owned.elements = pending.image
+                    ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
+                      md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
+                      picType:record.elements[0].picElement.picType,picSubType:0}}]
+                    : [{elementType:4, elementId:pending.addElementId,
+                      pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
                 }
                 pending.readback = matched
                     ? {status:'readback', msgId:record.msgId, record:owned}
@@ -1582,6 +1595,21 @@ pub fn build_voice_send_js(
         "wireSeq": wire_seq, "timeoutMs": timeout_ms, "silk": hex
     });
     Some(format!("({})({args})", include_str!("qq_voice_send.js")))
+}
+
+/// Fixed PNG preparation/submission contract. Public IPC capability remains closed
+/// until its durable dispatch integration is installed.
+pub fn build_image_send_js(
+    chat_type: u32, account: &str, peer_uin: &str, request_id: &str,
+    wire_seq: u32, timeout_ms: u64, png: &[u8],
+) -> Option<String> {
+    let (width,height) = caligo_model::png::dimensions(png)?;
+    let mut hex = String::with_capacity(png.len()*2);
+    use std::fmt::Write;
+    for byte in png { write!(hex,"{byte:02x}").ok()?; }
+    let args = serde_json::json!({"chatType":chat_type,"account":account,"peerUin":peer_uin,
+        "requestId":request_id,"wireSeq":wire_seq,"timeoutMs":timeout_ms,"png":hex,"width":width,"height":height});
+    Some(format!("({})({args})",include_str!("qq_image_send.js")))
 }
 
 /// D9 fixed wrapper text send. Correlation stays local; a native ID is returned

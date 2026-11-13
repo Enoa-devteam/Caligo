@@ -220,15 +220,21 @@ impl WrapperMessageEnvelope {
         .then_some(voice)
     }
 
-    /// Ordinary single PNG from the current incoming D8 conversation.
+    /// Ordinary incoming PNG or a PNG fingerprint verified by D9 self-send readback.
     pub fn image(&self) -> Option<&crate::capability::ImageInfo> {
         use crate::capability::{HostQuery, QueryData, QueryScope};
         let [element] = self.record.elements.as_slice() else { return None; };
         let info = element.image.as_ref()?;
         if element.element_type != 2 || element.text_element.is_some() || element.voice.is_some()
-            || self.source != WrapperSource::Recv || self.record.sender_uin == self.binding.account
-            || (self.record.chat_type == 1 && (self.record.sender_uid != self.record.peer_uid
-                || self.record.sender_uin != self.record.peer_uin)) { return None; }
+            || match self.source {
+                WrapperSource::Recv => info.pic_type != 1001 || self.record.sender_uin == self.binding.account
+                    || (self.record.chat_type == 1 && (self.record.sender_uid != self.record.peer_uid
+                        || self.record.sender_uin != self.record.peer_uin)),
+                WrapperSource::AddSend => self.record.sender_uin != self.binding.account
+                    || self.record.send_status != Some(2)
+                    || (self.record.chat_type == 1 && self.record.peer_uin == self.binding.account),
+                WrapperSource::Update => true,
+            } { return None; }
         let query = HostQuery::ImageInfo {
             chat_type:self.record.chat_type, peer_uid:self.record.peer_uid.clone(),
             sender_uin:self.record.sender_uin.clone(), message_id:self.record.msg_id.clone(),
