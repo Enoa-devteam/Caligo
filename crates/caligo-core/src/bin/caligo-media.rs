@@ -29,6 +29,8 @@ enum Operation {
     Pcm,
     Wav,
     Ogg,
+    SilkWav,
+    SilkOgg,
     Thumbnail,
 }
 
@@ -49,7 +51,7 @@ struct ArtifactOutput {
 }
 
 fn usage() -> &'static str {
-    "caligo-media --config <absolute-json> <probe|pcm|wav|ogg|thumbnail> --input <absolute-file> [--output-root <absolute-dir>]"
+    "caligo-media --config <absolute-json> <probe|pcm|wav|ogg|silk-wav|silk-ogg|thumbnail> --input <absolute-file> [--output-root <absolute-dir>]"
 }
 
 fn parse_args() -> Result<Cli, String> {
@@ -69,6 +71,8 @@ fn parse_args() -> Result<Cli, String> {
             "pcm" => operation = Some(Operation::Pcm),
             "wav" => operation = Some(Operation::Wav),
             "ogg" => operation = Some(Operation::Ogg),
+            "silk-wav" => operation = Some(Operation::SilkWav),
+            "silk-ogg" => operation = Some(Operation::SilkOgg),
             "thumbnail" => operation = Some(Operation::Thumbnail),
             "--help" | "-h" => return Err(usage().into()),
             unknown => return Err(format!("unknown argument {unknown}; usage: {}", usage())),
@@ -229,6 +233,23 @@ fn run(cli: Cli) -> Result<serde_json::Value, String> {
                 } else {
                     "ogg"
                 },
+                artifact.format,
+                &artifact.bytes,
+            )?)
+            .map_err(|e| e.to_string())
+        }
+        Operation::SilkWav | Operation::SilkOgg => {
+            let (operation, format) = match cli.operation {
+                Operation::SilkWav => ("silk-wav", ContainerFormat::Wav),
+                _ => ("silk-ogg", ContainerFormat::Ogg),
+            };
+            let root = output_root(cli.output_root)?;
+            let artifact = tool
+                .silk_file_to_container(&cli.input, format, &stop)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(write_artifact(
+                &root,
+                operation,
                 artifact.format,
                 &artifact.bytes,
             )?)

@@ -1,5 +1,5 @@
 //! Controlled offline media operations backed by explicitly configured tools.
-//! Independent of QQ, OneBot, native adapters and NTSilk.
+//! Independent of QQ and native adapters.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -99,7 +99,7 @@ impl ToolDeclaration {
         }
         let mut file = File::open(&self.executable).map_err(MediaError::Io)?;
         let mut hasher = Sha256::new();
-        let mut buffer = [0u8; HASH_READ_CHUNK];
+        let mut buffer = vec![0u8; HASH_READ_CHUNK];
         loop {
             let count = file.read(&mut buffer).map_err(MediaError::Io)?;
             if count == 0 {
@@ -134,12 +134,14 @@ impl ToolDeclaration {
 pub enum ToolRole {
     Ffmpeg,
     Ffprobe,
+    SilkDecoder,
 }
 impl ToolRole {
     fn as_str(self) -> &'static str {
         match self {
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
+            Self::SilkDecoder => "silk decoder",
         }
     }
 }
@@ -148,6 +150,8 @@ impl ToolRole {
 pub struct MediaToolConfig {
     pub ffmpeg: ToolDeclaration,
     pub ffprobe: ToolDeclaration,
+    #[serde(default)]
+    pub silk_decoder: Option<ToolDeclaration>,
     pub work_root: PathBuf,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
@@ -172,12 +176,18 @@ impl MediaToolConfig {
         }
         self.ffmpeg.validate_metadata(ToolRole::Ffmpeg)?;
         self.ffprobe.validate_metadata(ToolRole::Ffprobe)?;
+        if let Some(decoder) = &self.silk_decoder {
+            decoder.validate_metadata(ToolRole::SilkDecoder)?;
+        }
         Ok(())
     }
     pub fn verify_tools(&self) -> Result<(), MediaError> {
         self.validate()?;
         self.ffmpeg.verify(ToolRole::Ffmpeg)?;
         self.ffprobe.verify(ToolRole::Ffprobe)?;
+        if let Some(decoder) = &self.silk_decoder {
+            decoder.verify(ToolRole::SilkDecoder)?;
+        }
         Ok(())
     }
 }
@@ -486,6 +496,16 @@ impl MediaTool {
             config.timeout_ms,
             config.max_stdout_stderr_bytes,
         )?;
+        if let Some(decoder) = &config.silk_decoder {
+            verify_runtime_version(
+                decoder,
+                ToolRole::SilkDecoder,
+                &runner,
+                &config.work_root,
+                config.timeout_ms,
+                config.max_stdout_stderr_bytes,
+            )?;
+        }
         Ok(Self { config, runner })
     }
     #[doc(hidden)]
@@ -582,6 +602,71 @@ impl MediaTool {
             format: "s16le-24khz-mono",
             bytes,
         })
+    }
+
+    /// Decode one local SILK v3 file and wrap the mono 24 kHz PCM as WAV or Ogg.
+    pub fn silk_file_to_container(
+        &self,
+        input: &Path,
+        format: ContainerFormat,
+        stop: &StopToken,
+    ) -> Result<MediaArtifact, MediaError> {
+        let input = self.prepare_input(input)?;
+        let bytes = read_bounded(&input, self.config.max_input_bytes)?;
+        self.silk_to_container(&bytes, format, stop)
+    }
+
+    pub fn silk_to_container(
+        &self,
+        silk: &[u8],
+        format: ContainerFormat,
+        stop: &StopToken,
+    ) -> Result<MediaArtifact, MediaError> {
+        if silk.len() as u64 > self.config.max_input_bytes {
+            return Err(MediaError::FileTooLarge {
+                path: PathBuf::from("<silk>"),
+                limit: self.config.max_input_bytes,
+            });
+        }
+        let header = silk.strip_prefix(b"\x02").unwrap_or(silk);
+        if !header.starts_with(b"#!SILK_V3") || header.len() <= 11 {
+            return Err(MediaError::InvalidInput(
+                "expected SILK v3 with packet data".into(),
+            ));
+        }
+        let decoder =
+            self.config.silk_decoder.as_ref().ok_or_else(|| {
+                MediaError::ToolUnavailable("SILK decoder is not configured".into())
+            })?;
+        // A configuration can outlive its executable. Check the decoder again
+        // before giving it untrusted media.
+        decoder.verify(ToolRole::SilkDecoder)?;
+        let job = JobDirectory::new(&self.config.work_root)?;
+        let input = job.path.join("input.silk");
+        let output = job.path.join("decoded.pcm");
+        write_private_file(&input, silk)?;
+        let args = [
+            "decode".into(),
+            "-i".into(),
+            input.into_os_string(),
+            "--sample-rate".into(),
+            "24000".into(),
+            "-o".into(),
+            output.clone().into_os_string(),
+        ];
+        self.run(ToolRole::SilkDecoder, &args, &job.path, stop)?;
+        let pcm = read_bounded(
+            &output,
+            self.config
+                .max_input_bytes
+                .min(self.config.max_output_bytes),
+        )?;
+        if pcm.is_empty() || pcm.len() % 2 != 0 {
+            return Err(MediaError::InvalidOutput(
+                "decoder returned incomplete s16le PCM".into(),
+            ));
+        }
+        self.pcm_to_container(&pcm, format, stop)
     }
 
     pub fn pcm_to_container(
@@ -736,6 +821,9 @@ impl MediaTool {
         let declaration = match role {
             ToolRole::Ffmpeg => &self.config.ffmpeg,
             ToolRole::Ffprobe => &self.config.ffprobe,
+            ToolRole::SilkDecoder => self.config.silk_decoder.as_ref().ok_or_else(|| {
+                MediaError::ToolUnavailable("SILK decoder is not configured".into())
+            })?,
         };
         let result = self.runner.run(
             &declaration.executable,
@@ -767,7 +855,10 @@ fn verify_runtime_version(
     let job = JobDirectory::new(work_root)?;
     let result = runner.run(
         &declaration.executable,
-        &[OsString::from("-version")],
+        &[OsString::from(match role {
+            ToolRole::SilkDecoder => "--version",
+            _ => "-version",
+        })],
         &job.path,
         Duration::from_millis(timeout_ms),
         output_limit,

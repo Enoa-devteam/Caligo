@@ -36,6 +36,7 @@ fn config(root: &Path) -> MediaToolConfig {
     MediaToolConfig {
         ffmpeg: declaration(&root.join("fake-ffmpeg.exe"), b"fake ffmpeg executable"),
         ffprobe: declaration(&root.join("fake-ffprobe.exe"), b"fake ffprobe executable"),
+        silk_decoder: None,
         work_root: root.join("jobs"),
         timeout_ms: 100,
         max_stdout_stderr_bytes: 1024,
@@ -83,6 +84,14 @@ impl MediaProcessRunner for FakeRunner {
             FakeMode::Normal => {}
         }
         let output = args.last().expect("operation has an output/path argument");
+        if args.first().is_some_and(|arg| arg == "decode") {
+            assert_eq!(executable.file_name().unwrap(), "fake-silk.exe");
+            assert_eq!(args[3], "--sample-rate");
+            assert_eq!(args[4], "24000");
+            assert!(fs::read(Path::new(&args[2]))
+                .unwrap()
+                .starts_with(b"\x02#!SILK_V3"));
+        }
         let output = PathBuf::from(output);
         if output.extension().and_then(|value| value.to_str()) == Some("pcm") {
             fs::write(output, [0x00, 0x01, 0x02, 0x03]).unwrap();
@@ -169,6 +178,47 @@ fn bad_hash_is_rejected_before_media_execution() {
     };
     assert!(matches!(error, MediaError::ToolHashMismatch { .. }));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn silk_conversion_requires_a_configured_decoder_and_cleans_private_jobs() {
+    let root = temp_root("silk");
+    let mut configuration = config(&root);
+    let runner = Arc::new(FakeRunner {
+        mode: FakeMode::Normal,
+    });
+    let stop = StopToken::default();
+    let voice = b"\x02#!SILK_V3\x02\x00\x11\x22";
+    let media = MediaTool::with_runner_for_tests(configuration.clone(), runner.clone()).unwrap();
+    assert!(matches!(
+        media.silk_to_container(voice, ContainerFormat::Wav, &stop),
+        Err(MediaError::ToolUnavailable(_))
+    ));
+    let decoder = root.join("fake-silk.exe");
+    configuration.silk_decoder = Some(declaration(&decoder, b"fixture decoder"));
+    let media = MediaTool::with_runner_for_tests(configuration, runner).unwrap();
+    assert!(matches!(
+        media.silk_to_container(b"#!SILK_V3", ContainerFormat::Wav, &stop),
+        Err(MediaError::InvalidInput(_))
+    ));
+    for format in [ContainerFormat::Wav, ContainerFormat::Ogg] {
+        let converted = media.silk_to_container(voice, format, &stop).unwrap();
+        assert_eq!(
+            &converted.bytes[..4],
+            if format == ContainerFormat::Wav {
+                b"RIFF"
+            } else {
+                b"OggS"
+            }
+        );
+    }
+    assert!(fs::read_dir(root.join("jobs")).unwrap().next().is_none());
+    fs::write(&decoder, b"changed decoder").unwrap();
+    assert!(matches!(
+        media.silk_to_container(voice, ContainerFormat::Wav, &stop),
+        Err(MediaError::ToolHashMismatch { .. })
+    ));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -95,3 +95,9 @@ SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 
 承接 `e1b4420`。普通私聊的单个语音元素在入账后向共享 OneBot 事件队列发布 `record` 段，沿用 `get_msg` 的同一文件标识。共享动作注册 `get_record`，接受 `file` 或 `file_id` 中的一个。文件标识在当前账号持久消息库内解析，再由 `VoiceDownload` 按当前 bridge scope 精确回读和下载。返回结果核对原入站元素的身份、大小和 MD5，响应给出原始 Silk 的 `base64`、`file_size` 和 `file_name`。本机绝对路径和 QQ 文件凭据不暴露。默认或明确 `silk` 可用；其余输出格式明确返回未支持，固定参考的转码依赖独立媒体后端。
 
 最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过。正常 handler 加真实 pipe 的合成回归核对了事件、`get_msg`、`get_record` 和重启后的同一标识，并覆盖异账号、未声明能力、MD5 不匹配和不支持的格式。初次 core 单测发现注册表 schema 断言缺新增类型，补上后通过。真实 Rust registry 的覆盖检查 12/12，共 14 个动作键。此结果仅为离线验收。
+
+## A2 独立 SILK 转码
+
+媒体工具通过可选的本地 `silk_decoder` 解码到 24 kHz 单声道 s16le PCM，再调用已有 FFmpeg 容器转换。独立子进程使用固定参数、版本、许可证及 SHA-256 校验、超时与有界输出。旧配置仍可运行原媒体操作。首轮真实 CLI 运行发现 Windows debug 的 1 MiB 栈上哈希缓冲溢出，移到堆后通过。
+
+离线实测从 [rust-silk 固定提交](https://github.com/wangnov/rust-silk/tree/7d4fd9eb265ac44b6d76bda4002d327651a022c0) 编译解码器（SDK 1.0.9.6），结合 [FFmpeg 8.1.2 essentials](https://www.gyan.dev/ffmpeg/builds/) 处理 24 kHz、440 Hz 的 200 ms 合成腾讯前缀样本。SILK 样本 SHA-256 为 `97ca76deaff11794d723439df80cf759add9c3c4a927d65dea75a0b67030efc7`。真实 `caligo-media` 两种命令退出 0，ffprobe 回读 WAV 为 24 kHz PCM/单声道/200 ms，Ogg 为 Opus/单声道，含预跳过的容器时长 206.5 ms，任务目录清空。工具与样本留在本机。定向 `media_tool_lab` 7 项通过，子进程夹具 1 项按设计忽略。
