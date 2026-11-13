@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 # K4-D0:研究路线默认关闭。`--features research` 仅用于自建宿主离线研究,
 # 不构成 QQ 现场准入(见 docs/research/k4-execution-scope.md)。
 default = []
-research = []
+research = ["dep:sha2"]
 
 [[test]]
 name = "wrapper_send"
@@ -23,4 +23,5 @@ required-features = ["research"]
 caligo-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
 windows-sys = { workspace = true }

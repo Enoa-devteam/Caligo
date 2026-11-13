@@ -67,3 +67,13 @@ bridge 每次接受 HelloAck 后用同一 QueryScope 清理旧查询并发布 ad
 本阶段 research 定向 pipe 5/5、SSE 8/8、recovery 10/10、runtime 11/11、wrapper chain 1/1。串行 `init.ps1 -Mode all` 退出 0，覆盖默认和 research 全仓。真实 registry 覆盖检查 12/12，`init.ps1 -Mode docs` 与 `git diff --check` 通过。输出保留在 ignored `local-evidence/snowcat-event-all.log` 等本机证据中。
 
 登录仍缺已登录 QQ 实例的当前账号来源。固定参考 Framework/Shell 从扫码成功回调获得 UIN/UID，但回调留下空昵称。双账号研究从 `getLoginList` 按已知昵称选账号，并有额外宿主及样本约束。现有 Caligo wrapper session ID、配置账号、历史登录列表或目录查询均不足以绑定当前已登录身份，`LoginInfo` 继续不声明。
+
+## A2 私聊语音精确回读
+
+固定参考 `7cf025f` 的 `research/native-reconstruction/live-testing/business-message/probe.cjs` 以私聊入站记录的消息 ID、元素 ID 和 peer UID 标识语音，`packages/snowcat-core/types/element.ts` 声明 PTT 的大小和 MD5。Caligo 通过现有 scoped 查询协议增加 `VoiceInfo`。只从精确消息回读接受单一匹配的入站私聊语音元素，保留字符串 ID，仅返回身份、大小和 MD5。媒体路径及凭据不进 IPC。查询上限 16 MiB 表示元素声明的文件大小。
+
+旧 adapter 的六项查询能力仍可独立声明。语音查询仅由 research owner adapter 在所加载 wrapper.node、QQNT.dll 和 major.node 路径的文件 SHA-256 与 9.9.36-53644 pilot 三角色完全匹配时启用。目录查询和既有文本 ABI 保持原作用域。合成脚本覆盖精确大整数 ID、错 peer/消息/元素、自发、重复元素、错误大小和 MD5，以及私有字段不出 IPC。此检查点是下载前的身份与元数据查询，当前没有语音文件下载或 `get_record` 验收。
+
+SSO 参考样本中 42 字节请求与 919 字节响应的二进制转换依赖 `napi2native` 实验钩子。该证据给出 Caligo 后续自有二进制接线的对照，当前未提供 SSO backend 或 `send_packet`。
+
+首轮全仓编译发现 `QqOwnerAdapter::new` 的公开签名被改动，导致两个既有 `qq_entry_lab` 调用失败。修正为在原构造器内部检查宿主模块，保留原签名。定向语音 readback 与精确 profile 拒绝测试均通过。最终串行 `init.ps1 -Mode all` 退出 0，默认和 research 全仓均通过，日志位于本机 `local-evidence/snowcat-voice-info-all-final.log`。

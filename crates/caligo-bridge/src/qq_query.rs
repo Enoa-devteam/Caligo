@@ -4,8 +4,8 @@
 //! executes them on the QQ owner thread through `qq_v8::exec_script`.
 
 use caligo_model::capability::{
-    HostQuery, MAX_QUERY_BYTES, MAX_QUERY_TIMEOUT_MS, QueryCapability, QueryData, QueryOutcome,
-    QueryScope,
+    HostQuery, QueryCapability, QueryData, QueryOutcome, QueryScope, MAX_QUERY_BYTES,
+    MAX_QUERY_TIMEOUT_MS, MAX_VOICE_BYTES,
 };
 use serde_json::Value;
 
@@ -19,14 +19,58 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::FriendList,
     QueryCapability::GroupList,
     QueryCapability::GroupInfo,
+    QueryCapability::VoiceInfo,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
-    SUPPORTED_CAPABILITIES
+    // Voice operations form a suffix admitted only by the exact pilot profile.
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 1]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
-    SUPPORTED_CAPABILITIES.contains(&query.capability())
+    supported_capabilities().contains(&query.capability())
+}
+
+/// Verify the paths of the modules actually mapped in the current process.
+/// A caller-provided baseline label or installed version is insufficient.
+#[cfg(feature = "research")]
+pub(crate) fn matches_voice_profile(loaded_modules: &[String]) -> bool {
+    use sha2::{Digest, Sha256};
+    use std::path::Path;
+
+    const MODULES: [(&str, &str); 3] = [
+        (
+            "wrapper.node",
+            "0D8B94448F4DAFE7337B88D6A568B004224C37FCBE2BD1142C1AF7624FBD534C",
+        ),
+        (
+            "QQNT.dll",
+            "75B19E58A123B0513E99DF4DF3EBC6524478535BA44651024D6A20821F5086E5",
+        ),
+        (
+            "major.node",
+            "4564E402D1CF43A0F15982411596CF38B8D9B8FBC78F5E7CA717E27C24C74A07",
+        ),
+    ];
+    MODULES.into_iter().all(|(name, expected)| {
+        let mut paths = loaded_modules.iter().map(Path::new).filter(|path| {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case(name))
+        });
+        let Some(path) = paths.next() else {
+            return false;
+        };
+        if paths.next().is_some() {
+            return false;
+        }
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).is_ok()
+            && format!("{:X}", hasher.finalize()) == expected
+    })
 }
 
 fn json_string(value: &str) -> String {
@@ -42,6 +86,7 @@ fn kind(query: &HostQuery) -> &'static str {
         HostQuery::UinToUid { .. } => "uin_to_uid",
         HostQuery::UidToUin { .. } => "uid_to_uin",
         HostQuery::MessagesById { .. } => "messages_by_id",
+        HostQuery::VoiceInfo { .. } => "voice_info",
     }
 }
 
@@ -59,6 +104,16 @@ fn query_args(query: &HostQuery) -> String {
             serde_json::to_string(message_ids).expect("message id serialization is infallible")
         ),
         HostQuery::GroupInfo { group_id } => format!("{{groupCode:{}}}", json_string(group_id)),
+        HostQuery::VoiceInfo {
+            peer_uid,
+            message_id,
+            element_id,
+        } => format!(
+            "{{peerUid:{},msgId:{},elementId:{},maxBytes:{MAX_VOICE_BYTES}}}",
+            json_string(peer_uid),
+            json_string(message_id),
+            json_string(element_id),
+        ),
         HostQuery::LoginInfo | HostQuery::FriendList | HostQuery::GroupList => "{}".into(),
     }
 }
@@ -178,6 +233,27 @@ pub fn build_query_start_js(
       });
       return reply('pending');
     }
+    if (queryKind === 'voice_info') {
+      var voiceService = R.session.getMsgService && R.session.getMsgService();
+      if (!voiceService || typeof voiceService.getMsgsByMsgId !== 'function') return terminal(p, 'unsupported');
+      settle(voiceService.getMsgsByMsgId({chatType:1,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
+        if (!value || value.result !== 0 || !Array.isArray(value.msgList) || value.msgList.length !== 1) throw new Error('voice message readback shape');
+        var message = value.msgList[0];
+        if (!message || message.msgId !== args.msgId || message.chatType !== 1 || message.peerUid !== args.peerUid ||
+            message.senderUid !== args.peerUid || typeof message.senderUin !== 'string' ||
+            !/^[1-9][0-9]{0,19}$/.test(message.senderUin) || message.senderUin === scope.account ||
+            !Array.isArray(message.elements) || message.elements.length > 128) throw new Error('voice message identity');
+        var matches = message.elements.filter(function(item) { return item && item.elementId === args.elementId; });
+        if (matches.length !== 1 || matches[0].elementType !== 4 || !matches[0].pttElement) throw new Error('voice element identity');
+        var voice = matches[0].pttElement;
+        if (typeof voice.fileSize !== 'string' || !/^[1-9][0-9]{0,7}$/.test(voice.fileSize) ||
+            Number(voice.fileSize) > args.maxBytes || typeof voice.md5HexStr !== 'string' ||
+            !/^[0-9a-fA-F]{32}$/.test(voice.md5HexStr)) throw new Error('voice metadata shape');
+        finish(p, {kind:'voice_info',data:{peer_uid:args.peerUid,message_id:args.msgId,element_id:args.elementId,
+          size:Number(voice.fileSize),md5:voice.md5HexStr.toLowerCase()}});
+      });
+      return reply('pending');
+    }
     if (queryKind === 'friend_list') {
       var buddy = R.session.getBuddyService && R.session.getBuddyService();
       var prof2 = R.session.getProfileService && R.session.getProfileService();
@@ -253,8 +329,8 @@ pub fn build_query_start_js(
             json_string(&scope.connection_epoch.to_string()),
         ),
         ("__KIND__", json_string(kind(query))),
-        ("__ARGS__", query_args(query)),
         ("__TIMEOUT__", timeout_ms.to_string()),
+        ("__ARGS__", query_args(query)),
     ] {
         js = js.replace(needle, &value);
     }
@@ -385,13 +461,29 @@ mod tests {
             connection_epoch: 3,
         };
         let q = HostQuery::UinToUid { uin: "9".into() };
-        assert!(
-            decode_query_result(
-                &q,
-                &scope,
-                r#"{"status":"success","data":{"kind":"uin","data":"9"}}"#
-            )
-            .is_err()
-        );
+        assert!(decode_query_result(
+            &q,
+            &scope,
+            r#"{"status":"success","data":{"kind":"uin","data":"9"}}"#
+        )
+        .is_err());
+    }
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn voice_profile_rejects_missing_duplicate_and_wrong_modules() {
+        assert!(!matches_voice_profile(&[]));
+        let duplicate = vec![
+            "C:/fixture/one/wrapper.node".into(),
+            "C:/fixture/two/WRAPPER.NODE".into(),
+        ];
+        assert!(!matches_voice_profile(&duplicate));
+        let dir = std::env::temp_dir().join(format!("caligo-voice-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wrapper = dir.join("wrapper.node");
+        std::fs::write(&wrapper, b"synthetic module").unwrap();
+        assert!(!matches_voice_profile(&[wrapper.to_str().unwrap().to_owned()]));
+        std::fs::remove_file(&wrapper).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 }

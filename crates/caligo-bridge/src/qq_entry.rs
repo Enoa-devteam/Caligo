@@ -788,12 +788,19 @@ pub fn test_reset_state() {
 pub struct QqOwnerAdapter {
     handle: EntryHandle,
     account: String,
+    voice_profile: bool,
 }
 
 impl QqOwnerAdapter {
     /// 首入成功后构造。`f` 由 bootstrap 侧提供。
     pub fn new(handle: EntryHandle, account: String) -> Self {
-        Self { handle, account }
+        let (loaded_modules, snapshot_ok) = crate::collect_host_snapshot();
+        let voice_profile = snapshot_ok && crate::qq_query::matches_voice_profile(&loaded_modules);
+        Self {
+            handle,
+            account,
+            voice_profile,
+        }
     }
 
     pub fn entry(&self) -> &EntryHandle {
@@ -930,7 +937,11 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
     }
 
     fn query_capabilities(&self) -> &'static [caligo_model::capability::QueryCapability] {
-        crate::qq_query::supported_capabilities()
+        if self.voice_profile {
+            crate::qq_query::SUPPORTED_CAPABILITIES
+        } else {
+            crate::qq_query::supported_capabilities()
+        }
     }
 
     fn send_capabilities(&self) -> (bool, bool) {
@@ -950,6 +961,9 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
         timeout_ms: u64,
         poll_only: bool,
     ) -> Option<caligo_model::capability::QueryOutcome> {
+        if !self.query_capabilities().contains(&query.capability()) {
+            return Some(caligo_model::capability::QueryOutcome::Unsupported);
+        }
         let script = if poll_only {
             crate::qq_query::build_query_poll_js(request_id, scope)
         } else {

@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-13 A2 语音：固定 9.9.36-53644 的 scoped `VoiceInfo` 已接精确私聊语音元素回读。仅返回匹配的字符串 ID、文件大小和 MD5。下载、上传和 SSO 仍待接线及验证。[语音回读检查点](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#a2-私聊语音精确回读)
+
 2026-11-13 SnowCat 恢复执行：`be4c87a` 接入按连接代次声明的宿主能力并刷新 5,711 项覆盖映射（真实 registry 13 key）。普通私聊和群聊入站文本已接入持久 OneBot ID 与共享事件队列，管道和重启回归覆盖跨会话同 ID、重复修订、旧代次审计及错宿主拒绝。当前登录账号/昵称仍缺可信宿主来源，原生媒体、SSO、其余扩展和部署仍有缺口。候选未冻结，产品 NOT READY。[执行与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)
 
 2026-11-13 后续整合：`65e7e6c` 接入 D9 请求身份/受理/发送事件/精确回读、六种固定宿主查询、13 key 共享 registry、私聊显式能力门、wrapper 持久 get_msg 与同 ID 修订；`8e4583b` 接入私有配置/凭据隔离的双账号管理进程、真实 WebUI/API 和受控外部媒体 CLI。最终串行 default/research 全仓及并行 research 全仓均通过。浏览器已实际验证读取配置、单账号停止隔离、保存落盘回读、重启和正常 shutdown。当前资料不足的登录来源、消息 subtype/fanout、原生媒体上传/下载/SSO、其余扩展动作和部署/长期验收仍有缺口；候选未冻结，未启动 QQ，产品 NOT READY。[后续接线与验证](docs/execution/2026-11-13-snowcat-capability-integration-continued.md)

@@ -13,6 +13,89 @@ fn scope() -> QueryScope {
 }
 
 #[test]
+fn voice_readback_requires_exact_private_incoming_element_and_copies_only_metadata() {
+    use caligo_model::capability::{QueryData, QueryOutcome, VoiceInfo};
+
+    let scope = scope();
+    let query = HostQuery::VoiceInfo {
+        peer_uid: "u_voice_peer".into(),
+        message_id: "90071992547409939999".into(),
+        element_id: "9007199254740994".into(),
+    };
+    assert!(query.validate().is_ok());
+    assert!(!qq_query::is_supported(&query));
+    let start = qq_query::build_query_start_js("voice", &scope, &query, 1000);
+    let poll = qq_query::build_query_poll_js("voice", &scope);
+    let script = format!(
+        "const start={}, poll={};\n",
+        serde_json::to_string(&start).unwrap(),
+        serde_json::to_string(&poll).unwrap()
+    ) + r#"
+const assert = require('node:assert/strict');
+const md5 = '0123456789ABCDEF0123456789ABCDEF';
+const msgId = '90071992547409939999', elementId = '9007199254740994';
+function fresh() {
+  return {msgId,chatType:1,peerUid:'u_voice_peer',senderUid:'u_voice_peer',senderUin:'20002',
+    elements:[{elementId,elementType:4,pttElement:{fileSize:'1073',md5HexStr:md5,filePath:'private',fileUuid:'private'}}]};
+}
+async function read(record) {
+  const service = {getMsgsByMsgId(peer, ids) {
+    assert.equal(this,service);
+    assert.deepEqual(peer,{chatType:1,peerUid:'u_voice_peer',guildId:''});
+    assert.deepEqual(ids,[msgId]);
+    return Promise.resolve({result:0,msgList:[record]});
+  }};
+  globalThis.__caligo_d8 = {sid:'nt_1',session:{getMsgService:()=>service}};
+  assert.equal(JSON.parse(eval(start)).status,'pending');
+  await new Promise(resolve => setImmediate(resolve));
+  const result = JSON.parse(eval(poll));
+  assert.equal(JSON.parse(eval(poll)).code,404);
+  return result;
+}
+(async () => {
+  for (const mutate of [
+    m=>m.msgId='999', m=>m.chatType=2, m=>m.peerUid='u_wrong', m=>m.senderUid='u_self',
+    m=>m.senderUin='10001', m=>m.elements[0].elementId=9007199254740994,
+    m=>m.elements.push(m.elements[0]), m=>m.elements[0].elementType=1,
+    m=>m.elements[0].pttElement.fileSize='16777217',
+    m=>m.elements[0].pttElement.md5HexStr='bad',
+  ]) {
+    const message=fresh(); mutate(message);
+    assert.equal((await read(message)).status,'invalid_response');
+  }
+  process.stdout.write(JSON.stringify(await read(fresh())));
+})().catch(error => { console.error(error); process.exitCode=1; });
+"#;
+    let output = std::process::Command::new("node")
+        .args(["--unhandled-rejections=strict", "-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = String::from_utf8(output.stdout).unwrap();
+    assert!(!body.contains("private"));
+    let expected = VoiceInfo {
+        peer_uid: "u_voice_peer".into(),
+        message_id: "90071992547409939999".into(),
+        element_id: "9007199254740994".into(),
+        size: 1073,
+        md5: "0123456789abcdef0123456789abcdef".into(),
+    };
+    assert_eq!(
+        qq_query::decode_query_result(&query, &scope, &body).unwrap(),
+        QueryOutcome::Success(QueryData::VoiceInfo(expected.clone()))
+    );
+    let mut wrong = expected;
+    wrong.element_id = "999".into();
+    assert!(QueryData::VoiceInfo(wrong)
+        .validate_for(&query, &scope)
+        .is_err());
+}
+
+#[test]
 fn fixed_scripts_cover_maps_messages_directories_and_lifecycle_edges() {
     let s = scope();
     let start_uin = qq_query::build_query_start_js(

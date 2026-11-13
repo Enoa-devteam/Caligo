@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_QUERY_BYTES: usize = 512 * 1024;
 pub const MAX_QUERY_ITEMS: usize = 2048;
 pub const MAX_QUERY_TIMEOUT_MS: u64 = 30_000;
+pub const MAX_VOICE_BYTES: u32 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +17,7 @@ pub enum QueryCapability {
     UinToUid,
     UidToUin,
     MessagesById,
+    VoiceInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +54,18 @@ pub enum HostQuery {
         peer_uid: String,
         message_ids: Vec<String>,
     },
+    /// Exact private incoming voice element. IDs are native decimal strings.
+    VoiceInfo {
+        peer_uid: String,
+        message_id: String,
+        element_id: String,
+    },
+}
+
+fn native_message_id(value: &str) -> bool {
+    value.len() <= 128
+        && value.bytes().all(|b| b.is_ascii_digit())
+        && value.bytes().any(|b| b != b'0')
 }
 
 pub fn positive_decimal(value: &str) -> bool {
@@ -93,6 +107,7 @@ impl HostQuery {
             Self::UinToUid { .. } => QueryCapability::UinToUid,
             Self::UidToUin { .. } => QueryCapability::UidToUin,
             Self::MessagesById { .. } => QueryCapability::MessagesById,
+            Self::VoiceInfo { .. } => QueryCapability::VoiceInfo,
         }
     }
 
@@ -101,6 +116,16 @@ impl HostQuery {
             Self::GroupInfo { group_id } if !positive_decimal(group_id) => Err("invalid group id"),
             Self::UinToUid { uin } if !positive_decimal(uin) => Err("invalid UIN"),
             Self::UidToUin { uid } if !native_uid(uid) => Err("invalid UID"),
+            Self::VoiceInfo {
+                peer_uid,
+                message_id,
+                element_id,
+            } if !native_uid(peer_uid)
+                || !native_message_id(message_id)
+                || !native_message_id(element_id) =>
+            {
+                Err("invalid voice element identity")
+            }
             Self::MessagesById {
                 chat_type,
                 peer_uid,
@@ -151,6 +176,18 @@ pub struct GroupInfo {
     pub max_member_count: u32,
 }
 
+/// Owned metadata only. The wrapper's local file path and media credentials
+/// are excluded from the bridge protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceInfo {
+    pub peer_uid: String,
+    pub message_id: String,
+    pub element_id: String,
+    pub size: u32,
+    pub md5: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -166,6 +203,7 @@ pub enum QueryData {
     Uid(String),
     Uin(String),
     Messages(Vec<crate::wrapper_message::WrapperMessage>),
+    VoiceInfo(VoiceInfo),
 }
 
 impl QueryData {
@@ -208,6 +246,25 @@ impl QueryData {
             }
             (HostQuery::UinToUid { .. }, Self::Uid(uid)) => native_uid(uid),
             (HostQuery::UidToUin { .. }, Self::Uin(uin)) => positive_decimal(uin),
+            (
+                HostQuery::VoiceInfo {
+                    peer_uid,
+                    message_id,
+                    element_id,
+                },
+                Self::VoiceInfo(info),
+            ) => {
+                &info.peer_uid == peer_uid
+                    && &info.message_id == message_id
+                    && &info.element_id == element_id
+                    && query.validate().is_ok()
+                    && (1..=MAX_VOICE_BYTES).contains(&info.size)
+                    && info.md5.len() == 32
+                    && info
+                        .md5
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            }
             (
                 HostQuery::MessagesById {
                     chat_type,
