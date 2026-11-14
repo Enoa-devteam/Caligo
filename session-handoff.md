@@ -1,5 +1,11 @@
 # Session handoff
 
+## 2026-11-14 CI release / test — Current Objective
+
+用户要求基于现有 `main` 建分支并开启 PR。工作分支 `codex/ci-release-test` 基于 `d1ad46a1`，独立 worktree 为 `Caligo-ci-release-test`；原工作区未提交改动保持原状。变更包括 `.github/workflows/test.yml`、`release.yml`、打包脚本及干净检出不依赖本机 skill 的文档检查/链接修复。Windows MSVC `init.ps1 -Mode all`、Node tooling（16 PASS / 2 SKIP）、actionlint、PowerShell 语法/标签边界、两套 release 构建与 ZIP 文件/哈希/元数据核验通过，证据见 [progress](progress.md)。
+
+PR 合并后的标准入口为 [开发指南](docs/guides/development.md#github-actions-test--release)：PR/main 执行 Test，手动 Release 只生成 artifacts，匹配 workspace 版本的 `v*` 标签先跑 Test 再发布 prerelease。本任务不打标签、不发布版本、不启动下一阶段现场；产品 NOT READY 与既有 feature 验收边界保留。GitHub 上的工作流结果以 PR checks 为准，本地测试不能代替托管 runner 验证。下方为前阶段历史交接。
+
 ## 2026-11-13 SnowCat integration — Current Objective
 
 2026-11-14 用户要求先收口第一阶段并提交 PR #6。本次只提交语音缓存修复/回归与验收、状态文档，随分支推送既有 1e8dbb9，并以 PR 评论列明已验收功能和未验边界。范围与证据以[第一阶段清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)为准；PR 保持 draft，不合并。本阶段现场已停止；转码与任何下一阶段工作等待后续任务，不自行启动。各 feature 状态与产品 NOT READY 保留。下方“尚未提交”描述为各历史检查点，当前提交状态以 git log 和 PR #6 为准。

@@ -1,5 +1,5 @@
 {
-  "$schema": ".agents/skills/harness-creator/templates/feature-list.schema.json",
+  "$schema": "https://raw.githubusercontent.com/walkinglabs/learn-harness-engineering/main/skills/harness-creator/templates/feature-list.schema.json",
   "updated": "2026-11-14",
   "baseline_commit": "0f5b483",
   "active_feature": null,
@@ -13,7 +13,7 @@
       "dependencies": [],
       "status": "done",
       "evidence": "2026-10-11 安装成功，9 份维护中文档的链接/预算/状态检查通过，结构审计 100/100；PowerShell/Git Bash 入口验证成功。普通测试 176 通过；research 首次崩溃，bridge 串行 58 及全仓复查 202 通过。首次失败保留，文档完成不声明 Rust 稳定性或现场通过。",
-      "evidence_paths": ["skills-lock.json", ".agents/skills/harness-creator/SKILL.md", "AGENTS.md", "docs/README.md", "progress.md"],
+      "evidence_paths": ["skills-lock.json", "AGENTS.md", "docs/README.md", "progress.md"],
       "done_criteria": ["skill 在仓库内安装并锁定来源", "入口与四份专题按触发条件路由，历史文档不改写", "文档链接/预算/状态检查及验证入口实际执行，结果记录", "现有验收边界和下一会话入口可查"]
     },
     {

@@ -2,7 +2,7 @@
 
 适用：新增规则、更新项目状态、编写专题指南、归档证据或结束会话。
 设计来源：[第四讲：把指令拆分到不同文件里](https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-04-why-one-giant-instruction-file-fails/)，
-实施工具：[harness-creator](../../.agents/skills/harness-creator/SKILL.md)。
+实施工具：[harness-creator](https://github.com/walkinglabs/learn-harness-engineering/blob/main/skills/harness-creator/SKILL.md)（可选本机安装）。
 这里的行数预算是本仓库维护选择，不是模型效果保证或 token 估算。
 
 ## 权威位置与按需加载
