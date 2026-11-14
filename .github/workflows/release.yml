@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    name: Package Windows x64 / ${{ matrix.mode }}
+    needs: test
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [default, research]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Validate release tag against workspace version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $manifest = Get-Content Cargo.toml -Raw
+          $version = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\s*\r?\nversion\s*=\s*"([^"]+)"').Groups[1].Value
+          $tagPattern = '^v' + [regex]::Escape($version) + '(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$'
+          if (!$version -or $env:RELEASE_TAG -cnotmatch $tagPattern) {
+            throw "Release tag must be v$version or v$version-<prerelease>"
+          }
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Build release binaries
+        env:
+          BUILD_MODE: ${{ matrix.mode }}
+        run: |
+          $cargoArgs = @('build', '--workspace', '--release', '--locked', '--offline', '--target-dir', 'target-harness')
+          if ($env:BUILD_MODE -eq 'research') {
+            $cargoArgs += @('--features', 'caligo-core/research,caligo-cli/research')
+          }
+          & cargo @cargoArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package binaries and checksums
+        run: ./.github/scripts/package-release.ps1 -Mode ${{ matrix.mode }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: caligo-windows-x64-${{ matrix.mode }}
+          path: target-harness/dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish tagged prerelease
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: caligo-windows-x64-*
+          merge-multiple: true
+          path: dist
+      - name: Create prerelease with verified-tag assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$RELEASE_TAG" dist/*
+          --verify-tag --title "Caligo $RELEASE_TAG"
+          --generate-notes --prerelease --latest=false

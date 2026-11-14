@@ -47,6 +47,6 @@ caligo-cli verify-manifest docs/contracts/version-adapter-manifest.json
 npx skills add walkinglabs/learn-harness-engineering --skill harness-creator
 ```
 
-安装入口：[harness-creator/SKILL.md](.agents/skills/harness-creator/SKILL.md)，
+上游入口：[harness-creator/SKILL.md](https://github.com/walkinglabs/learn-harness-engineering/blob/main/skills/harness-creator/SKILL.md)，
 来源锁定：[skills-lock.json](skills-lock.json)。项目规则在 AGENTS 与专题指南中维护，
-上游 skill 作为工具资源保留。
+上游 skill 为可选本机工具，干净检出与 CI 只校验仓库内的锁文件。

@@ -24,6 +24,34 @@ Windows x64 + Rust MSVC 工具链；安装所需 Rust/Windows SDK 是环境准�
 此目录已受 `/target*` 忽略规则覆盖，与历史现场 DLL 目录分离。
 缺离线依赖时保留失败结果，再根据任务明确准备依赖。
 
+## GitHub Actions test / release
+
+[Test](../../.github/workflows/test.yml) 在面向 `main` 的 PR、`main` 推送、手动触发
+和 reusable 调用时运行。Windows 2025 x64 MSVC runner 使用仓库 toolchain 与 Node.js 24，
+先 `cargo fetch --locked` 准备干净 runner，再按 default/research 矩阵执行 init 离线测试；
+default 额外执行两份 Node capability tooling 测试。没有参考源码或指定 registry 二进制时，
+Node 测试中的两项可选核验会 skip；这不构成参考源码完整性或现场验收证据。
+旧 bridge FFI fixture 使用共享静态对象，因此 CI 设置 `RUST_TEST_THREADS=1`，测试内部显式
+创建的并发线程照常执行。[runner 入口](../../.github/scripts/run-tests.ps1) 在当前测试进程
+将 Windows token 默认文件 owner 临时设为当前用户 SID，文件 owner 预检通过后调用 init，
+finally 恢复原默认 owner；不修改 DACL、不跳过账号隔离断言。首次托管运行的并发访问冲突与
+管理员 owner 失败保留在 progress 的 CI 记录，不用后续成功覆盖。
+固定 SHA 的 capability inventory 通过 `.gitattributes` 使用 LF，防止 Windows checkout
+改变证据字节；CI 不重新生成清单或替换其预期 SHA。
+
+[Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用 Test，
+通过后构建 default/research 两套 release。标签必须为 workspace 版本的 `v<version>`
+或 `v<version>-<prerelease>`；改版本时同步 Cargo manifests/lock 后再打标签。
+手动运行仅上传保留 14 天的 Actions artifacts，不创建 GitHub Release；标签运行将两套包
+发布为 GitHub prerelease（不设为 latest）。本任务只建立流程，不创建版本标签或发布。
+
+[打包脚本](../../.github/scripts/package-release.ps1) 仅收集五个 EXE、bridge DLL、README、
+LICENSE 和 build-info.json；产物为 ZIP 与独立 SHA-256 文件，build-info 记录源码 commit、
+Rust 版本、target、research 开关及包内文件 SHA-256。原始证据、QQ 文件与凭据不进入包。
+从仓库根目录、完成相应构建后可单独运行 `.github/scripts/package-release.ps1 -Mode default`
+或 `-Mode research`；必须与刚构建的 feature 集匹配。CI 构建不提升产品 feature 状态，
+research 包的现场使用仍遵守当前原生准入合同。
+
 ## 单项命令
 
 ```powershell

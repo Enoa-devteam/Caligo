@@ -93,7 +93,9 @@ check(state.active_feature === null || features.get(state.active_feature)?.statu
 const lock = JSON.parse(await read('skills-lock.json'));
 check(lock.skills?.['harness-creator']?.source === 'walkinglabs/learn-harness-engineering',
     'harness-creator source is missing from skills-lock.json');
-check(await exists(path.join(root, '.agents/skills/harness-creator/SKILL.md')), 'installed harness-creator is missing');
+// Skills are optional workstation tools, not tracked clone/CI dependencies.
+check(lock.skills?.['harness-creator']?.skillPath === 'skills/harness-creator/SKILL.md',
+    'harness-creator skillPath is missing from skills-lock.json');
 for (const required of ['init.ps1', 'init.sh', 'Cargo.lock', 'rust-toolchain.toml']) {
     check(await exists(path.join(root, required)), `required entrypoint missing: ${required}`);
 }
@@ -101,5 +103,5 @@ if (failures.length) {
     for (const failure of failures) console.error(`FAIL ${failure}`);
     process.exitCode = 1;
 } else {
-    console.log(`PASS ${live.length} live docs, ${linkCount} local links, ${historyCount} historical entries, ${ids.size} features; instruction budgets and skill installation checked.`);
+    console.log(`PASS ${live.length} live docs, ${linkCount} local links, ${historyCount} historical entries, ${ids.size} features; instruction budgets and skill lock checked.`);
 }
