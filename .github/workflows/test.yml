@@ -19,6 +19,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
   RUST_BACKTRACE: '1'
+  # Legacy bridge tests mutate shared static FFI fixtures; internal concurrency tests still run.
+  RUST_TEST_THREADS: '1'
 
 jobs:
   test:
@@ -45,7 +47,7 @@ jobs:
       - name: Fetch locked dependencies for offline tests
         run: cargo fetch --locked
       - name: Verify docs and workspace contracts
-        run: ./init.ps1 -Mode ${{ matrix.mode }}
+        run: ./.github/scripts/run-tests.ps1 -Mode ${{ matrix.mode }}
       - name: Test capability tooling
         if: matrix.mode == 'default'
         run: node --test scripts/check-snowcat-coverage.test.mjs scripts/extract-snowcat-capabilities.test.mjs

@@ -2,6 +2,8 @@
 
 ## 2026-11-14 CI release / test — Current Objective
 
+已创建 [PR #7](https://github.com/Enoa-devteam/Caligo/pull/7)。首次 GitHub runner default 的 bridge 并发访问冲突、research 的管理员默认文件 owner 导致失败，原始 run 与修复边界见 [progress](progress.md)。现以串行 test harness 和 runner 临时 current-user 默认 owner 复验全部用例；不能把本机通过当托管 CI 通过，也不能跳过原 ACL 断言。最终结果以 PR 最新 checks 为准。
+
 用户要求基于现有 `main` 建分支并开启 PR。工作分支 `codex/ci-release-test` 基于 `d1ad46a1`，独立 worktree 为 `Caligo-ci-release-test`；原工作区未提交改动保持原状。变更包括 `.github/workflows/test.yml`、`release.yml`、打包脚本及干净检出不依赖本机 skill 的文档检查/链接修复。Windows MSVC `init.ps1 -Mode all`、Node tooling（16 PASS / 2 SKIP）、actionlint、PowerShell 语法/标签边界、两套 release 构建与 ZIP 文件/哈希/元数据核验通过，证据见 [progress](progress.md)。
 
 PR 合并后的标准入口为 [开发指南](docs/guides/development.md#github-actions-test--release)：PR/main 执行 Test，手动 Release 只生成 artifacts，匹配 workspace 版本的 `v*` 标签先跑 Test 再发布 prerelease。本任务不打标签、不发布版本、不启动下一阶段现场；产品 NOT READY 与既有 feature 验收边界保留。GitHub 上的工作流结果以 PR checks 为准，本地测试不能代替托管 runner 验证。下方为前阶段历史交接。
