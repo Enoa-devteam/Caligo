@@ -36,6 +36,8 @@ Node 测试中的两项可选核验会 skip；这不构成参考源码完整性�
 将 Windows token 默认文件 owner 临时设为当前用户 SID，文件 owner 预检通过后调用 init，
 finally 恢复原默认 owner；不修改 DACL、不跳过账号隔离断言。首次托管运行的并发访问冲突与
 管理员 owner 失败保留在 progress 的 CI 记录，不用后续成功覆盖。
+固定 SHA 的 capability inventory 通过 `.gitattributes` 使用 LF，防止 Windows checkout
+改变证据字节；CI 不重新生成清单或替换其预期 SHA。
 
 [Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用 Test，
 通过后构建 default/research 两套 release。标签必须为 workspace 版本的 `v<version>`

@@ -1,2 +1,4 @@
 # Keep the Git Bash entrypoint runnable after Windows checkouts.
 /init.sh text eol=lf
+# Immutable inventory SHA binds exact bytes on Windows as well as Linux.
+/docs/contracts/snowcat-capability-inventory.json text eol=lf
