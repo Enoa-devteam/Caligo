@@ -212,6 +212,8 @@ pub struct ModuleInfo {
     pub name: String,
     pub base: usize,
     pub size: u32,
+    /// Full mapped path from the same Toolhelp entry as base/size.
+    pub path: PathBuf,
 }
 
 /// 枚举目标进程模块(短名/基址/大小)。Toolhelp 快照在本进程执行;只读。
@@ -237,6 +239,7 @@ pub fn modules_in(pid: u32) -> Result<Vec<ModuleInfo>, String> {
                     name: u16sz(&ment.szModule),
                     base: ment.modBaseAddr as usize,
                     size: ment.modBaseSize,
+                    path: PathBuf::from(u16sz(&ment.szExePath)),
                 });
                 if Module32NextW(snap, &mut ment) == 0 {
                     break;

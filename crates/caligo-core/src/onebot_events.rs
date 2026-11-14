@@ -86,7 +86,7 @@ pub fn message_event_json(self_id: u64, message_id: i32, event: &MsgEvent) -> Op
         return None;
     }
     let projection: &OneBotMessageProjection = event.onebot_projection.as_ref()?;
-    if projection.peer_id == 0 || projection.sender_user_id == 0 || event.text.is_empty() {
+    if projection.peer_id == 0 || projection.sender_user_id == 0 {
         return None;
     }
     let (message_type, sub_type) = match (event.session.kind, projection.sub_type.as_deref()?) {
@@ -95,6 +95,17 @@ pub fn message_event_json(self_id: u64, message_id: i32, event: &MsgEvent) -> Op
         _ => return None,
     };
     let font = projection.font?;
+    let (message, raw_message) = if event.wrapper_message.as_ref().and_then(|record| record.voice()).is_some() {
+        let token = caligo_model::onebot_traits::voice_file_token(self_id, message_id);
+        (json!([{"type":"record", "data":{"file":token}}]), format!("[CQ:record,file={token}]"))
+    } else if event.wrapper_message.as_ref().and_then(|record| record.image()).is_some() {
+        let token = caligo_model::onebot_traits::image_file_token(self_id, message_id);
+        (json!([{"type":"image", "data":{"file":token}}]), format!("[CQ:image,file={token}]"))
+    } else if event.text.is_empty() {
+        return None;
+    } else {
+        (json!([{"type":"text", "data":{"text":event.text}}]), event.text.clone())
+    };
     let mut sender = Map::new();
     sender.insert("user_id".into(), Value::from(projection.sender_user_id));
     if let Some(nickname) = projection.sender_nickname.as_ref() {
@@ -108,8 +119,8 @@ pub fn message_event_json(self_id: u64, message_id: i32, event: &MsgEvent) -> Op
         "sub_type": sub_type,
         "message_id": message_id,
         "user_id": projection.sender_user_id,
-        "message": [{"type":"text", "data":{"text": event.text.as_str()}}],
-        "raw_message": event.text.as_str(),
+        "message": message,
+        "raw_message": raw_message,
         "font": font,
         "sender": Value::Object(sender),
     });

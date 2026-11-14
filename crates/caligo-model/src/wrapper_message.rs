@@ -1,4 +1,4 @@
-//! Owned QQ wrapper text records. Contract: SnowCat 7cf025f types/msg.ts,
+//! Owned QQ wrapper text and private voice records. Contract: SnowCat 7cf025f types/msg.ts,
 //! NodeIKernelMsgListener and business-message/service-entry.ts:36–40.
 //! msgTime is Unix seconds; MSF getServerTime is a different millisecond clock.
 //! Neither a native ID nor a wrapper extension `id` proves OneBot real_id/font.
@@ -36,6 +36,30 @@ pub struct WrapperText {
 pub struct WrapperElement {
     pub element_type: u32,
     pub text_element: Option<WrapperText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<WrapperVoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::capability::ImageInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WrapperVoice {
+    pub element_id: String,
+    pub size: u32,
+    pub md5: String,
+}
+
+impl WrapperVoice {
+    pub fn is_valid(&self) -> bool {
+        positive_decimal(&self.element_id)
+            && (1..=crate::capability::MAX_VOICE_BYTES).contains(&self.size)
+            && self.md5.len() == 32
+            && self
+                .md5
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +151,9 @@ impl WrapperMessageEnvelope {
         if self.source == WrapperSource::AddSend && r.sender_uin != self.binding.account {
             return Err("add_send_identity");
         }
-        self.text()?;
+        if self.voice().is_none() && self.image().is_none() {
+            self.text()?;
+        }
         if serde_json::to_vec(r).map_err(|_| "record_encoding")?.len() > MAX_RECORD_BYTES {
             return Err("record_size");
         }
@@ -144,6 +170,8 @@ impl WrapperMessageEnvelope {
                 return Err("non_text");
             };
             if element.element_type != 1
+                || element.voice.is_some()
+                || element.image.is_some()
                 || t.at_type != 0
                 || !t.at_uid.is_empty()
                 || !t.at_nt_uid.is_empty()
@@ -160,6 +188,62 @@ impl WrapperMessageEnvelope {
             return Err("empty_text");
         }
         Ok(text)
+    }
+
+    /// Single voice admitted by D8. Self-sent rows come from D9 readback.
+    pub fn voice(&self) -> Option<&WrapperVoice> {
+        let [element] = self.record.elements.as_slice() else {
+            return None;
+        };
+        let voice = element.voice.as_ref()?;
+        (element.element_type == 4
+            && element.text_element.is_none()
+            && element.image.is_none()
+            && match self.source {
+                WrapperSource::Recv => self.record.sender_uin != self.binding.account
+                    && match self.record.chat_type {
+                        1 => self.record.sender_uid == self.record.peer_uid
+                            && self.record.sender_uin == self.record.peer_uin,
+                        2 => self.record.peer_uid == self.record.peer_uin,
+                        _ => false,
+                    },
+                WrapperSource::AddSend => self.record.sender_uin == self.binding.account
+                    && self.record.send_status == Some(2)
+                    && match self.record.chat_type {
+                        1 => self.record.peer_uin != self.binding.account,
+                        2 => self.record.peer_uid == self.record.peer_uin,
+                        _ => false,
+                    },
+                WrapperSource::Update => false,
+            }
+            && voice.is_valid())
+        .then_some(voice)
+    }
+
+    /// Ordinary incoming PNG or a PNG fingerprint verified by D9 self-send readback.
+    pub fn image(&self) -> Option<&crate::capability::ImageInfo> {
+        use crate::capability::{HostQuery, QueryData, QueryScope};
+        let [element] = self.record.elements.as_slice() else { return None; };
+        let info = element.image.as_ref()?;
+        if element.element_type != 2 || element.text_element.is_some() || element.voice.is_some()
+            || match self.source {
+                WrapperSource::Recv => info.pic_type != 1001 || self.record.sender_uin == self.binding.account
+                    || (self.record.chat_type == 1 && (self.record.sender_uid != self.record.peer_uid
+                        || self.record.sender_uin != self.record.peer_uin)),
+                WrapperSource::AddSend => self.record.sender_uin != self.binding.account
+                    || self.record.send_status != Some(2)
+                    || (self.record.chat_type == 1 && self.record.peer_uin == self.binding.account),
+                WrapperSource::Update => true,
+            } { return None; }
+        let query = HostQuery::ImageInfo {
+            chat_type:self.record.chat_type, peer_uid:self.record.peer_uid.clone(),
+            sender_uin:self.record.sender_uin.clone(), message_id:self.record.msg_id.clone(),
+            element_id:info.element_id.clone(),
+        };
+        let scope = QueryScope { account:self.binding.account.clone(), host_nonce:self.binding.host_nonce,
+            session_generation:self.binding.session_generation, connection_epoch:1 };
+        QueryData::ImageInfo(info.clone()).validate_for(&query, &scope).ok()?;
+        Some(info)
     }
 
     pub fn platform_time_seconds(&self) -> Option<u64> {

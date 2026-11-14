@@ -169,16 +169,21 @@ fn l04_same_text_different_ids_kept_and_duplicates_suppressed() {
         a.on_event(event(1, &t, "N1", "dup-text", EventSource::Update)),
         Ok(EventReceipt::Published { .. })
     ));
-    // 同 ID 的第二次 update → 抑制。
+    // 同 ID 的不同修订必须发布；相同修订重放才抑制。
+    assert!(matches!(
+        a.on_event(event(1, &t, "N1", "edited-text", EventSource::Update)),
+        Ok(EventReceipt::Published { .. })
+    ));
     assert_eq!(
-        a.on_event(event(1, &t, "N1", "dup-text", EventSource::Update))
+        a.on_event(event(1, &t, "N1", "edited-text", EventSource::Update))
             .unwrap(),
         EventReceipt::DuplicateSuppressed
     );
     let delivered = a.drain_deliverables(10);
-    assert_eq!(delivered.len(), 3, "recv N1, recv N2, update N1");
+    assert_eq!(delivered.len(), 4, "recv N1, recv N2, and two distinct N1 updates");
     assert_eq!(delivered[0].source, EventSource::Recv);
     assert_eq!(delivered[2].source, EventSource::Update);
+    assert_eq!(delivered[3].text, "edited-text");
     assert_eq!(a.counters.events_duplicate_suppressed, 2);
 }
 

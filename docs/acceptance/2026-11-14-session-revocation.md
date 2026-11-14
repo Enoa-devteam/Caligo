@@ -1,0 +1,90 @@
+# 登录会话撤权与重连验收合同
+
+日期：2026-11-14；源码基点 `5665b2b` 加当前工作树，摘要见
+[执行记录](../execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-登录会话撤权与重连合同审计)。
+本页是离线核对与待验矩阵，不表示已执行 QQ 换号、断网或 core 重启现场。
+既有单次 self 查询现场不能替代本矩阵；产品状态仍以 [progress](../../progress.md) 为准。
+
+## 身份与代次
+
+| 标识 | 当前来源与寿命 | 验收时必须区分 |
+| --- | --- | --- |
+| account | worker 启动配置；LoginInfo/SelfProfile 另读 QQ 当前身份并比对 | 配置值不是持续登录证明 |
+| host_nonce、PID、创建时间 | 宿主实例绑定 | 新进程不能作为旧宿主同代次重连 |
+| session_generation | worker 启动输入，生命周期内固定 | 当前没有从 QQ 换号通知自动推进代次的已证链 |
+| connection_epoch | 同一 daemon 内每次 bridge 连接分配 | daemon 重启后数值可能重复，不能单独跨 core 判代次 |
+| core_instance_nonce | daemon 启动时随机；runtime ConnectionIdentity 使用 | QueryScope 不含此字段；request ID 隔离结果，resident 撤权标记防止旧查询恢复 |
+| wrapper session ID | LoginInfo/SelfProfile 单次请求内读取/比较 | 与上述配置会话代次、管道 epoch 不是同一概念 |
+
+类型和来源：[QueryScope](../../crates/caligo-model/src/capability.rs)、
+[worker](../../crates/caligo-bridge/src/daemon_client.rs)、
+[daemon](../../crates/caligo-core/src/daemon.rs)、
+[runtime](../../crates/caligo-core/src/runtime.rs)。
+
+## 已有行为与证据边界
+
+| 场景 | 当前实现/离线证据 | 仍缺什么 |
+| --- | --- | --- |
+| 同一 core 的管道断开 | broker 清能力与 pending；worker ClearScope 撤 scope 并唤醒 owner | QQ 中实际断开与恢复样本 |
+| owner 尚有在途查询 | drain 在 owner 取消旧 scope；暂时无合法上下文时保留 cancel_only 等候 | 停止/重连与真实异步回调相交的现场时序 |
+| 同一 core 重连 | 新 epoch、重新声明能力，旧 ID/scope 结果只计 stale | 不能概括为 QQ 网络恢复或登录会话更新 |
+| core 重启 | 新 core nonce 隔离查询 ID；resident 撤权时持久标记旧 pending，避免相同 scope 恢复 | 已有合成宿主交错修复，真实 core 重启仍待现场 |
+| 查询期间 QQ 身份/会话变化 | 临时 Profile listener 与 session 检查使该查询失败 | 不是空闲期、目录、收发或媒体的全局身份撤权 |
+| QQ 掉线但 IPC 仍通 | 不能由管道心跳推出 QQ 在线 | 该 build 的完整状态语义、持续通知和全路径清权接线 |
+| 同进程换号 | 单次 self 查询会比对当前账号；配置 scope 本身不变 | 连续身份观察、事件归属失效、旧请求终结与新身份重绑 |
+| QQ 进程重启 | 旧宿主同代次重连被拒绝 | 新宿主/新会话的显式绑定与现场恢复验收 |
+
+主要源码：[broker reset/disconnect](../../crates/caligo-core/src/capability_broker.rs)、
+[owner 查询队列](../../crates/caligo-bridge/src/resident.rs)、
+[临时身份 listener](../../crates/caligo-bridge/src/qq_v8.rs)、
+[刷新回调](../../crates/caligo-bridge/src/profile_refresh.js)。
+worker 事件投影核对的是已有配置绑定；D8 启动扫描 live MsgService，
+Profile 查询则从精确 wrapper 的 nt_1 取 ProfileService。
+尚无持续身份观察把这两条来源在换号前后闭合到同一账号，不能由配置标签补出保证。
+
+## 先补的离线证据
+
+1. **撤权后相同 scope 再绑定**：旧查询已发起，worker 发布 None，owner 尚未 drain，
+   新连接绑定数值相同的 QueryScope。检验旧请求取消是否必达，旧回调不得作为新请求结果。
+   该交错已在合成宿主复现并修复：发布撤权/不同 scope 时将旧 pending 标为 cancel_only，
+   相同 scope 重绑不清除此标记；Disconnected 只报告一次，native 取消留在合法 owner。
+   新回归见 [query_revocation](../../crates/caligo-bridge/tests/query_revocation.rs)，验证结果见
+   [修复记录](../execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-相同-scope-重绑撤权修复)。
+   这是 resident 合同的 LAB 修复，真实 core 重启及 QQ 异步寿命仍待验。
+2. **持续身份失效来源**：先核对固定 hash 的通知字段、状态枚举、线程和移除合同，
+   再决定如何把离线/身份变化传播给 owner、worker、broker 和事件队列。
+   不能把一个临时 listener 或已验证的 status=20 分支推成完整网络状态合同。
+3. **恢复重绑**：旧请求保留其账号、代次与 unknown；旧事件与新身份不能混用，
+   已发起发送不重发。只有重新验证宿主身份并显式重绑后才能恢复新动作。
+
+现有回归：[daemon_client_lab](../../crates/caligo-core/tests/daemon_client_lab.rs) 的
+`reconnect_requires_same_host_and_advances_epoch`、LoginInfo/SelfProfile owner 撤权；
+[capability_query_lab](../../crates/caligo-core/tests/capability_query_lab.rs) 的清权、错 scope、
+迟到与停止；[onebot_query_lab](../../crates/caligo-core/tests/onebot_query_lab.rs) 的独立能力与重连清权；
+[脚本合同](../../crates/caligo-bridge/tests/fixtures/scoped-self-profile-contract.cjs) 的旧回调隔离。
+这些是合成宿主/真实命名管道证据，不是 QQ 网络或换号样本。
+
+## 待验矩阵与可执行顺序
+
+| 编号 | 干预与对照 | 成功条件 | 当前准入 |
+| --- | --- | --- | --- |
+| R1a | 同一 core 中断 bridge 管道，QQ 身份不变 | 旧查询终结、能力清除、新 epoch、重新声明后新 self 查询成功 | 缺正常入口的受控断开步骤与相交在途证据；先离线准备 |
+| R1b | 仅重启隔离 caligod，QQ 不退出 | 新 core nonce；相同 epoch 数值也不保留旧查询；无旧查询 poll/重发 | **LAB 已通过**：当前工作树 `core_restart_query_lab` research 2/2，真实 caligod/IPC/worker + 合成 owner；**双账号 LoginInfo FIELD 已通过**：新代次 A/B 各 attach 一次，self 查询、鉴权隔离和停止 A 后 B 存活通过；**core 重启交错 FIELD 待验**：尚未在 QQ owner 上做重启期间在途取消/迟到回调样本，已完成根禁止复用/重接 |
+| R2 | 指定 QQ 的网络状态变化，IPC 保持可用 | 可定位状态通知触发全路径撤权，恢复后重新核实同一身份 | 持续通知合同/接线未闭合，暂不执行 |
+| R3 | 指定测试 QQ 退出账号并登录另一测试身份 | 旧身份失效、旧事件不入新账本、旧请求不重放、显式新代次绑定 | 持续身份与事件归属未闭合，暂不执行 |
+| R4 | QQ 正常退出后新进程登录 | 旧宿主拒绝、新宿主独立准入与显式绑定 | 独立工作块，不能当 R1–R3 的替代样本 |
+
+R1b 若后续获准执行，使用独立目录、稳定私有 `--token-file`、相同 pipe prefix、
+journal 与指定 QQ；新 core nonce仍应改变。普通 control Stop 会结束 worker，
+不能用作自动重连的断链干预；随意杀主 daemon 或全机断网也不是该对照步骤。
+所有现场先核对资料卡、PID/创建时间、精确 loaded hashes、PE 审计和唯一 envscan；
+一次接入前准备完操作和停止条件。当前已映射 bridge 的历史代次不重新注入或热卸载。
+
+## 停止与完成条件
+
+任何身份/hash/模块门不符、旧 scope 仍获授权、跨账号投影、重复 native 发起、
+无法确认取消或移除时停止该样本，保留原始数据与 unknown，不自动重试。
+测试输入、真实身份、凭据、聊天原文、QQ 文件仅留 ignored `local-evidence/`。
+每个样本记录干预时刻、完整逻辑身份、查询 ID、清权与 owner 取消时刻、迟到结果、
+恢复身份和能力声明、最终 daemon/owner/QQ 健康；保留失败样本。
+矩阵各行独立给出 implemented/wired/LAB/field 状态；全部完成前不提升生产验收。

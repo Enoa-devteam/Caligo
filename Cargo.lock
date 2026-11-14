@@ -36,6 +36,7 @@ dependencies = [
  "caligo-model",
  "serde",
  "serde_json",
+ "sha2",
  "windows-sys 0.61.2",
 ]
 
@@ -57,6 +58,7 @@ dependencies = [
 name = "caligo-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "caligo-bridge",
  "caligo-model",
  "hmac",

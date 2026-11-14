@@ -80,6 +80,9 @@ pub struct EventRecord {
     pub native_id: String,
     pub text: String,
     pub platform_time: Option<u64>,
+    /// Retain old-generation observations without indexing them as messages.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audit_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapper_message: Option<caligo_model::wrapper_message::WrapperMessageEnvelope>,
     /// Old journal rows remain valid and never gain guessed OneBot fields.

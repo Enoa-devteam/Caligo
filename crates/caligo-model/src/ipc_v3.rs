@@ -10,12 +10,16 @@
 //! 必填字段反序列化失败而显式拒绝,不靠 serde 默认值放行(C9 反例 T05)。
 //! frame/EventPayload/Role 与 v2 共用；发送结果与 Dispatch DTO 在 v3 独立。
 
+use crate::capability::{HostQuery, QueryCapability, QueryOutcome, QueryScope};
 use serde::{Deserialize, Serialize};
+
+/// Read-only query contract, advertised separately after the v3 Hello binding.
+pub const CAPABILITY_QUERY_REVISION: u32 = 1;
 
 /// IPC 语义协议 v3。v2 保持原定义供历史对照;不接受 v2/v1 握手降级。
 pub const PROTOCOL_VERSION_V3: u32 = 3;
 /// Bridge/core business receipt contract revision, independent of frame/IPC v3.
-pub const BUSINESS_PROTOCOL_REVISION: u32 = 2;
+pub const BUSINESS_PROTOCOL_REVISION: u32 = 3;
 
 pub use super::ipc_v2::{EventPayload, Role};
 
@@ -48,6 +52,37 @@ pub enum CoreToBridgeMsg {
         timeout_ms: u64,
         target: serde_json::Value,
         text: String,
+    },
+    DispatchPrivateVoice {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        peer_uin: String,
+        silk: Vec<u8>,
+    },
+    DispatchGroupVoice {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        group_id: String,
+        silk: Vec<u8>,
+    },
+    DispatchImage {
+        scope: QueryScope,
+        request_id: String,
+        wire_seq: u32,
+        timeout_ms: u64,
+        chat_type: u32,
+        peer_uin: String,
+        png: Vec<u8>,
+    },
+    Query {
+        request_id: String,
+        scope: QueryScope,
+        timeout_ms: u64,
+        query: HostQuery,
     },
     HealthAck {},
     EventAck {
@@ -101,6 +136,29 @@ pub enum BridgeMsg {
     SendResult {
         request_id: String,
         outcome: OutcomePayload,
+    },
+    QueryCapabilities {
+        revision: u32,
+        scope: QueryScope,
+        capabilities: Vec<QueryCapability>,
+    },
+    SendCapabilities {
+        scope: QueryScope,
+        private_text: bool,
+        group_text: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_voice: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        group_voice: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_image: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        group_image: bool,
+    },
+    QueryResult {
+        request_id: String,
+        scope: QueryScope,
+        outcome: QueryOutcome,
     },
     Health {
         ingress_pending: usize,
@@ -174,6 +232,77 @@ mod tests {
             "host_process_created_utc":"2026-10-08T00:00:00Z"
         }}"#;
         assert!(serde_json::from_str::<BridgeMsg>(old_v3).is_err());
+    }
+
+    #[test]
+    fn capability_query_revision_and_typed_wire_round_trip() {
+        let scope = QueryScope {
+            account: "10001".into(),
+            host_nonce: 7,
+            session_generation: 1,
+            connection_epoch: 2,
+        };
+        let advertise = BridgeMsg::QueryCapabilities {
+            revision: CAPABILITY_QUERY_REVISION,
+            scope: scope.clone(),
+            capabilities: vec![QueryCapability::FriendList],
+        };
+        assert_eq!(
+            serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&advertise).unwrap()).unwrap(),
+            advertise
+        );
+        let query = CoreToBridgeMsg::Query {
+            request_id: "query-lab".into(),
+            scope: scope.clone(),
+            timeout_ms: 1_000,
+            query: HostQuery::FriendList,
+        };
+        assert_eq!(
+            serde_json::from_slice::<CoreToBridgeMsg>(&serde_json::to_vec(&query).unwrap())
+                .unwrap(),
+            query
+        );
+        let send_capabilities = BridgeMsg::SendCapabilities {
+            scope: scope.clone(),
+            private_text: true,
+            group_text: false,
+            private_voice: false,
+            group_voice: false,
+            private_image: false,
+            group_image: false,
+        };
+        assert_eq!(
+            serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&send_capabilities).unwrap())
+                .unwrap(),
+            send_capabilities
+        );
+        let legacy = serde_json::to_value(&send_capabilities).unwrap();
+        assert!(legacy["d"].get("group_voice").is_none());
+        assert!(legacy["d"].get("private_voice").is_none());
+        assert!(legacy["d"].get("private_image").is_none());
+        assert!(legacy["d"].get("group_image").is_none());
+        assert!(matches!(serde_json::from_value::<BridgeMsg>(legacy.clone()).unwrap(),
+            BridgeMsg::SendCapabilities {private_image:false,group_image:false,..}));
+        let image = CoreToBridgeMsg::DispatchImage {scope:scope.clone(),request_id:"image-lab".into(),
+            wire_seq:9,timeout_ms:1000,chat_type:2,peer_uin:"30003".into(),png:vec![1,2,3]};
+        assert_eq!(serde_json::from_value::<CoreToBridgeMsg>(serde_json::to_value(&image).unwrap()).unwrap(),image);
+        let mut group = legacy;
+        group["d"]["group_voice"] = serde_json::json!(true);
+        assert!(matches!(
+            serde_json::from_value::<BridgeMsg>(group).unwrap(),
+            BridgeMsg::SendCapabilities { group_voice: true, private_voice: false, .. }
+        ));
+        let result = BridgeMsg::QueryResult {
+            request_id: "query-lab".into(),
+            scope,
+            outcome: QueryOutcome::Unsupported,
+        };
+        assert_eq!(
+            serde_json::from_slice::<BridgeMsg>(&serde_json::to_vec(&result).unwrap()).unwrap(),
+            result
+        );
+        assert!(serde_json::from_str::<CoreToBridgeMsg>(r#"{"t":"query","d":{"request_id":"q","scope":{"account":"10001","host_nonce":7,"session_generation":1,"connection_epoch":2},"timeout_ms":10,"query":{"kind":"eval","params":"script"}}}"#).is_err());
+        assert!(serde_json::from_str::<BridgeMsg>(r#"{"t":"query_capabilities","d":{"scope":{"account":"10001","host_nonce":7,"session_generation":1,"connection_epoch":2},"capabilities":[]}}"#).is_err());
     }
 
     #[test]

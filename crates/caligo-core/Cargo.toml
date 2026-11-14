@@ -8,6 +8,7 @@ edition.workspace = true
 research = ["caligo-bridge/research"]
 
 [dependencies]
+base64 = "0.22"
 caligo-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

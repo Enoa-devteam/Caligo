@@ -5,9 +5,13 @@
 //! ([`runtime`]) —— 生命周期、代次身份、请求状态机与恢复;不实现任何
 //! QQ 调用,native 侧由 bridge/夹具经显式 API 驱动。
 
+pub mod account_manager;
+pub mod capability_broker;
 pub mod daemon;
 pub mod ipc;
 pub mod journal;
+pub mod management_http;
+pub mod media_tool;
 pub mod message_store;
 pub mod onebot;
 pub mod onebot_events;

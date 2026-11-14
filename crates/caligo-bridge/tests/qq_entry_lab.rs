@@ -8,17 +8,19 @@
 //! 运行:`cargo test -p caligo-bridge --features research`。
 #![cfg(feature = "research")]
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};
-use caligo_bridge::qq_entry::{bootstrap, EntryConfig, EntryError, EntrySymbols, QqOwnerAdapter};
+use caligo_bridge::qq_entry::{EntryConfig, EntryError, EntrySymbols, QqOwnerAdapter, bootstrap};
 use caligo_bridge::resident::{Resident, ResidentLimits};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
+static WAKE_NOTICE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
 
 /// 用例隔离:机器静态 + 假符号计数器一并清零。
 fn lab_reset() {
+    *WAKE_NOTICE.lock().unwrap() = None;
     caligo_bridge::qq_entry::test_reset_state();
     FAKE_LOOP.store(0, Ordering::Release);
     FAKE_EXPECTED_ISOLATE.store(0, Ordering::Release);
@@ -115,6 +117,9 @@ unsafe extern "C" fn fake_uv_loop_alive(_loop_: *mut core::ffi::c_void) -> i32 {
 
 unsafe extern "C" fn fake_uv_async_send(_h: *mut core::ffi::c_void) -> i32 {
     FAKE_SEND_CALLS.fetch_add(1, Ordering::Relaxed);
+    if let Some(sender) = WAKE_NOTICE.lock().unwrap().as_ref() {
+        sender.send(()).unwrap();
+    }
     0
 }
 
@@ -259,11 +264,16 @@ fn close_completes_via_pump_and_close_callback() {
         close_once(); // 关闭回调 → closed
     });
     let handle = std::sync::Arc::new(rx_handle.recv().unwrap());
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    *WAKE_NOTICE.lock().unwrap() = Some(wake_tx);
     let closer = {
         let h = handle.clone();
         std::thread::spawn(move || h.close(3000))
     };
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // The close thread must actually publish CLOSE_REQ and wake the owner.
+    // A fixed sleep races thread scheduling under a loaded full build.
+    wake_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("close requested owner wake");
+    *WAKE_NOTICE.lock().unwrap() = None;
     tx_drive.send(()).unwrap();
     let r = closer.join().unwrap();
     owner.join().unwrap();
@@ -335,7 +345,7 @@ fn adapter_listener_ops_via_v8_ladder_and_resident_full_mode() {
         report_path: report_path("adapter"),
     };
     let handle = bootstrap(&cfg, &fake_symbols()).unwrap();
-    let mut adapter = QqOwnerAdapter::new(handle);
+    let mut adapter = QqOwnerAdapter::new(handle, "10001".into());
     assert_eq!(
         adapter.owner_thread_id(),
         adapter.current_thread_id(),
@@ -383,8 +393,8 @@ fn adapter_listener_ops_via_v8_ladder_and_resident_full_mode() {
 // ---- 假 V8 ABI 机器:阶梯全链可测(sret/句柄/Utf8 契约) ----
 
 mod fake_v8 {
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     static LOCALS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     pub static CURRENT: AtomicUsize = AtomicUsize::new(0x1DEA_0001);
@@ -580,7 +590,7 @@ fn d8_v8_ladder_arm_and_stop_flow() {
         report_path: report_path("d8arm"),
     };
     let handle = bootstrap(&cfg, &fake_symbols()).unwrap();
-    let mut adapter = caligo_bridge::qq_entry::QqOwnerAdapter::new(handle);
+    let mut adapter = caligo_bridge::qq_entry::QqOwnerAdapter::new(handle, "10001".into());
 
     // ListenerAdd → 阶梯执行 START_JS → ARMED → token 17。
     let r = adapter.native_op(HostOp::ListenerAdd).unwrap();

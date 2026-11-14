@@ -10,6 +10,24 @@
 
 use std::process::Command;
 
+#[test]
+fn profile_refresh_probe_is_default_closed_and_rejects_invalid_research_modes_before_manifest() {
+    let invalid = [
+        vec!["qq-entry-stop", "--refresh-current-profile"],
+        vec!["qq-entry", "--refresh-current-profile"],
+        vec!["qq-entry", "--refresh-current-profile", "--current-login", "--uid-map-result", "Z:/missing.json"],
+        vec!["qq-entry", "--refresh-current-profile", "--uid-map-uin", "1234567890", "--uid-map-result", "Z:/missing.json"],
+        vec!["qq-entry", "--refresh-current-profile", "--uid-map-surface-only", "--uid-map-result", "Z:/missing.json"],
+        vec!["qq-entry", "--refresh-current-profile", "--uid-map-profile-service", "--uid-map-result", "Z:/missing.json"],
+        vec!["qq-entry", "--refresh-current-profile", "--daemon-account", "1234567890", "--uid-map-result", "Z:/missing.json"],
+    ];
+    for args in invalid {
+        let (code, stdout, stderr) = run_inject(&args);
+        assert_eq!(code, Some(if caligo_bridge::gate::research_enabled() { 1 } else { 3 }), "{args:?}: {stdout} {stderr}");
+        assert!(!stdout.contains("[gate 1]"), "invalid mode reached manifest: {stdout}");
+    }
+}
+
 fn run_inject(extra_args: &[&str]) -> (Option<i32>, String, String) {
     let bin = env!("CARGO_BIN_EXE_caligo-cli");
     let out = Command::new(bin)

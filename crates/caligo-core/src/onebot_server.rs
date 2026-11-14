@@ -5,8 +5,10 @@
 //! matching persisted OneBot projection before reporting send success.
 
 use crate::daemon::Daemon;
-use crate::onebot::handle_action;
+use crate::media_tool::{MediaTool, StopToken};
+use crate::onebot::{handle_action_with_queries, QueryBackend};
 use crate::onebot_http::{serve_parallel, DEFAULT_MAX_BODY};
+use caligo_model::capability::{HostQuery, QueryOutcome};
 use caligo_model::onebot_traits::{SendDisposition, SendPayload, SendSink, SendTarget};
 use caligo_model::{ActionState, SessionKey, SessionKind};
 use std::net::TcpListener;
@@ -16,8 +18,8 @@ use std::time::{Duration, Instant};
 const SEND_DEADLINE_MS: u64 = 30_000;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// Send adapter shared by all HTTP actions. Private targets remain explicit
-/// unsupported until the native UID mapping is independently proven.
+/// Send adapter shared by all transports. Private targets require an explicit
+/// send capability from the current authenticated bridge scope.
 pub struct DaemonSendSink {
     daemon: Arc<Daemon>,
 }
@@ -33,39 +35,53 @@ pub fn action_handler(daemon: Arc<Daemon>) -> ActionHandler {
     let handler_daemon = Arc::clone(&daemon);
     Arc::new(move |action, params, echo| {
         let mut sink = DaemonSendSink::new(Arc::clone(&handler_daemon));
-        handle_action(action, params, echo, &mut sink, handler_daemon.as_ref())
+        let queries = DaemonQueryBackend::new(Arc::clone(&handler_daemon));
+        handle_action_with_queries(
+            action,
+            params,
+            echo,
+            &mut sink,
+            handler_daemon.as_ref(),
+            &queries,
+        )
     })
+}
+
+/// Normal-build query adapter. The daemon broker validates the response scope;
+/// query errors never fall back to learned peers or store login placeholders.
+pub struct DaemonQueryBackend {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonQueryBackend {
+    pub fn new(daemon: Arc<Daemon>) -> Self {
+        Self { daemon }
+    }
+}
+
+impl QueryBackend for DaemonQueryBackend {
+    fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome {
+        self.daemon.query_host(query, timeout)
+    }
+
+    fn voice_media(&self) -> Option<(&MediaTool, StopToken)> {
+        let media = self.daemon.voice_media.as_ref()?;
+        media.config().silk_decoder.as_ref()?;
+        Some((media, StopToken::from_flag(self.daemon.stop_flag())))
+    }
 }
 
 impl DaemonSendSink {
     pub fn new(daemon: Arc<Daemon>) -> Self {
         Self { daemon }
     }
-}
-
-impl SendSink for DaemonSendSink {
-    fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
-        let group_id = match &payload.target {
-            SendTarget::Group { group_id } => *group_id,
-            SendTarget::Private { .. } => {
-                return Ok(SendDisposition::Unsupported {
-                    reason: "常驻私聊 UID 映射尚未证实，当前明确不支持私聊发送".into(),
-                })
-            }
-        };
-        let account = self.daemon.config.account.clone();
-        let target = SessionKey::new(account, SessionKind::Group, group_id.to_string());
-        let request_id = self.daemon.submit_onebot_text(
-            target.clone(),
-            payload.text.clone(),
-            SEND_DEADLINE_MS,
-        )?;
+    fn wait_for_receipt(&self, request_id: &str, target: &SessionKey) -> Result<SendDisposition, String> {
         let deadline = Instant::now() + Duration::from_millis(SEND_DEADLINE_MS + 1_000);
         // NativeStarted records dispatch progress, not delivery confirmation.
         // Return success only after both the native receipt and persisted
         // OneBot message id are available.
         loop {
-            if let Some((state, message_id)) = self.daemon.onebot_text_status(&request_id, &target)
+            if let Some((state, message_id)) = self.daemon.onebot_text_status(request_id, target)
             {
                 match state {
                     ActionState::ConfirmedSuccess { .. } => {
@@ -100,6 +116,71 @@ impl SendSink for DaemonSendSink {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+}
+
+impl SendSink for DaemonSendSink {
+    fn send(&mut self, payload: &SendPayload) -> Result<SendDisposition, String> {
+        let (kind, peer) = match &payload.target {
+            SendTarget::Group { group_id } => (SessionKind::Group, *group_id),
+            SendTarget::Private { user_id } if self.daemon.supports_private_text() => {
+                (SessionKind::Private, *user_id)
+            }
+            SendTarget::Private { .. } => {
+                return Ok(SendDisposition::Unsupported {
+                    reason: "当前宿主未声明绑定会话的私聊文本发送能力".into(),
+                })
+            }
+        };
+        let account = self.daemon.config.account.clone();
+        // Persist the public UIN; the owner adapter resolves a native UID.
+        let target = SessionKey::new(account, kind, peer.to_string());
+        let request_id = self.daemon.submit_onebot_text(
+            target.clone(), payload.text.clone(), SEND_DEADLINE_MS,
+        )?;
+        self.wait_for_receipt(&request_id, &target)
+    }
+
+    fn send_image(&mut self, target: SendTarget, png: Vec<u8>) -> Result<SendDisposition, String> {
+        let (kind, peer, chat_type) = match target {
+            SendTarget::Private { user_id } => (SessionKind::Private, user_id, 1),
+            SendTarget::Group { group_id } => (SessionKind::Group, group_id, 2),
+        };
+        if !self.daemon.supports_image(chat_type) {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的图片发送能力".into(),
+            });
+        }
+        let peer = peer.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, kind, &peer);
+        let request_id = self
+            .daemon
+            .submit_image(kind, &peer, png, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
+    }
+
+    fn send_private_voice(&mut self, user_id: u64, silk: Vec<u8>) -> Result<SendDisposition, String> {
+        if !self.daemon.supports_private_voice() {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的私聊语音发送能力".into(),
+            });
+        }
+        let peer = user_id.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, SessionKind::Private, &peer);
+        let request_id = self.daemon.submit_private_voice(&peer, silk, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
+    }
+
+    fn send_group_voice(&mut self, group_id: u64, silk: Vec<u8>) -> Result<SendDisposition, String> {
+        if !self.daemon.supports_group_voice() {
+            return Ok(SendDisposition::Unsupported {
+                reason: "当前宿主未声明绑定会话的群语音发送能力".into(),
+            });
+        }
+        let peer = group_id.to_string();
+        let target = SessionKey::new(&self.daemon.config.account, SessionKind::Group, &peer);
+        let request_id = self.daemon.submit_voice(SessionKind::Group, &peer, silk, SEND_DEADLINE_MS)?;
+        self.wait_for_receipt(&request_id, &target)
     }
 }
 
