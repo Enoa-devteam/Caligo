@@ -74,6 +74,10 @@ pub mod qq_entry;
 pub mod qq_query;
 #[cfg(feature = "research")]
 pub mod qq_v8;
+#[cfg(feature = "research")]
+mod query_diagnostics;
+#[cfg(feature = "research")]
+mod receive_diagnostics;
 pub mod register;
 pub mod resident;
 #[cfg(feature = "research")]
@@ -705,7 +709,8 @@ pub struct QqUidMapProbeCtx {
     pub output_path: usize,
     pub timeout_ms: u32,
     /// 0 = GroupService round trip; 1 = GroupService surface only;
-    /// 2 = exact-build ProfileService round trip; 3 = current-login probe.
+    /// 2 = exact-build ProfileService round trip; 3 = current-login probe;
+    /// 4 = current identity followed by one server-source profile refresh.
     pub mode: u32,
 }
 
@@ -717,7 +722,7 @@ pub struct QqUidMapProbeCtx {
 /// `local-evidence/`.
 ///
 /// The loader must verify the exact loaded QQNT, major and wrapper module
-/// identities for modes 2 and 3 before invoking this entry.
+/// identities for modes 2, 3 and 4 before invoking this entry.
 #[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx) -> u32 {
@@ -726,7 +731,7 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
     }
     // SAFETY: loader supplies this fixed repr(C) context in target process memory.
     let view = unsafe { &*ctx };
-    if !matches!((view.mode, view.uin), (1 | 3, 0) | (0 | 2, 1..)) {
+    if !matches!((view.mode, view.uin), (1 | 3 | 4, 0) | (0 | 2, 1..)) {
         return uid_map_probe::code::ERR_BAD_MODE;
     }
     if view.output_path == 0 {
@@ -741,6 +746,7 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
         1 => uid_map_probe::run_surface_only(output, view.timeout_ms),
         2 => uid_map_probe::run_profile(view.uin, output, view.timeout_ms),
         3 => uid_map_probe::run_current_login(output, view.timeout_ms),
+        4 => uid_map_probe::run_current_profile_refresh(output, view.timeout_ms),
         _ => uid_map_probe::code::ERR_BAD_MODE,
     }
 }
@@ -885,6 +891,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     // Quarantined(写阶段日志,worker 退出)。
     {
         let r = resident.clone();
+        let owner_stop = stop.clone();
         let wrapper_binding = caligo_model::wrapper_message::WrapperBinding {
             account: account.clone(),
             session_generation,
@@ -892,6 +899,15 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             wrapper_session: String::new(),
         };
         qq_entry::install_drain_hook(Box::new(move || {
+            if owner_stop.load(Ordering::Acquire) {
+                r.set_bridge_scope(None);
+                r.drain_queries();
+                if let Err(error) = r.close() {
+                    qq_entry::append_stage_simple("daemon_owner_close", false, &format!("{error:?}"));
+                }
+                return 0;
+            }
+            r.drain_queries();
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
             // 重试直至成功;首次失败原因写阶段日志(不吞)。
             static OWNER_INIT: AtomicBool = AtomicBool::new(false);

@@ -66,6 +66,111 @@ fn lab_tid() -> u64 {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() as u64 }
 }
 
+#[test]
+fn login_query_runs_on_owner_and_revokes_a_stale_epoch() {
+    run_self_query_case(false);
+}
+
+#[test]
+fn self_profile_query_runs_on_owner_and_revokes_a_stale_epoch() {
+    run_self_query_case(true);
+}
+
+fn run_self_query_case(refresh: bool) {
+    use caligo_model::capability::{HostQuery, LoginInfo, QueryCapability, QueryData, QueryOutcome, QueryScope};
+
+    let _serial = TEST_SERIAL.lock().unwrap();
+    struct LoginHost {
+        owner: u64,
+        refresh: bool,
+        polls: Arc<AtomicU64>,
+        cancelled: Arc<AtomicBool>,
+    }
+    impl HostAdapter for LoginHost {
+        fn owner_thread_id(&self) -> u64 { self.owner }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            LabHost.native_op(op)
+        }
+        fn query_capabilities(&self) -> &'static [QueryCapability] { &[QueryCapability::LoginInfo, QueryCapability::SelfProfile] }
+        fn query(&mut self, _: &str, scope: &QueryScope, query: &HostQuery, _: u64, poll: bool) -> Option<QueryOutcome> {
+            assert_eq!(lab_tid(), self.owner);
+            assert_eq!(scope.account, "10001");
+            assert_eq!(scope.host_nonce, 0xAA00_0001);
+            assert_eq!(scope.session_generation, 1);
+            assert_eq!(*query, if self.refresh {HostQuery::SelfProfile} else {HostQuery::LoginInfo});
+            if !poll { return None; }
+            self.polls.fetch_add(1, Ordering::Relaxed);
+            let info = LoginInfo {
+                user_id: scope.account.clone(),
+                nickname: "Synthetic host nickname".into(),
+                online: true,
+            };
+            Some(QueryOutcome::Success(if self.refresh {QueryData::SelfProfile(info)} else {QueryData::LoginInfo(info)}))
+        }
+        fn cancel_query(&mut self, _: &str, _: &QueryScope) {
+            assert_eq!(lab_tid(), self.owner);
+            self.cancelled.store(true, Ordering::Release);
+        }
+    }
+    let prefix = unique_prefix("login");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let polls = Arc::new(AtomicU64::new(0));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let resident = Arc::new(Resident::new(
+        LoginHost { owner: lab_tid(), refresh, polls: polls.clone(), cancelled: cancelled.clone() },
+        ResidentLimits::default(),
+    ));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let cfg = worker_config(&prefix, &auth);
+    let worker_resident = resident.clone();
+    let worker_stop = stop.clone();
+    let (wake_tx, wake_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        run_worker(cfg, worker_resident, &|| wake_tx.send(()).is_ok(), _rx_placeholder(),
+            _ev_placeholder(), worker_stop)
+    });
+    let handler = caligo_core::onebot_server::action_handler(daemon.clone());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let response = loop {
+        let handler = handler.clone();
+        let action = std::thread::spawn(move || handler("get_login_info", &serde_json::json!({"no_cache":refresh}), serde_json::Value::Null));
+        while !action.is_finished() {
+            assert!(Instant::now() < deadline, "login query did not finish");
+            if wake_rx.recv_timeout(Duration::from_millis(25)).is_ok() {
+                resident.drain_queries();
+            }
+        }
+        let response = action.join().unwrap();
+        if response.retcode == 0 { break response; }
+        assert!(Instant::now() < deadline, "no advertised login query");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(response.data, serde_json::json!({"user_id": 10001, "nickname": "Synthetic host nickname"}));
+    assert_eq!(polls.load(Ordering::Relaxed), 1);
+    let mut control = ControlClient::connect(&pipe_names_from_prefix(&prefix).1, &auth, "login-lab").unwrap();
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    assert_eq!(worker.join().unwrap().1, WorkerExit::CoreStopped);
+    runner.join().unwrap().unwrap();
+
+    // Exercise a request already dispatched before connection revocation.
+    let stale = QueryScope { account: "10001".into(), host_nonce: 0xAA00_0001, session_generation: 1, connection_epoch: 100 };
+    resident.set_bridge_scope(Some(stale.clone()));
+    resident.submit_query("stale".into(), stale.clone(), 1000, if refresh {HostQuery::SelfProfile} else {HostQuery::LoginInfo}).unwrap();
+    assert_eq!(resident.drain_queries(), 1);
+    resident.set_bridge_scope(None);
+    assert_eq!(resident.drain_queries(), 1);
+    assert!(cancelled.load(Ordering::Acquire));
+    assert_eq!(polls.load(Ordering::Relaxed), 1);
+    assert_eq!(resident.take_query_results(), vec![("stale".into(), stale.clone(), QueryOutcome::Disconnected)]);
+    assert_eq!(resident.submit_query("replay".into(), stale, 1000, if refresh {HostQuery::SelfProfile} else {HostQuery::LoginInfo}), Err(QueryOutcome::Disconnected));
+}
+
 fn unique_prefix(tag: &str) -> String {
     format!(
         "\\\\.\\pipe\\caligo-k5-dcl-{}-{}-{}",

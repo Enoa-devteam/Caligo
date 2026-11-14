@@ -387,9 +387,16 @@ pub const D8_START_JS: &str = r"
     if (!live) return 'ERR:no live session';
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
-      rejected: 0, overflow: 0, listenerId: null, sendResults: {}, sends: {} };
+      rejected: 0, overflow: 0, imageShapes: [], listenerId: null, sendResults: {}, sends: {} };
     var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
     R.voiceAccount = voiceAccount;
+    // The pinned wrapper serializes absent numeric mention IDs as '0' and the optional NT UID as null.
+    var emptyNumericMention = function (id) {
+      return id === undefined || id === '' || (voiceAccount !== null && id === '0');
+    };
+    var emptyNtMention = function (id) {
+      return id === undefined || id === '' || (voiceAccount !== null && id === null);
+    };
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
       if (!pending || !pending.promiseDone || !pending.readback) return;
@@ -404,7 +411,36 @@ pub const D8_START_JS: &str = r"
       pending.done = true;
       if (R.sends[key] === pending) delete R.sends[key];
     };
+    // Diagnostic failures must never affect callback admission. Only fixed labels and booleans escape.
+    var noteImageShape = function (src, m) {
+      try {
+        if (!voiceAccount || R.imageShapes.length >= 8 || !m || !Array.isArray(m.elements)) return;
+        var e = m.elements.slice(0, 128).find(function (e) {
+          return e && (e.elementType === 2 || e.elementType === '2');
+        });
+        if (!e) return;
+        var p = e.picElement || {}, size = p.fileSize;
+        if (typeof size === 'string' && /^[1-9][0-9]{0,7}$/.test(size)) size = Number(size);
+        R.imageShapes.push({source:src, chat:m.chatType === 1 ? 'private' : (m.chatType === 2 ? 'group' : 'other'),
+          arity:m.elements.length === 1 ? 'single' : 'multiple', numeric_element_type:e.elementType === 2,
+          pic_type:p.picType === 1001 ? 'png' : (p.picType === 1000 ? 'default' : 'other'),
+          subtype:p.picSubType === 0 ? 'ordinary' : 'other',
+          wire_strings_valid:['msgId','msgSeq','msgRandom','msgTime','guildId','peerUid','peerUin','senderUid','senderUin']
+            .every(function (f) { return typeof m[f] === 'string'; }),
+          message_types_valid:Number.isInteger(m.msgType) && m.msgType >= 0 && Number.isInteger(m.subMsgType) && m.subMsgType >= 0,
+          optional_fields_valid:(m.clientSeq === undefined || typeof m.clientSeq === 'string') &&
+            (m.sendStatus === undefined || Number.isInteger(m.sendStatus)),
+          self_sent:m.senderUin === voiceAccount,
+          peer_matches:m.chatType === 1 ? m.senderUid === m.peerUid && m.senderUin === m.peerUin : m.peerUid === m.peerUin,
+          element_id_valid:typeof e.elementId === 'string' && /^[0-9]{1,128}$/.test(e.elementId) && /[1-9]/.test(e.elementId),
+          size_valid:Number.isInteger(size) && size >= 33 && size <= 16777216,
+          dimensions_valid:Number.isInteger(p.picWidth) && p.picWidth >= 1 && p.picWidth <= 32768 &&
+            Number.isInteger(p.picHeight) && p.picHeight >= 1 && p.picHeight <= 32768 && p.picWidth * p.picHeight <= 100000000,
+          md5_valid:typeof p.md5HexStr === 'string' && /^[0-9a-fA-F]{32}$/.test(p.md5HexStr), text_present:!!e.textElement});
+      } catch (_) {}
+    };
     var push = function (src, m, verifiedVoice) {
+      if (!verifiedVoice) noteImageShape(src, m);
       try {
         if (!m || typeof m !== 'object' || !Array.isArray(m.elements) ||
             !m.elements.length || m.elements.length > 128) { R.rejected++; return; }
@@ -460,9 +496,8 @@ pub const D8_START_JS: &str = r"
             continue;
           }
           if (!e || e.elementType !== 1 || !t || typeof t.content !== 'string' || t.atType !== 0 ||
-              (t.atUid !== undefined && t.atUid !== '') ||
-              (t.atNtUid !== undefined && t.atNtUid !== '') ||
-              (t.atTinyId !== undefined && t.atTinyId !== '')) { R.rejected++; return; }
+              !emptyNumericMention(t.atUid) || !emptyNtMention(t.atNtUid) ||
+              !emptyNumericMention(t.atTinyId)) { R.rejected++; return; }
           textBytes += utf8Bytes(t.content);
           if (textBytes > 49152) { R.overflow++; return; }
           elements.push({elementType:1, textElement:{content:t.content, atType:0,
@@ -613,7 +648,7 @@ pub const D8_POLL_JS: &str = r"
       if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
     }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
-      sendResults:R.sendResults || {}};
+      sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || []};
     var json = JSON.stringify(out);
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
@@ -627,7 +662,7 @@ pub const D8_POLL_JS: &str = r"
       }
       json = JSON.stringify(out);
     }
-    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0;
+    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = [];
     var resultKeys = Object.keys(R.sendResults || {});
     for (var i = 0; i < resultKeys.length; i++) {
       if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
@@ -693,7 +728,23 @@ pub fn poll_listener_json() -> Result<String, V8Error> {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 阶梯内自管全部检查;调用方保证 owner 线程。
-    unsafe { exec_script(&syms, isolate_addr(), D8_POLL_JS) }
+    let output = unsafe { exec_script(&syms, isolate_addr(), D8_POLL_JS) }?;
+    if let Some(detail) = crate::receive_diagnostics::sanitize_image_shapes(&output) {
+        // This is a per-process research report budget, independent of message admission.
+        static IMAGE_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if IMAGE_REPORTS.fetch_update(std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed, |n| (n < 32).then_some(n + 1)).is_ok() {
+            crate::qq_entry::append_stage_simple("receive_image_shape", true, &detail);
+        }
+    }
+    if let Some(detail) = crate::receive_diagnostics::sanitize_media_download(&output) {
+        static MEDIA_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if MEDIA_REPORTS.fetch_update(std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed, |n| (n < 32).then_some(n + 1)).is_ok() {
+            crate::qq_entry::append_stage_simple("media_download_stage", true, &detail);
+        }
+    }
+    Ok(output)
 }
 
 static D8_SESSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -713,11 +764,7 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 同上。
-    let source = account.map(|account| format!(
-        "(function(caligoVoiceAccount) {{ return {}; }})({})",
-        D8_START_JS,
-        serde_json::to_string(account).expect("serializable account")
-    ));
+    let source = account.map(listener_script_with_account);
     let result = unsafe {
         exec_script(&syms, isolate_addr(), source.as_deref().unwrap_or(D8_START_JS))
     }?;
@@ -730,6 +777,14 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
         }
     }
     Ok(result)
+}
+
+fn listener_script_with_account(account: &str) -> String {
+    format!(
+        "(function(caligoVoiceAccount) {{ return ({}); }})({})",
+        D8_START_JS,
+        serde_json::to_string(account).expect("serializable account")
+    )
 }
 
 /// 对称移除监听器(D8_STOP_JS)。返回 "STOPPED .. remove=.." / "NOT_ARMED"。
@@ -995,14 +1050,20 @@ const CURRENT_LOGIN_START_JS: &str = r#"
     }
     var listener = new Proxy({
       onSelfStatusChanged: function (info) {
-        if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_status_pending') return;
+        if (globalThis.__caligo_uid_map_main !== state ||
+            (state.phase !== 'self_status_pending' && state.phase !== 'self_profile_pending' &&
+             state.phase !== 'self_profile_ready' && state.phase !== 'profile_refresh_pending')) return;
         try {
           if (!info || typeof info.uid !== 'string' || !/^u_[A-Za-z0-9_-]{1,125}$/.test(info.uid) ||
               typeof info.uin !== 'string' || !/^[1-9][0-9]{4,12}$/.test(info.uin) ||
-              !Number.isSafeInteger(info.status) || info.status <= 0 || info.status === 20) return;
+              !Number.isSafeInteger(info.status) || info.status <= 0) return;
           var prior = state.selfStatus;
           if (prior && (prior.uid !== info.uid || prior.uin !== info.uin)) {
             fail('self_status_conflict');
+            return;
+          }
+          if (info.status === 20) {
+            fail('self_status_offline');
             return;
           }
           state.selfStatus = {uid: info.uid, uin: info.uin, status: info.status};
@@ -1011,7 +1072,11 @@ const CURRENT_LOGIN_START_JS: &str = r#"
     }, {
       get: function (target, key) {
         if (typeof key !== 'string') return undefined;
-        return key === 'onSelfStatusChanged' ? target[key] : function () {};
+        if (key === 'onSelfStatusChanged') return target[key];
+        if (key === 'onUserDetailInfoChanged') return function (info) {
+          if (typeof state.profileRefreshEvent === 'function') state.profileRefreshEvent(info);
+        };
+        return function () {};
       }
     });
     // This build returns a decimal string from the native add wrapper.
@@ -1047,25 +1112,59 @@ const CURRENT_LOGIN_START_JS: &str = r#"
 })()
 "#;
 
-// Promise handlers only record settlement. QQ calls and result extraction stay
-// in the owner tick, so timeout/cancel never dispatch a late mapping query.
+// Promise handlers record settlement. The owner tick validates identity and
+// projects the exact profile row while the self-status listener is still armed.
 const CURRENT_LOGIN_FINISH_JS: &str = r#"
 (function () {
   var state = globalThis.__caligo_uid_map_main;
   if (!state) return 'ERR:no current-login state';
-  if (state.phase !== 'self_status_pending' || state.selfStatusResult !== 0 || !state.selfStatus) {
+  var profileReady = state.phase === 'self_profile_ready';
+  if (!profileReady &&
+      (state.phase !== 'self_status_pending' || state.selfStatusResult !== 0 || !state.selfStatus)) {
     return 'POLL';
   }
   function finish(status) {
     state.status = status;
     state.phase = 'done';
     delete state.selfStatus;
+    delete state.selfProfile;
     return 'POLL';
+  }
+  function completeIdentity(nicknameStatus, nickname) {
+    if (state.phase === 'done') return 'POLL';
+    var identity = state.selfStatus;
+    state.nicknameStatus = nicknameStatus;
+    state.currentLogin = {
+      uin: identity.uin, uid: identity.uid, status: identity.status, session_id: state.sessionId
+    };
+    if (nicknameStatus === 'matched') state.currentLogin.nickname = nickname;
+    return finish('current_login_match');
   }
   try {
     var identity = state.selfStatus;
     var uin = identity.uin, uid = identity.uid;
     if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+    if (state.expectedAccount !== undefined && state.expectedAccount !== uin) {
+      return finish('current_account_mismatch');
+    }
+    if (profileReady) {
+      if (state.nicknameStatus === 'query_rejected') return completeIdentity('query_rejected');
+      if (Object.prototype.toString.call(state.selfProfile) !== '[object Map]') {
+        return completeIdentity('result_not_map');
+      }
+      var item = Map.prototype.get.call(state.selfProfile, uid);
+      var core = item && item.coreInfo;
+      if (!core || core.uid !== uid || core.uin !== uin ||
+          (item.uid !== undefined && item.uid !== uid) ||
+          (item.uin !== undefined && item.uin !== uin)) {
+        return completeIdentity('profile_identity_mismatch');
+      }
+      var nickname = core.nick;
+      if (typeof nickname !== 'string' || !nickname.trim() || nickname.length > 4096 ||
+          Buffer.byteLength(nickname, 'utf8') > 4096) return completeIdentity('nickname_invalid');
+      if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
+      return completeIdentity('matched', nickname);
+    }
     var mapped = state.forwardMethod.call(state.profile, 'FriendsServiceImpl', [uin]);
     if (Object.prototype.toString.call(mapped) !== '[object Map]') {
       Promise.resolve(mapped).catch(function () {});
@@ -1079,8 +1178,23 @@ const CURRENT_LOGIN_FINISH_JS: &str = r#"
     }
     if (Map.prototype.get.call(reverse, uid) !== uin) return finish('self_reverse_mismatch');
     if (state.session.getSessionId() !== state.sessionId) return finish('current_session_changed');
-    state.currentLogin = {uin: uin, uid: uid, status: identity.status, session_id: state.sessionId};
-    return finish('current_login_match');
+    if (typeof state.profile.getCoreAndBaseInfo !== 'function') return completeIdentity('accessor_missing');
+    state.phase = 'self_profile_pending';
+    try {
+      Promise.resolve(state.profile.getCoreAndBaseInfo('nodeStore', [uid])).then(function (profile) {
+        if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_profile_pending') return;
+        state.selfProfile = profile;
+        state.phase = 'self_profile_ready';
+      }, function () {
+        if (globalThis.__caligo_uid_map_main !== state || state.phase !== 'self_profile_pending') return;
+        state.nicknameStatus = 'query_rejected';
+        state.phase = 'self_profile_ready';
+      });
+    } catch (_) {
+      if (state.phase !== 'self_profile_pending') return 'POLL';
+      return completeIdentity('query_threw');
+    }
+    return 'POLL';
   } catch (_) { return finish('current_login_check_failed'); }
 })()
 "#;
@@ -1093,6 +1207,69 @@ pub(crate) fn start_current_login_probe() -> Result<String, V8Error> {
 pub(crate) fn finish_current_login_probe() -> Result<String, V8Error> {
     let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
     unsafe { exec_script(&syms, isolate_addr(), CURRENT_LOGIN_FINISH_JS) }
+}
+
+const CURRENT_PROFILE_REFRESH_JS: &str = include_str!("profile_refresh.js");
+
+/// Research only: first establish current identity, then one bounded server-source
+/// profile fetch. No public capability is declared by this probe.
+pub(crate) fn finish_current_profile_probe() -> Result<String, V8Error> {
+    run_fixed_query_script(&format!(
+        "(function() {{ var step = ({CURRENT_LOGIN_FINISH_JS});
+          if (step !== 'POLL') return step;
+          return ({CURRENT_PROFILE_REFRESH_JS}); }})()"
+    ))
+}
+
+/// Normal owner queries reuse the field-tested provider and temporary listener.
+pub(crate) fn build_scoped_login_start(wrapper_path: &str, account: &str) -> String {
+    let path = serde_json::to_string(wrapper_path).expect("string serialization");
+    let account = serde_json::to_string(account).expect("string serialization");
+    format!(
+        "(function() {{
+            if (({UID_MAP_STATE_JS}) !== 'STATE_READY') return 'BUSY';
+            globalThis.__caligo_uid_map_main.expectedAccount = {account};
+            var ready = ({UID_MAP_PROFILE_METHODS_JS})({path});
+            if (ready !== 'PROFILE_READY') return ready;
+            return ({CURRENT_LOGIN_START_JS});
+        }})()"
+    )
+}
+
+pub(crate) fn poll_scoped_login() -> Result<String, V8Error> {
+    run_fixed_query_script(&build_scoped_login_poll())
+}
+
+pub(crate) fn build_scoped_self_profile_start(wrapper_path: &str, account: &str) -> String {
+    let start = build_scoped_login_start(wrapper_path, account);
+    format!("(function() {{ var result = ({start});
+        if (result === 'DISPATCHED' || result === 'SURFACE_DONE') {{
+            var state = globalThis.__caligo_uid_map_main;
+            if (state) state.retainOnCleanupUnknown = true;
+        }}
+        return result; }})()")
+}
+
+pub(crate) fn poll_scoped_self_profile() -> Result<String, V8Error> {
+    run_fixed_query_script(&build_scoped_self_profile_poll())
+}
+
+fn build_scoped_self_profile_poll() -> String {
+    format!("(function() {{ var step = ({CURRENT_LOGIN_FINISH_JS});
+        if (step !== 'POLL') return step;
+        step = ({CURRENT_PROFILE_REFRESH_JS});
+        if (step !== 'POLL') return step;
+        return ({UID_MAP_POLL_JS}); }})()")
+}
+
+fn build_scoped_login_poll() -> String {
+    format!(
+        "(function() {{
+            var step = ({CURRENT_LOGIN_FINISH_JS});
+            if (step !== 'POLL') return step;
+            return ({UID_MAP_POLL_JS});
+        }})()"
+    )
 }
 
 pub fn build_uid_map_methods_js(uin: &str) -> String {
@@ -1240,6 +1417,7 @@ const UID_MAP_POLL_JS: &str = r#"
     if (S.listenerRegistration && S.listenerRegistration !== 'remove_returned') {
       S.status = 'self_status_listener_cleanup_unverified';
       delete S.currentLogin;
+      delete S.profileRefresh;
     }
     var done = {
       status: S.status,
@@ -1253,10 +1431,17 @@ const UID_MAP_POLL_JS: &str = r#"
       reverse: S.reverse,
       error: S.error,
       currentLogin: S.currentLogin,
+      nicknameStatus: S.nicknameStatus,
       selfStatusResult: S.selfStatusResult,
       listenerRegistration: S.listenerRegistration
     };
-    delete G.__caligo_uid_map_main;
+    if (S.profileRefreshStarted) {
+      done.profileRefresh = S.profileRefresh;
+      done.profileRefreshCallAttempted = !!S.profileRefreshCallAttempted;
+    }
+    if (!S.retainOnCleanupUnknown || !S.listenerRegistration || S.listenerRegistration === 'remove_returned') {
+      delete G.__caligo_uid_map_main;
+    }
     return JSON.stringify(done);
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
@@ -1275,7 +1460,9 @@ const UID_MAP_CANCEL_JS: &str = r#"
       } catch (_) {}
     }
   }
-  delete globalThis.__caligo_uid_map_main;
+  if (!state || !state.retainOnCleanupUnknown || !state.listenerRegistration || state.listenerRegistration === 'remove_returned') {
+    delete globalThis.__caligo_uid_map_main;
+  }
   return state && state.listenerRegistration && state.listenerRegistration !== 'remove_returned'
     ? 'CLEANUP_UNKNOWN' : 'CANCELLED';
 })()
@@ -1561,8 +1748,180 @@ mod uid_map_script_tests {
         UID_MAP_POLL_JS, UID_MAP_PROFILE_METHODS_JS,
         UID_MAP_QUERY_JS, UID_MAP_SANITY_JS, UID_MAP_SESSION_JS, UID_MAP_STATE_JS,
         UID_MAP_SURFACE_DONE_JS, UID_MAP_WRAPPERS_JS, build_profile_uid_map_query_js,
-        build_uid_map_methods_js,
+        build_scoped_login_poll, build_scoped_login_start, build_uid_map_methods_js,
+        listener_script_with_account,
     };
+
+    #[test]
+    fn profile_refresh_requires_request_reply_and_notification_and_retains_unknown_cleanup() {
+        let scripts = serde_json::json!({
+            "start": CURRENT_LOGIN_START_JS,
+            "identity": CURRENT_LOGIN_FINISH_JS,
+            "refresh": super::CURRENT_PROFILE_REFRESH_JS,
+            "poll": UID_MAP_POLL_JS,
+            "cancel": UID_MAP_CANCEL_JS,
+            "state": UID_MAP_STATE_JS,
+        });
+        let fixture = include_str!("../tests/fixtures/profile-refresh-contract.cjs");
+        let script = format!("globalThis.caligoRefreshScripts = {scripts};\n{fixture}");
+        let result = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        println!("{}", String::from_utf8_lossy(&result.stdout));
+    }
+
+    #[test]
+    fn scoped_self_profile_rejects_wrong_account_and_ignores_revoked_callbacks() {
+        let scripts = serde_json::json!({
+            "start": super::build_scoped_self_profile_start("synthetic-wrapper.node", "10001"),
+            "poll": super::build_scoped_self_profile_poll(),
+            "cancel": UID_MAP_CANCEL_JS,
+        });
+        let fixture = include_str!("../tests/fixtures/scoped-self-profile-contract.cjs");
+        let script = format!("globalThis.caligoScopedProfileScripts = {scripts};\n{fixture}");
+        let result = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        println!("{}", String::from_utf8_lossy(&result.stdout));
+    }
+
+    #[test]
+    fn d8_account_wrapper_returns_the_listener_result() {
+        let listener = serde_json::to_string(&listener_script_with_account("10001")).unwrap();
+        let script = format!(
+            "const assert = require('node:assert/strict');
+             globalThis.__caligo_res = {{sid:'nt_1'}};
+             assert.equal(eval({listener}), 'ALREADY sid=nt_1');"
+        );
+        let result = std::process::Command::new("node").args(["-e", &script]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    #[test]
+    fn d8_image_diagnostics_preserve_admission_and_omit_values() {
+        use std::io::Write;
+        let scripts = serde_json::json!({
+            "pilot": listener_script_with_account("10001"),
+            "poll": super::D8_POLL_JS,
+        });
+        let fixture = include_str!("../tests/fixtures/receive-image-diagnostics.cjs");
+        let mut child = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", fixture])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        child.stdin.take().unwrap().write_all(scripts.to_string().as_bytes()).unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    #[test]
+    fn d8_pinned_wrapper_accepts_native_empty_mention_fields() {
+        use std::io::Write;
+
+        let scripts = serde_json::json!({
+            "pilot": listener_script_with_account("10001"),
+            "legacy": super::D8_START_JS,
+            "poll": super::D8_POLL_JS,
+        });
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const scripts = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+for (const [profile, expected] of [['pilot', 2], ['legacy', 0]]) {
+  let listener;
+  const service = {sendMsg() {}, addKernelMsgListener(value) { listener = value; return '1'; }};
+  const session = {getSessionId: () => '1', getMsgService: () => service};
+  const sandbox = vm.createContext({Buffer, process: {_linkedBinding: () => ({
+    NodeIQQNTWrapperSession: {getNTWrapperSession: () => session}
+  })}});
+  assert.match(vm.runInContext(scripts[profile], sandbox), /^ARMED/);
+  const common = {msgId:'5001',msgSeq:'2',msgRandom:'3',msgTime:'1794567890',guildId:'',
+    peerUid:'u_peer',peerUin:'20002',senderUid:'u_peer',senderUin:'20002',msgType:2,subMsgType:1};
+  const text = {content:'sample',atType:0,atUid:'0',atTinyId:'0',atNtUid:null};
+  const row = (chatType, textElement) => ({...common,chatType,
+    ...(chatType === 2 ? {peerUid:'30003',peerUin:'30003'} : {}),
+    elements:[{elementType:1,textElement}]});
+  listener.onRecvMsg([row(1, text), row(2, text), row(1, {...text,atType:2}),
+    row(1, {...text,atUid:'20003'}), row(1, {...text,atNtUid:'u_other'})]);
+  const batch = JSON.parse(vm.runInContext(scripts.poll, sandbox));
+  assert.equal(batch.rejected, 5 - expected);
+  assert.equal(batch.items.length, expected);
+  for (const {record} of batch.items) {
+    assert.deepEqual(record.elements[0].textElement,
+      {content:'sample',atType:0,atUid:'',atNtUid:'',atTinyId:''});
+  }
+}
+"#;
+        let mut child = std::process::Command::new("node")
+            .args(["-e", fixture])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        child.stdin.take().unwrap().write_all(scripts.to_string().as_bytes()).unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    #[test]
+    fn scoped_login_start_rejects_wrong_host_account_before_directory_lookup() {
+        let start = build_scoped_login_start("D:\\QQ NT\\wrapper.node", "10001");
+        let poll = build_scoped_login_poll();
+        let fixture = r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const calls = [];
+let account = '10002';
+const uid = 'u_synthetic';
+let listener;
+const profile = {
+  addKernelProfileListener(value) {listener = value; return '1';},
+  removeKernelProfileListener(id) {assert.equal(id, '1'); calls.push('remove');},
+  getSelfStatus() {listener.onSelfStatusChanged({uid, uin: account, status: 10}); return {result: 0};},
+  getUidByUin(_, keys) {calls.push('forward'); assert.equal(keys[0], account); return new Map([[account, uid]]);},
+  getUinByUid(_, keys) {calls.push('reverse'); assert.equal(keys[0], uid); return new Map([[uid, account]]);},
+  getCoreAndBaseInfo(_, keys) {
+    calls.push('nickname');
+    assert.equal(keys[0], uid);
+    return new Map([[uid, {coreInfo: {uid, uin: account, nick: 'Synthetic'}}]]);
+  }
+};
+const sandbox = vm.createContext({
+  Buffer,
+  require(path) {
+    assert.equal(path, String.raw`D:\QQ NT\wrapper.node`);
+    return {NodeIQQNTWrapperSession: {getNTWrapperSession(key) {
+      assert.equal(key, 'nt_1');
+      return {getSessionId: () => 'nt_1', getProfileService: () => profile};
+    }}};
+  }
+});
+const tick = () => new Promise(resolve => setImmediate(resolve));
+(async () => {
+  assert.equal(vm.runInContext(start, sandbox), 'DISPATCHED');
+  await tick();
+  assert.equal(JSON.parse(vm.runInContext(poll, sandbox)).status, 'current_account_mismatch');
+  assert.deepEqual(calls, ['remove']);
+  account = '10001';
+  assert.equal(vm.runInContext(start, sandbox), 'DISPATCHED');
+  await tick();
+  assert.equal(vm.runInContext(poll, sandbox), 'PENDING');
+  await tick();
+  const result = JSON.parse(vm.runInContext(poll, sandbox));
+  assert.equal(result.status, 'current_login_match');
+  assert.equal(result.currentLogin.nickname, 'Synthetic');
+  assert.deepEqual(calls, ['remove', 'forward', 'reverse', 'nickname', 'remove']);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+        let start = serde_json::to_string(&start).unwrap();
+        let poll = serde_json::to_string(&poll).unwrap();
+        let script = format!("const start = {start}, poll = {poll};\n{fixture}");
+        let result = std::process::Command::new("node")
+            .args(["--unhandled-rejections=strict", "-e", &script])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
 
     #[test]
     fn current_login_uses_host_identity_and_rejects_drift_or_late_settlement() {
@@ -1574,7 +1933,9 @@ mod uid_map_script_tests {
 const assert = require('node:assert/strict');
 const uin = '1234567890', uid = 'u_synthetic';
 const selfStatus = {uin, uid, status: 10};
+const selfProfile = () => new Map([[uid, {coreInfo: {uid, uin, nick: 'Synthetic nickname'}}]]);
 let sessionId = 'nt_1', mappings = 0, reverseUin = uin, listener, removed = 0;
+let readProfile = selfProfile;
 function prepare(getSelfStatus) {
   const profile = {
     getSelfStatus,
@@ -1586,6 +1947,11 @@ function prepare(getSelfStatus) {
     removeKernelProfileListener(id) {
       assert.equal(id, '9007199254740993');
       removed++;
+    },
+    getCoreAndBaseInfo(source, ids) {
+      assert.equal(source, 'nodeStore');
+      assert.deepEqual(ids, [uid]);
+      return readProfile();
     }
   };
   const state = {
@@ -1621,12 +1987,15 @@ async function run(event, result = 0, eventFirst = true) {
   await tick();
   if (!eventFirst && event) listener.onSelfStatusChanged(event);
   assert.equal(eval(finish), 'POLL');
+  await tick();
+  assert.equal(eval(finish), 'POLL');
   return JSON.parse(eval(poll));
 }
 (async () => {
   let result = await run(selfStatus);
   assert.equal(result.status, 'current_login_match');
-  assert.deepEqual(result.currentLogin, {...selfStatus, session_id: 'nt_1'});
+  assert.deepEqual(result.currentLogin, {...selfStatus, session_id: 'nt_1', nickname: 'Synthetic nickname'});
+  assert.equal(result.nicknameStatus, 'matched');
   assert.equal(result.listenerRegistration, 'remove_returned');
   assert.equal(mappings, 2);
   assert.equal((await run(selfStatus, 0, false)).status, 'current_login_match');
@@ -1667,6 +2036,50 @@ async function run(event, result = 0, eventFirst = true) {
   assert.equal(eval(poll), 'PENDING');
   assert.equal(eval(cancel), 'CANCELLED');
   assert.equal(removed, 7);
+  reverseUin = uin;
+  readProfile = () => new Map([['u_other', {coreInfo: {uid, uin, nick: 'Wrong key'}}]]);
+  result = await run(selfStatus);
+  assert.equal(result.nicknameStatus, 'profile_identity_mismatch');
+  assert.equal(result.currentLogin.nickname, undefined);
+  readProfile = () => new Map([[uid, {coreInfo: {uid, uin: '1234567891', nick: 'Wrong UIN'}}]]);
+  result = await run(selfStatus);
+  assert.equal(result.nicknameStatus, 'profile_identity_mismatch');
+  assert.equal(result.currentLogin.nickname, undefined);
+  readProfile = () => new Map([[uid, {coreInfo: {uid, uin, nick: '😀'.repeat(1025)}}]]);
+  assert.equal((await run(selfStatus)).nicknameStatus, 'nickname_invalid');
+  readProfile = () => Promise.reject(new Error('test rejection'));
+  assert.equal((await run(selfStatus)).nicknameStatus, 'query_rejected');
+  let resolveProfile;
+  readProfile = () => new Promise(resolve => {resolveProfile = resolve;});
+  prepare(() => {listener.onSelfStatusChanged(selfStatus); return {result: 0};});
+  assert.equal(eval(start), 'DISPATCHED');
+  await tick();
+  eval(finish);
+  sessionId = 'nt_3';
+  resolveProfile(selfProfile());
+  await tick();
+  eval(finish);
+  assert.equal(JSON.parse(eval(poll)).status, 'current_session_changed');
+  prepare(() => {listener.onSelfStatusChanged(selfStatus); return {result: 0};});
+  assert.equal(eval(start), 'DISPATCHED');
+  await tick();
+  eval(finish);
+  listener.onSelfStatusChanged({uin: '1234567891', uid: 'u_other', status: 10});
+  resolveProfile(selfProfile());
+  await tick();
+  result = JSON.parse(eval(poll));
+  assert.equal(result.status, 'self_status_conflict');
+  assert.equal(result.currentLogin, undefined);
+  prepare(() => {listener.onSelfStatusChanged(selfStatus); return {result: 0};});
+  assert.equal(eval(start), 'DISPATCHED');
+  await tick();
+  eval(finish);
+  listener.onSelfStatusChanged({...selfStatus, status: 20});
+  resolveProfile(selfProfile());
+  await tick();
+  result = JSON.parse(eval(poll));
+  assert.equal(result.status, 'self_status_offline');
+  assert.equal(result.currentLogin, undefined);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 "#;
         let script =

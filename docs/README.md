@@ -42,6 +42,7 @@
 - 测试身份与唯一正文：[test-scope](research/test-scope.md)。
 - 事故收尾与恢复：[recovery-notes](research/recovery-notes.md)、[K4 incident-register](research/k4-incident-register.md)。
 - 身份失效：[identity-invalidation-observations](research/identity-invalidation-observations.md)。
+- 当前换号/重连边界：[登录会话撤权验收合同](acceptance/2026-11-14-session-revocation.md)。
 
 ## 入口、线程与寿命研究
 

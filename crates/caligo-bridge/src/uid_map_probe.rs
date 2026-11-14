@@ -42,6 +42,7 @@ enum Resolver {
     Group(u64),
     Profile(u64),
     CurrentLogin,
+    CurrentProfileRefresh,
 }
 
 fn run_owner_step<F>(
@@ -142,6 +143,10 @@ pub(crate) fn run_current_login(output_path: PathBuf, timeout_ms: u32) -> u32 {
     run_inner(Resolver::CurrentLogin, output_path, timeout_ms)
 }
 
+pub(crate) fn run_current_profile_refresh(output_path: PathBuf, timeout_ms: u32) -> u32 {
+    run_inner(Resolver::CurrentProfileRefresh, output_path, timeout_ms)
+}
+
 fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if timeout_ms < 1_000 || timeout_ms > 180_000 {
         return code::ERR_BAD_TIMEOUT;
@@ -149,8 +154,10 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     if !crate::qq_entry::is_ready() {
         return code::ERR_NOT_BOOTSTRAPPED;
     }
-    let current_login = matches!(resolver, Resolver::CurrentLogin);
-    let profile = matches!(resolver, Resolver::Profile(_) | Resolver::CurrentLogin);
+    let refresh_profile = matches!(resolver, Resolver::CurrentProfileRefresh);
+    let current_login = matches!(resolver, Resolver::CurrentLogin | Resolver::CurrentProfileRefresh);
+    let host_nonce = current_login.then(crate::daemon_client::host_instance_nonce);
+    let profile = matches!(resolver, Resolver::Profile(_) | Resolver::CurrentLogin | Resolver::CurrentProfileRefresh);
     let profile_wrapper = if profile {
         let (modules, snapshot_ok) = crate::collect_host_snapshot();
         if !snapshot_ok || !crate::qq_query::matches_voice_profile(&modules) {
@@ -186,7 +193,7 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
     let hook_surface_only = matches!(resolver, Resolver::GroupSurface);
     let uin = match resolver {
         Resolver::Group(uin) | Resolver::Profile(uin) => uin.to_string(),
-        Resolver::GroupSurface | Resolver::CurrentLogin => String::new(),
+        Resolver::GroupSurface | Resolver::CurrentLogin | Resolver::CurrentProfileRefresh => String::new(),
     };
     let hook_output = output_path.clone();
     let hook_tx = tx.clone();
@@ -344,7 +351,11 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                 },
             ),
             POLL => match if current_login {
-                crate::qq_v8::finish_current_login_probe().and_then(|status| {
+                (if refresh_profile {
+                    crate::qq_v8::finish_current_profile_probe()
+                } else {
+                    crate::qq_v8::finish_current_login_probe()
+                }).and_then(|status| {
                     if status == "POLL" {
                         crate::qq_v8::poll_uid_map_probe()
                     } else {
@@ -388,12 +399,16 @@ fn run_inner(resolver: Resolver, output_path: PathBuf, timeout_ms: u32) -> u32 {
                             "schema": 1,
                             "captured_unix_ms": captured_unix_ms,
                             "pid": std::process::id(),
+                            "host_nonce": host_nonce,
                             "route": result.get("route"),
                             "status": status,
                             "api_call_attempted": result.get("apiCallAttempted"),
                             "current_login": result.get("currentLogin"),
+                            "nickname_status": result.get("nicknameStatus"),
                             "self_status_result": result.get("selfStatusResult"),
                             "listener_registration": result.get("listenerRegistration"),
+                            "profile_refresh": result.get("profileRefresh"),
+                            "profile_refresh_call_attempted": result.get("profileRefreshCallAttempted"),
                             "raw_identity_values_written": result.get("currentLogin").is_some(),
                             "raw_chat_text_written": false
                         })

@@ -117,7 +117,7 @@ export function initialProfiles() {
     [src(CLI, 'fn main()'), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action_with_queries(')], actionPermission,
     [{ name: 'Scoped query broker and fixed wrapper query executor', state: 'implemented_pending_validation', evidence: [src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]')] }],
     [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
-    'Host integration is not final. No QQ field acceptance; LoginInfo is unsupported and directory OneBot routes remain pending full end-to-end validation.');
+    'Directory OneBot routes remain pending full end-to-end validation. Scoped login has a separate assessment.');
   const send = scoped('partial_offline', 'Registered text handler and daemon route exist; reference send surface is broader than literal/text segments and native acceptance remains open.',
     [src(ONEBOT, 'fn send_payload('), src(ONEBOT, 'fn dispatch_send('), src(SERVER, 'impl SendSink for DaemonSendSink')], sharedEntry, actionPermission,
     [{ name: 'Daemon/AccountActor/NativeSession plus ready session, strong receipt and persisted OneBot ID', state: 'offline_path_only', evidence: [src(SERVER, 'fn send(&mut self, payload: &SendPayload)')] },
@@ -132,12 +132,12 @@ export function initialProfiles() {
     [{ name: 'Daemon StoreReader and persisted MessageStore/session state', state: 'wired_offline', evidence: [src(DAEMON, 'impl StoreReader for Daemon'), src('crates/caligo-core/src/message_store.rs', 'impl StoreReader for MessageStore')] }],
     [src(LEDGER, '消息修订：default/research Store 各 6/6'), src(ONEBOT, 'fn get_msg_returns_complete_standard_fields_and_int32_id()')],
     'get_msg reads locally persisted known IDs, not arbitrary native QQ history. Host-backed login/list/detail behavior is not credited by this assessment.');
-  const capabilityQuery = scoped('implemented_pending_validation', 'Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.',
+  const capabilityQuery = scoped('implemented_pending_validation', 'The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.',
     [src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]'), src(RESIDENT, 'pub fn drain_queries(&self)')],
     [src(DAEMON, 'pub fn query_host('), src('crates/caligo-bridge/src/daemon_client.rs', 'for (request_id, scope, outcome) in resident.take_query_results()')], actionPermission,
     [{ name: 'Per-account/epoch scoped broker and owner-thread query queue', state: 'implemented_pending_validation', evidence: [src(BROKER, "pub(crate) fn begin<'a>("), src(RESIDENT, 'pub fn drain_queries(&self)')] }],
     [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
-    'Advertised host query set excludes LoginInfo. No QQ field acceptance or completed host end-to-end integration is claimed.');
+    'The exact pilot advertises LoginInfo and a separate self-only SelfProfile for get_login_info no_cache=true. Results require active-scope identity checks; refreshed replies never fall back to LoginInfo. Normal-entry self-refresh field acceptance and other native queries remain open.');
   const accountManager = scoped('partial_offline', 'AccountManager provides ordinary multi-account configuration, isolated daemon lifecycle, and persistence paths with targeted offline evidence.',
     [src(MANAGER, 'pub struct AccountManager'), src(MANAGER, 'pub fn start_all(&mut self)'), src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')],
     [src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')], actionPermission,
@@ -186,9 +186,13 @@ export function initialProfiles() {
   groupMembers.supported_versions = clone(voiceDownload.supported_versions);
   const protocolPermission = { requirement: 'Loopback binding and configured token/secret per transport.', enforcement: [src(SERVER, 'pub fn bind_loopback(')],
     limits: 'Protocol wiring does not grant QQ administrator permissions or add missing actions.' };
-  const login = { ...clone(query), status: 'partial_offline',
-    reason: 'Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.',
-    acceptance: { ...clone(query.acceptance), limits: 'Offline fake-store login response only; actual normal-path nickname/account result is not established.' } };
+  const login = scoped('partial_offline', 'The normal OneBot login route queries the exact-profile owner adapter for current host identity and nickname under the authenticated connection scope.',
+    [src(ONEBOT, 'pub fn handle_action_with_queries('), src('crates/caligo-bridge/src/qq_entry.rs', 'fn query_login(')],
+    sharedEntry, actionPermission,
+    [{ name: 'Scoped owner query using the current ProfileService notification and exact nickname lookup', state: 'partial_offline', evidence: [src('crates/caligo-bridge/src/qq_v8.rs', 'pub(crate) fn build_scoped_login_start('), src(RESIDENT, 'pub fn drain_queries(&self)')] }],
+    [src('crates/caligo-core/tests/daemon_client_lab.rs', 'fn login_query_runs_on_owner_and_revokes_a_stale_epoch()')],
+    'A fresh matching host result is required on each call. Broader dual-account, account switch, and reconnect acceptance remain open.');
+  login.supported_versions = clone(voiceDownload.supported_versions);
   const profiles = { missing, action_missing: actionMissing, directory_missing: directory, directory_pending: directoryPending, send_text: send, private_send_blocked: privateSend, query, capability_query: capabilityQuery, login_partial: login, account_manager: accountManager, management_ui: managementUi, media_tool: mediaTool, voice_download: voiceDownload, image, group_members: groupMembers };
   for (const [id, symbol, file, flag, dep] of [
     ['http', 'pub fn serve_http(', SERVER, '--onebot-http-bind', 'DaemonSendSink and shared registry'],

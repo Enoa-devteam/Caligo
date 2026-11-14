@@ -374,7 +374,14 @@ impl<A: HostAdapter> Resident<A> {
 
     pub fn set_bridge_scope(&self, scope: Option<QueryScope>) {
         let _adapter = self.adapter.lock().unwrap();
+        // Revocation must survive a rebind before the owner gets to drain.
+        // A restarted core can reuse the same numeric connection epoch.
+        self.invalidate_queries_outside(scope.as_ref());
         self.core.lock().unwrap().bridge_scope = scope;
+    }
+
+    pub(crate) fn has_pending_queries(&self) -> bool {
+        !self.queries.lock().unwrap().is_empty()
     }
 
     /// Queue one authenticated fixed query; execution stays on the owner drain.
@@ -394,6 +401,10 @@ impl<A: HostAdapter> Resident<A> {
                 code: 400,
                 reason: "invalid query".into(),
             });
+        }
+        let _adapter = self.adapter.lock().unwrap();
+        if self.core.lock().unwrap().bridge_scope.as_ref() != Some(&scope) {
+            return Err(QueryOutcome::Disconnected);
         }
         let mut queue = self.queries.lock().unwrap();
         if queue.len() >= 32 || queue.iter().any(|pending| pending.request_id == request_id) {
@@ -421,22 +432,26 @@ impl<A: HostAdapter> Resident<A> {
     }
 
     pub fn invalidate_queries_except(&self, scope: &QueryScope) {
+        let _adapter = self.adapter.lock().unwrap();
+        self.invalidate_queries_outside(Some(scope));
+    }
+
+    /// Caller holds adapter: publication and owner polling cannot cross this mark.
+    /// Native cleanup stays on the owner; cancel_only is irreversible and bounded
+    /// by the original queue capacity until a legal context is available.
+    fn invalidate_queries_outside(&self, scope: Option<&QueryScope>) {
         let mut pending = self.queries.lock().unwrap();
-        let mut retained = VecDeque::new();
-        while let Some(mut item) = pending.pop_front() {
-            if &item.scope == scope {
-                retained.push_back(item);
-            } else {
-                self.query_results.lock().unwrap().push_back((
+        let mut results = self.query_results.lock().unwrap();
+        for item in pending.iter_mut() {
+            if !item.cancel_only && Some(&item.scope) != scope {
+                item.cancel_only = true;
+                results.push_back((
                     item.request_id.clone(),
                     item.scope.clone(),
                     QueryOutcome::Disconnected,
                 ));
-                item.cancel_only = true;
-                retained.push_back(item);
             }
         }
-        *pending = retained;
     }
 
     /// 任意线程提交 owned 动作(TSFN 语义:跨线程只入队,不执行)。
@@ -725,19 +740,36 @@ impl<A: HostAdapter> Resident<A> {
     /// Run at most one bounded batch of typed queries on the QQ owner thread.
     pub fn drain_queries(&self) -> usize {
         let mut processed = 0;
-        let batch = self.core.lock().unwrap().limits.drain_batch;
+        let drain_batch = self.core.lock().unwrap().limits.drain_batch;
+        let batch = drain_batch.min(self.queries.lock().unwrap().len());
         for _ in 0..batch {
-            let mut pending = self.queries.lock().unwrap();
-            let Some(mut item) = pending.pop_front() else {
+            // Serialize dispatch, publication and requeue with scope revocation.
+            let mut adapter = self.adapter.lock().unwrap();
+            let Some(mut item) = self.queries.lock().unwrap().pop_front() else {
                 break;
             };
-            drop(pending);
-            if item.cancel_only {
-                let mut adapter = self.adapter.lock().unwrap();
-                let mut core = self.core.lock().unwrap();
-                if precheck(&mut *adapter, &mut core.counters).is_ok() {
-                    drop(core);
+            let mut core = self.core.lock().unwrap();
+            let stale = core.bridge_scope.as_ref() != Some(&item.scope);
+            if item.cancel_only || stale {
+                let can_cancel = item.poll && precheck(&mut *adapter, &mut core.counters).is_ok();
+                drop(core);
+                if can_cancel {
                     adapter.cancel_query(&item.request_id, &item.scope);
+                } else if item.poll {
+                    if !item.cancel_only {
+                        self.query_results.lock().unwrap().push_back((
+                            item.request_id.clone(), item.scope.clone(), QueryOutcome::Disconnected,
+                        ));
+                        item.cancel_only = true;
+                    }
+                    self.queries.lock().unwrap().push_back(item);
+                    processed += 1;
+                    continue;
+                }
+                if stale && !item.cancel_only {
+                    self.query_results.lock().unwrap().push_back((
+                        item.request_id, item.scope, QueryOutcome::Disconnected,
+                    ));
                 }
                 processed += 1;
                 continue;
@@ -754,8 +786,6 @@ impl<A: HostAdapter> Resident<A> {
                 continue;
             }
             let outcome = {
-                let mut adapter = self.adapter.lock().unwrap();
-                let mut core = self.core.lock().unwrap();
                 match precheck(&mut *adapter, &mut core.counters) {
                     Ok(()) => {
                         drop(core);
@@ -772,6 +802,11 @@ impl<A: HostAdapter> Resident<A> {
                             item.poll,
                         )
                     }
+                    Err(
+                        HostError::EnvInvalid
+                        | HostError::NoCurrentContext
+                        | HostError::NotOwnerThread,
+                    ) if item.poll => None,
                     Err(
                         HostError::EnvInvalid
                         | HostError::NoCurrentContext

@@ -15,6 +15,7 @@ pub const MAX_IMAGE_DOWNLOAD_BYTES: u32 = 128 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum QueryCapability {
     LoginInfo,
+    SelfProfile,
     FriendList,
     GroupList,
     GroupInfo,
@@ -33,6 +34,7 @@ impl QueryCapability {
     /// Single authority for the broker's bounded advertisement size.
     pub const ALL: &'static [Self] = &[
         Self::LoginInfo,
+        Self::SelfProfile,
         Self::FriendList,
         Self::GroupList,
         Self::GroupInfo,
@@ -66,6 +68,8 @@ pub struct QueryScope {
 )]
 pub enum HostQuery {
     LoginInfo,
+    /// One server-source refresh of the verified current account only.
+    SelfProfile,
     FriendList,
     GroupList,
     GroupInfo {
@@ -162,6 +166,7 @@ impl HostQuery {
     pub fn capability(&self) -> QueryCapability {
         match self {
             Self::LoginInfo => QueryCapability::LoginInfo,
+            Self::SelfProfile => QueryCapability::SelfProfile,
             Self::FriendList => QueryCapability::FriendList,
             Self::GroupList => QueryCapability::GroupList,
             Self::GroupInfo { .. } => QueryCapability::GroupInfo,
@@ -466,6 +471,7 @@ impl ImageDownload {
 )]
 pub enum QueryData {
     LoginInfo(LoginInfo),
+    SelfProfile(LoginInfo),
     FriendList(Vec<FriendInfo>),
     GroupList(Vec<GroupInfo>),
     GroupInfo(GroupInfo),
@@ -482,13 +488,15 @@ pub enum QueryData {
 impl QueryData {
     pub fn validate_for(&self, query: &HostQuery, scope: &QueryScope) -> Result<(), &'static str> {
         let group_ok = |g: &GroupInfo| {
-            positive_decimal(&g.group_id)
-                && g.group_name.len() <= 4096
-                && g.member_count <= g.max_member_count
+            positive_decimal(&g.group_id) && g.group_name.len() <= 4096
         };
         let valid = match (query, self) {
             (HostQuery::LoginInfo, Self::LoginInfo(info)) => {
                 info.user_id == scope.account && info.nickname.len() <= 4096
+            }
+            (HostQuery::SelfProfile, Self::SelfProfile(info)) => {
+                info.user_id == scope.account && info.online
+                    && !info.nickname.trim().is_empty() && info.nickname.len() <= 4096
             }
             (HostQuery::FriendList, Self::FriendList(list)) => {
                 list.len() <= MAX_QUERY_ITEMS
@@ -506,7 +514,7 @@ impl QueryData {
             }
             (HostQuery::GroupList, Self::GroupList(list)) => {
                 list.len() <= MAX_QUERY_ITEMS
-                    && list.iter().all(group_ok)
+                    && list.iter().all(|g| group_ok(g) && (g.max_member_count != 0 || g.member_count == 0))
                     && list
                         .iter()
                         .map(|g| &g.group_id)
@@ -515,7 +523,7 @@ impl QueryData {
                         == list.len()
             }
             (HostQuery::GroupInfo { group_id }, Self::GroupInfo(info)) => {
-                &info.group_id == group_id && group_ok(info)
+                &info.group_id == group_id && group_ok(info) && info.member_count <= info.max_member_count
             }
             (HostQuery::UinToUid { .. }, Self::Uid(uid)) => native_uid(uid),
             (HostQuery::GroupMembers { group_id, .. }, Self::GroupMembers(list)) => list.matches(group_id),
@@ -639,6 +647,21 @@ pub enum QueryOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn self_profile_has_no_target_and_cannot_be_satisfied_by_login_info() {
+        let scope = QueryScope {account:"10001".into(),host_nonce:1,session_generation:2,connection_epoch:3};
+        assert_eq!(serde_json::to_value(HostQuery::SelfProfile).unwrap(),serde_json::json!({"kind":"self_profile"}));
+        assert!(serde_json::from_value::<HostQuery>(serde_json::json!({"kind":"self_profile","params":{"user_id":"10002"}})).is_err());
+        let info=LoginInfo {user_id:"10001".into(),nickname:"Fresh".into(),online:true};
+        assert!(QueryData::SelfProfile(info.clone()).validate_for(&HostQuery::SelfProfile,&scope).is_ok());
+        assert!(QueryData::LoginInfo(info.clone()).validate_for(&HostQuery::SelfProfile,&scope).is_err());
+        assert!(QueryData::SelfProfile(info.clone()).validate_for(&HostQuery::LoginInfo,&scope).is_err());
+        for invalid in [LoginInfo {user_id:"10002".into(),..info.clone()}, LoginInfo {online:false,..info.clone()}, LoginInfo {nickname:" ".into(),..info}] {
+            assert!(QueryData::SelfProfile(invalid).validate_for(&HostQuery::SelfProfile,&scope).is_err());
+        }
+        assert_eq!(QueryCapability::ALL.iter().filter(|&&c|c==QueryCapability::SelfProfile).count(),1);
+    }
+
     #[test]
     fn fixed_operations_validate_identity_and_response_shape() {
         let scope = QueryScope {

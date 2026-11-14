@@ -11,8 +11,7 @@ use caligo_model::capability::{
 use serde_json::Value;
 
 /// Capabilities with an implemented and bounded wrapper contract.
-/// LoginInfo is intentionally absent until a verified current-account source
-/// is available from the wrapper session.
+/// LoginInfo is served by the exact-profile owner adapter.
 pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::UinToUid,
     QueryCapability::UidToUin,
@@ -26,11 +25,13 @@ pub const SUPPORTED_CAPABILITIES: &[QueryCapability] = &[
     QueryCapability::ImageInfo,
     QueryCapability::ImageDownload,
     QueryCapability::GroupMembers,
+    QueryCapability::LoginInfo,
+    QueryCapability::SelfProfile,
 ];
 
 pub fn supported_capabilities() -> &'static [QueryCapability] {
     // Newly admitted operations form a suffix bound to the exact pilot profile.
-    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 6]
+    &SUPPORTED_CAPABILITIES[..SUPPORTED_CAPABILITIES.len() - 8]
 }
 
 pub fn is_supported(query: &HostQuery) -> bool {
@@ -86,6 +87,7 @@ fn json_string(value: &str) -> String {
 fn kind(query: &HostQuery) -> &'static str {
     match query {
         HostQuery::LoginInfo => "login_info",
+        HostQuery::SelfProfile => "self_profile",
         HostQuery::FriendList => "friend_list",
         HostQuery::GroupList => "group_list",
         HostQuery::GroupInfo { .. } => "group_info",
@@ -146,9 +148,56 @@ fn query_args(query: &HostQuery) -> String {
             json_string(peer_uid), json_string(sender_uin), json_string(message_id), json_string(element_id),
             if matches!(query, HostQuery::ImageDownload { .. }) { MAX_IMAGE_DOWNLOAD_BYTES } else { MAX_IMAGE_BYTES }
         ),
-        HostQuery::LoginInfo | HostQuery::FriendList | HostQuery::GroupList => "{}".into(),
+        HostQuery::LoginInfo | HostQuery::SelfProfile | HostQuery::FriendList | HostQuery::GroupList => "{}".into(),
     }
 }
+
+const QUERY_STATE_JS: &str = r#"
+  function live(p) {
+    var b = R.queryBinding;
+    return !R.stopped && R.queryPending.get(p.requestId) === p && p.status === 'pending' &&
+      Date.now() < p.deadline && String(R.sid) === p.sid && b && b.sid === p.sid &&
+      b.account === p.scope.account && b.hostNonce === p.scope.hostNonce &&
+      b.sessionGeneration === p.scope.sessionGeneration && b.connectionEpoch === p.scope.connectionEpoch;
+  }
+  function validGroupListenerId(id, usesStringId) {
+    if (!usesStringId) return Number.isSafeInteger(id) && id >= 0;
+    // The pinned wrapper exports the unsigned native ID as decimal text. Zero denotes failed registration.
+    return typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id) &&
+      (id.length < 20 || id <= '18446744073709551615');
+  }
+  function closeDetail(p) {
+    if (!p.detailService || p.detailClosed) return;
+    p.detailClosed = true;
+    if (p.status !== 'success' && p.status !== 'rejected') R.queryGroupDetailBlocked = true;
+    if (!p.detailRegistered) {
+      R.queryGroupDetailBlocked = true;
+      if (R.queryGroupDetailActive === p) R.queryGroupDetailActive = null;
+      delete p.detailData;
+      return;
+    }
+    try {
+      p.detailService.removeKernelGroupListener(p.detailListenerId);
+    } catch (e) {
+      R.queryGroupDetailBlocked = true;
+      p.status = 'invalid_response'; p.reason = 'group detail listener cleanup'; delete p.data;
+    }
+    if (R.queryGroupDetailActive === p) R.queryGroupDetailActive = null;
+    delete p.detailData;
+  }
+  function observe(p, stage, value, keys) {
+    try {
+      function type(v) { return v === null ? 'null' : Array.isArray(v) ? 'array' : v instanceof Map ? 'map' : typeof v; }
+      var fields = {value:type(value)};
+      keys.slice(0,14).forEach(function(k) { fields[k] = type(value == null ? undefined : value[k]); });
+      if (Array.isArray(value)) fields.length = Math.min(value.length,2048);
+      if (value instanceof Map) fields.size = Math.min(value.size,2048);
+      if (!p.diagnostics) p.diagnostics = [];
+      if (p.diagnostics.length === 8) p.diagnostics.shift();
+      p.diagnostics.push({stage:stage,fields:fields});
+    } catch (e) {}
+  }
+"#;
 
 const COMMON_JS: &str = r#"
   function reply(status, data, code, reason) {
@@ -168,8 +217,8 @@ const COMMON_JS: &str = r#"
     seen.pop(); return out;
   }
   function terminal(p, status, code, reason) {
-    if (R.queryPending.get(p.requestId) === p) { p.status = status; p.reason = reason; R.queryPending.delete(p.requestId); if (R.queryGroupActive === p) R.queryGroupActive = null; }
-    return reply(status, undefined, code, reason);
+    if (R.queryPending.get(p.requestId) === p) { p.status = status; p.reason = reason; closeDetail(p); R.queryPending.delete(p.requestId); if (R.queryGroupActive === p) R.queryGroupActive = null; }
+    return reply(p.status, undefined, code, p.reason);
   }
   function finish(p, data) {
     try {
@@ -189,7 +238,13 @@ const COMMON_JS: &str = r#"
       binding.sessionGeneration === scope.sessionGeneration && binding.connectionEpoch === scope.connectionEpoch &&
       binding.sid === String(sid);
   }
-  function startMediaDownload(R, p, service, info, chatType) {
+  function noteMedia(R, row) {
+    try {
+      if (!Array.isArray(R.mediaDiagnostics)) R.mediaDiagnostics = [];
+      if (R.mediaDiagnostics.length < 8) R.mediaDiagnostics.push(row);
+    } catch (_) {}
+  }
+  function startMediaDownload(R, p, service, info, chatType, voiceCachePath) {
     var fs = process.getBuiltinModule('node:fs');
     var path = process.getBuiltinModule('node:path');
     var os = process.getBuiltinModule('node:os');
@@ -197,8 +252,85 @@ const COMMON_JS: &str = r#"
     if (!fs || !path || !os || !crypto) throw new Error('voice file helpers unavailable');
     var root = fs.realpathSync(os.tmpdir());
     var image = info.pic_type === 1001 || info.pic_type === 1000;
+    var windows = process.platform === 'win32';
+    var samePath = function (left, right) { return windows ? left.toLowerCase() === right.toLowerCase() : left === right; };
+    var cacheFile = null;
+    // Register the exact host-selected cache target before dispatch, never trust a callback-selected path.
+    if (image && typeof service.getRichMediaFilePathForGuild === 'function') {
+      cacheFile = service.getRichMediaFilePathForGuild({md5HexStr:info.md5,fileName:info.md5+'.png',
+        elementType:2,elementSubType:0,thumbSize:0,needCreate:true,downloadType:1,file_uuid:''});
+      if (typeof cacheFile !== 'string' || !path.isAbsolute(cacheFile) || cacheFile !== path.normalize(cacheFile) ||
+          (windows && !/^[a-zA-Z]:[\\/]/.test(cacheFile)) || !samePath(path.basename(cacheFile),info.md5+'.png') ||
+          !samePath(fs.realpathSync(path.dirname(cacheFile)),path.dirname(cacheFile))) throw new Error('image cache path shape');
+    }
+    // The PTT path comes from the already matched wrapper element. Limit this
+    // exception to the account's original voice cache layout observed on the pilot.
+    if (pilot9936 && !image && chatType === 1 && typeof voiceCachePath === 'string' &&
+        voiceCachePath.length <= 1024 && path.isAbsolute(voiceCachePath) &&
+        voiceCachePath === path.normalize(voiceCachePath) &&
+        (!windows || /^[a-zA-Z]:[\\/]/.test(voiceCachePath))) {
+      var cacheParent = path.dirname(voiceCachePath);
+      var cacheParts = cacheParent.split(path.sep);
+      var month = cacheParts[cacheParts.length - 2];
+      var expectedParent = [p.scope.account, 'nt_qq', 'nt_data', 'Ptt', month, 'Ori'].join(path.sep);
+      if (/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) &&
+          samePath(cacheParts.slice(-6).join(path.sep), expectedParent) &&
+          samePath(path.basename(voiceCachePath), info.md5 + '.amr')) {
+        try {
+          if (samePath(fs.realpathSync(cacheParent), cacheParent)) cacheFile = voiceCachePath;
+        } catch (_) {}
+      }
+    }
     var directory = fs.mkdtempSync(path.join(root, 'caligo-media-'));
     var file = path.join(directory, image ? 'image.png' : 'voice.silk');
+    function callbackFile(result) {
+      if (!result || typeof result.filePath !== 'string') return null;
+      if (!image) {
+        if (result.filePath === file) return file;
+        return cacheFile !== null && samePath(result.filePath, cacheFile) ? cacheFile : null;
+      }
+      if (!path.isAbsolute(result.filePath)) return null;
+      var normalized = path.normalize(result.filePath);
+      return samePath(normalized,file) ? file :
+        (cacheFile && samePath(normalized,cacheFile) ? cacheFile : null);
+    }
+    function cachedSelfChat(result, sourceFile) {
+      // The hash-verified pilot reports null for these self-sent private/group cached PNG shapes.
+      // Identity comes from the preceding scoped message/element readback; paths remain pre-registered.
+      return pilot9936 && image && (chatType === 1 || chatType === 2) && info.pic_type === 1000 &&
+        info.sender_uin === p.scope.account && result && result.chatType === null &&
+        cacheFile !== null && sourceFile === cacheFile;
+    }
+    function cachedIncomingVoice(result, sourceFile) {
+      return !image && result && result.chatType === null && result.fileErrCode === '0' &&
+        cacheFile !== null && sourceFile === cacheFile;
+    }
+    function noteDownload(stage, result) {
+      if (!image && !pilot9936) return;
+      try {
+        var row = {media:image ? 'image' : 'voice',stage:stage};
+        if (stage === 'promise') row.result = result && result.result === 0 ? 'accepted' :
+          (result && typeof result.result === 'number' ? 'rejected' : 'unknown');
+        if (stage === 'callback') {
+          row.message_matches = !!result && result.msgId === info.message_id;
+          row.element_matches = !!result && result.msgElementId === info.element_id;
+          row.chat_matches = !!result && result.chatType === chatType;
+          var callbackChat = result && result.chatType;
+          row.callback_chat = callbackChat === 1 ? 'private' : callbackChat === 2 ? 'group' :
+            callbackChat === 0 ? 'zero' : callbackChat === '1' ? 'string_private' :
+            callbackChat === '2' ? 'string_group' : callbackChat === undefined ? 'missing' :
+            callbackChat === null ? 'null' : 'other';
+          row.path_matches = !!result && result.filePath === file;
+          row.registered_path_matches = callbackFile(result) !== null;
+          row.error_is_string = !!result && typeof result.fileErrCode === 'string';
+          row.error_is_zero = !!result && result.fileErrCode === '0';
+          row.slot_matches = R.voiceDownload === complete;
+          row.pending = !R.stopped && R.queryPending.get(p.requestId) === p &&
+            p.status === 'pending' && Date.now() < p.deadline;
+        }
+        noteMedia(R, row);
+      } catch (_) {}
+    }
     function cleanup() {
       try {
         if (!fs.lstatSync(directory).isSymbolicLink() && fs.realpathSync(directory) === directory) {
@@ -208,9 +340,12 @@ const COMMON_JS: &str = r#"
       } catch (e) {}
     }
     function complete(result) {
+      noteDownload('callback', result);
+      var sourceFile = callbackFile(result);
       if (!result || result.msgId !== info.message_id || result.msgElementId !== info.element_id ||
-          result.chatType !== chatType || typeof result.fileErrCode !== 'string' ||
-          result.filePath !== file || R.voiceDownload !== complete) return;
+          (result.chatType !== chatType && !cachedSelfChat(result, sourceFile) && !cachedIncomingVoice(result, sourceFile)) ||
+          typeof result.fileErrCode !== 'string' ||
+          sourceFile === null || R.voiceDownload !== complete) return;
       var descriptor;
       try {
         if (R.stopped || R.queryPending.get(p.requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
@@ -218,9 +353,11 @@ const COMMON_JS: &str = r#"
           p.status = 'rejected'; p.code = 502; p.reason = 'native voice download rejected';
           return;
         }
-        var stats = fs.lstatSync(file);
-        if (!stats.isFile() || fs.realpathSync(file) !== file || stats.size !== info.size) throw new Error('voice output shape');
-        descriptor = fs.openSync(file, 'r');
+        var stats = fs.lstatSync(sourceFile);
+        var resolvedFile = fs.realpathSync(sourceFile);
+        var resolvedMatches = image || sourceFile === cacheFile ? samePath(resolvedFile, sourceFile) : resolvedFile === sourceFile;
+        if (!stats.isFile() || !resolvedMatches || stats.size !== info.size) throw new Error('voice output shape');
+        descriptor = fs.openSync(sourceFile, 'r');
         var opened = fs.fstatSync(descriptor);
         if (!opened.isFile() || opened.dev !== stats.dev || opened.ino !== stats.ino ||
             opened.size !== info.size) throw new Error('voice output changed');
@@ -242,7 +379,8 @@ const COMMON_JS: &str = r#"
               !(data[0] === 2 && data.subarray(1,10).toString('ascii') === '#!SILK_V3')) throw new Error('voice output format');
           finish(p, {kind:'voice_download',data:{info:info,silk_hex:data.toString('hex')}});
         }
-      } catch (e) { fail(p, 'media output validation failed'); }
+        noteDownload('validated');
+      } catch (e) { noteDownload('validation_failed'); fail(p, 'media output validation failed'); }
       finally {
         if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch (e) {} }
         cleanup();
@@ -253,15 +391,17 @@ const COMMON_JS: &str = r#"
     // caller times out. Reuse could mistake a late native completion for a retry.
     R.voiceDownload = complete;
     try {
+      noteDownload('dispatch');
       var result = service.downloadRichMedia({msgId:info.message_id,elementId:info.element_id,
         peerUid:info.peer_uid,chatType:chatType,fileModelId:'0',downSourceType:0,downloadSourceType:0,
         triggerType:1,thumbSize:0,downloadType:1,filePath:file});
       Promise.resolve(result).then(function(value) {
+        noteDownload('promise', value);
         if (value && typeof value.result === 'number' && value.result !== 0 && R.voiceDownload === complete) {
           fail(p, 'voice download submission rejected');
         }
-      }, function() { fail(p, 'voice download submission outcome unknown'); });
-    } catch (e) { fail(p, 'voice download submission outcome unknown'); }
+      }, function() { noteDownload('promise_rejected'); fail(p, 'voice download submission outcome unknown'); });
+    } catch (e) { noteDownload('dispatch_threw'); fail(p, 'voice download submission outcome unknown'); }
   }
 "#;
 
@@ -272,14 +412,27 @@ pub fn build_query_start_js(
     query: &HostQuery,
     timeout_ms: u64,
 ) -> String {
+    build_profile_query_start_js(request_id, scope, query, timeout_ms, false)
+}
+
+/// `pilot_9_9_36` is true only for the hash-verified 9.9.36-53644 profile.
+pub fn build_profile_query_start_js(
+    request_id: &str,
+    scope: &QueryScope,
+    query: &HostQuery,
+    timeout_ms: u64,
+    pilot_9_9_36: bool,
+) -> String {
     let timeout_ms = timeout_ms.min(MAX_QUERY_TIMEOUT_MS);
     let mut js = String::from(
         r#"(function() {
   var G = globalThis, R = G.__caligo_d8;
   var requestId = __REQUEST__, scope = {account:__ACCOUNT__,hostNonce:__NONCE__,sessionGeneration:__GEN__,connectionEpoch:__EPOCH__};
   var queryKind = __KIND__, args = __ARGS__, timeoutMs = __TIMEOUT__;
+  var pilot9936 = __PILOT_9_9_36__;
 "#,
     );
+    js.push_str(QUERY_STATE_JS);
     js.push_str(COMMON_JS);
     js.push_str(
         r#"  try {
@@ -293,7 +446,7 @@ pub fn build_query_start_js(
     if (R.queryBinding && !sameScope(R.queryBinding, scope, R.sid)) {
       var sameIdentity = R.queryBinding.account === scope.account && R.queryBinding.hostNonce === scope.hostNonce && R.queryBinding.sessionGeneration === scope.sessionGeneration;
       if (!sameIdentity) return reply('rejected', undefined, 409, 'scope binding mismatch');
-      R.queryPending.forEach(function(old, oldId) { if (old.sid !== String(R.sid) || old.scope.connectionEpoch !== scope.connectionEpoch) { old.status = 'disconnected'; R.queryPending.delete(oldId); if (R.queryGroupActive === old) R.queryGroupActive = null; } });
+      R.queryPending.forEach(function(old, oldId) { if (old.sid !== String(R.sid) || old.scope.connectionEpoch !== scope.connectionEpoch) { closeDetail(old); old.status = 'disconnected'; R.queryPending.delete(oldId); if (R.queryGroupActive === old) R.queryGroupActive = null; } });
       R.queryBinding = binding;
     }
     if (!R.queryBinding) R.queryBinding = binding;
@@ -350,6 +503,7 @@ pub fn build_query_start_js(
           !R.listener || typeof R.listener.onRichMediaDownloadComplete !== 'function' ||
           typeof process.getBuiltinModule !== 'function')) return terminal(p, 'unsupported');
       if (download && R.voiceDownload) return terminal(p, 'rejected', 409, 'voice download already in flight');
+      if (download && pilot9936) noteMedia(R, {media:'voice',stage:'readback'});
       settle(voiceService.getMsgsByMsgId({chatType:chatType,peerUid:args.peerUid,guildId:''}, [args.msgId]), p, function(value) {
         if (R.stopped || R.queryPending.get(requestId) !== p || p.status !== 'pending' || Date.now() >= p.deadline) return;
         if (!value || value.result !== 0 || !Array.isArray(value.msgList) || value.msgList.length !== 1) throw new Error('voice message readback shape');
@@ -375,7 +529,8 @@ pub fn build_query_start_js(
           return;
         }
         if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
-        startMediaDownload(R, p, voiceService, info, chatType);
+        if (pilot9936) noteMedia(R, {media:'voice',stage:'readback_matched'});
+        startMediaDownload(R, p, voiceService, info, chatType, pilot9936 && !exact ? voice.filePath : undefined);
       });
       return reply('pending');
     }
@@ -422,15 +577,23 @@ pub fn build_query_start_js(
       var prof2 = R.session.getProfileService && R.session.getProfileService();
       if (!buddy || !prof2 || typeof buddy.getBuddyListV2 !== 'function' || typeof prof2.getCoreAndBaseInfo !== 'function') { return terminal(p, 'unsupported'); }
       settle(buddy.getBuddyListV2.call(buddy, '0', true, 0), p, function(br) {
+        observe(p, 'buddy_result', br, ['result','errCode','data']);
         if (!br || (br.result !== undefined && br.result !== 0) || (br.errCode !== undefined && br.errCode !== 0) || !Array.isArray(br.data)) throw new Error('buddy result shape');
-        var uids = [];
+        var uids = new Set();
         br.data.forEach(function(category) {
+          observe(p, 'buddy_category', category, ['buddyUids']);
           if (!category || !Array.isArray(category.buddyUids)) throw new Error('buddy category shape');
-          category.buddyUids.forEach(function(uid) { if (typeof uid !== 'string' || uids.indexOf(uid) >= 0) throw new Error('buddy uid shape'); uids.push(uid); });
+          category.buddyUids.forEach(function(uid) {
+            if (typeof uid !== 'string') { observe(p, 'buddy_uid', uid, []); throw new Error('buddy uid type'); }
+            uids.add(uid);
+            if (uids.size > 2048) throw new Error('buddy list over budget');
+          });
         });
-        settle(prof2.getCoreAndBaseInfo.call(prof2, 'nodeStore', uids), p, function(info) {
+        var keys = Array.from(uids);
+        settle(prof2.getCoreAndBaseInfo.call(prof2, 'nodeStore', keys), p, function(info) {
+          observe(p, 'profile_result', info, []);
           if (!(info instanceof Map)) throw new Error('profile result is not Map');
-          var out = uids.map(function(uid) { var item = Map.prototype.get.call(info, uid); if (!item || !item.coreInfo || typeof item.coreInfo.uin !== 'string' || typeof item.coreInfo.nick !== 'string' || typeof item.coreInfo.remark !== 'string') throw new Error('profile item missing'); return {user_id:item.coreInfo.uin,nickname:item.coreInfo.nick,remark:item.coreInfo.remark}; });
+          var out = keys.map(function(uid) { var item = Map.prototype.get.call(info, uid); observe(p, 'profile_item', item && item.coreInfo, ['uin','nick','remark']); if (!item || !item.coreInfo || typeof item.coreInfo.uin !== 'string' || typeof item.coreInfo.nick !== 'string' || typeof item.coreInfo.remark !== 'string') throw new Error('profile item missing'); return {user_id:item.coreInfo.uin,nickname:item.coreInfo.nick,remark:item.coreInfo.remark}; });
           finish(p, {kind:'friend_list',data:out});
         });
       });
@@ -447,34 +610,55 @@ pub fn build_query_start_js(
           var active = R.queryGroupActive;
           if (!active || active.status !== 'pending') return;
           try {
-            var out = list.map(function(g) { if (!g || typeof g.groupCode !== 'string' || typeof g.groupName !== 'string' || !Number.isInteger(g.memberCount) || !Number.isInteger(g.maxMember)) throw new Error('group shape'); return {group_id:g.groupCode,group_name:g.groupName,member_count:g.memberCount,max_member_count:g.maxMember}; });
+            if (list.length > 2048) throw new Error('group list over budget');
+            var groupIds = new Set();
+            var out = list.map(function(g) {
+              observe(active, 'group_item', g, ['groupCode','groupName','memberCount','maxMember']);
+              if (!g || typeof g.groupCode !== 'string' || typeof g.groupName !== 'string' || !Number.isInteger(g.memberCount) || !Number.isInteger(g.maxMember)) throw new Error('group shape');
+              if (!/^[0-9]{1,20}$/.test(g.groupCode) || BigInt(g.groupCode) === 0n || BigInt(g.groupCode) > 18446744073709551615n) throw new Error('invalid group id');
+              if (groupIds.has(g.groupCode)) throw new Error('duplicate group id');
+              if (Buffer.byteLength(g.groupName, 'utf8') > 4096) throw new Error('group name over budget');
+              if (g.memberCount < 0 || g.memberCount > 4294967295) throw new Error('group member count out of range');
+              if (g.maxMember < 0 || g.maxMember > 4294967295) throw new Error('group capacity out of range');
+              if (g.memberCount > g.maxMember && (g.maxMember === 0 || !active.allowOverCapacity)) throw new Error(g.maxMember === 0 ? 'group capacity zero with members' : 'group member count exceeds capacity');
+              groupIds.add(g.groupCode);
+              return {group_id:g.groupCode,group_name:g.groupName,member_count:g.memberCount,max_member_count:g.maxMember};
+            });
             finish(active, {kind:'group_list',data:out});
           } catch (e) { fail(active, e); }
         }};
         R.queryGroupListenerId = group.addKernelGroupListener(R.queryGroupListener);
         R.queryGroupListenerRetained = true;
       }
+      p.allowOverCapacity = pilot9936;
       R.queryGroupActive = p;
-      settle(group.getGroupList.call(group, true), p, function(result) { if (result && result.result !== undefined && result.result !== 0) fail(p, 'group list result'); });
+      settle(group.getGroupList.call(group, true), p, function(result) { observe(p, 'group_list_result', result, ['result']); if (result && result.result !== undefined && result.result !== 0) fail(p, 'group list result'); });
       return reply('pending');
     }
     if (queryKind === 'group_members') {
       var memberService = R.session.getGroupService && R.session.getGroupService();
       if (!memberService || typeof memberService.getAllMemberList !== 'function') return terminal(p, 'unsupported');
       settle(memberService.getAllMemberList.call(memberService, args.groupCode, args.forceRefresh), p, function(value) {
+        observe(p, 'member_result', value, ['errCode','result']);
         if (!value || !Number.isInteger(value.errCode)) throw new Error('member response shape');
         if (value.errCode !== 0) { p.status='rejected';p.code=value.errCode;p.reason='native member query rejected';return; }
         var result=value.result;
+        observe(p, 'member_snapshot', result, ['finish','infos','ids']);
         if (!result || result.finish !== true || !(result.infos instanceof Map) || !Array.isArray(result.ids) ||
             result.infos.size > 2048 || result.ids.length !== result.infos.size) throw new Error('incomplete member snapshot');
         var ids=new Set(), uins=new Set(), members=[];
         function count(n) {if (!Number.isSafeInteger(n) || n < 0 || n > 4294967295) throw new Error('invalid member count');return n;}
-        function decimal(v) {if (typeof v !== 'string' || !/^[0-9]{1,20}$/.test(v) || BigInt(v)>18446744073709551615n) throw new Error('invalid member timestamp');return v;}
+        function decimal(v) {
+          if (pilot9936 && Number.isSafeInteger(v) && v >= 0) return String(v);
+          if (typeof v !== 'string' || !/^[0-9]{1,20}$/.test(v) || BigInt(v)>18446744073709551615n) throw new Error('invalid member timestamp');
+          return v;
+        }
         function text(v) {if (typeof v !== 'string' || Buffer.byteLength(v,'utf8')>4096) throw new Error('invalid member text');return v;}
         result.ids.forEach(function(id) {
           if (!id || typeof id.uid !== 'string' || !/^u_[A-Za-z0-9_-]+$/.test(id.uid) || ids.has(id.uid)) throw new Error('invalid member key');
           ids.add(id.uid);
           var m=result.infos.get(id.uid);
+          observe(p, 'member_item', m, ['uid','uin','isDelete','isRobot','role','nick','cardName','joinTime','lastSpeakTime','shutUpTime','qqLevel','memberRealLevel','memberSpecialTitle']);
           if (!m || m.uid !== id.uid || typeof m.uin !== 'string' || !/^[1-9][0-9]{0,19}$/.test(m.uin) ||
               BigInt(m.uin)>18446744073709551615n || uins.has(m.uin) || m.isDelete !== false || typeof m.isRobot !== 'boolean') throw new Error('invalid member identity');
           uins.add(m.uin);
@@ -493,10 +677,48 @@ pub fn build_query_start_js(
     }
     if (queryKind === 'group_info') {
       var gs = R.session.getGroupService && R.session.getGroupService();
-      if (!gs || typeof gs.getGroupDetailInfo !== 'function') { return terminal(p, 'unsupported'); }
-      settle(gs.getGroupDetailInfo.call(gs, args.groupCode, 2), p, function(value) {
-        if (!value || value.result !== 0 || value.groupCode !== args.groupCode || typeof value.groupName !== 'string' || !Number.isInteger(value.memberNum) || !Number.isInteger(value.maxMemberNum)) throw new Error('group detail shape');
-        finish(p, {kind:'group_info',data:{group_id:value.groupCode,group_name:value.groupName,member_count:value.memberNum,max_member_count:value.maxMemberNum}});
+      if (!gs || typeof gs.getGroupDetailInfo !== 'function' || typeof gs.addKernelGroupListener !== 'function' ||
+          typeof gs.removeKernelGroupListener !== 'function') return terminal(p, 'unsupported');
+      if (R.queryGroupDetailBlocked || R.queryGroupDetailActive) return terminal(p, 'rejected', 409, 'group detail unavailable');
+      p.groupCode = args.groupCode;
+      p.detailService = gs;
+      p.detailAccepted = false;
+      p.detailRegistering = true;
+      R.queryGroupDetailActive = p;
+      function completeDetail() {
+        if (live(p) && p.detailAccepted && p.detailData) finish(p, p.detailData);
+      }
+      p.detailListener = {onGroupDetailInfoChange:function(detail) {
+        if (p.detailRegistering || !live(p)) return;
+        observe(p, 'group_detail_event', detail, ['groupCode','groupName','memberNum','maxMemberNum']);
+        try {
+          if (!detail || typeof detail.groupCode !== 'string') throw new Error('group detail shape');
+          if (detail.groupCode !== p.groupCode) return;
+          if (typeof detail.groupName !== 'string' || !Number.isInteger(detail.memberNum) ||
+              !Number.isInteger(detail.maxMemberNum)) throw new Error('group detail shape');
+          p.detailData = {kind:'group_info',data:{group_id:detail.groupCode,group_name:detail.groupName,member_count:detail.memberNum,max_member_count:detail.maxMemberNum}};
+          completeDetail();
+        } catch (e) { fail(p, e); }
+      }};
+      // Fixed 9.9.36 contract: register before submission, join acceptance with the matching notification.
+      p.detailListenerId = gs.addKernelGroupListener(p.detailListener);
+      observe(p, 'group_detail_registration', p.detailListenerId, []);
+      p.detailRegistered = validGroupListenerId(p.detailListenerId, pilot9936);
+      if (!p.detailRegistered) {
+        R.queryGroupDetailBlocked = true;
+        throw new Error('group detail listener registration');
+      }
+      p.detailRegistering = false;
+      settle(gs.getGroupDetailInfo.call(gs, args.groupCode, 2), p, function(result) {
+        if (!live(p)) return;
+        observe(p, 'group_detail_result', result, ['result']);
+        if (!result || !Number.isSafeInteger(result.result)) throw new Error('group detail result shape');
+        if (result.result !== 0) {
+          p.status = 'rejected'; p.code = result.result; p.reason = 'native group detail rejected';
+          return;
+        }
+        p.detailAccepted = true;
+        completeDetail();
       });
       return reply('pending');
     }
@@ -505,14 +727,17 @@ pub fn build_query_start_js(
     var pending = R && R.queryPending instanceof Map && R.queryPending.get(requestId);
     if (pending) {
       var reason = String(e).slice(0,160);
-      pending.status = 'invalid_response'; pending.reason = reason; R.queryPending.delete(requestId); if (R.queryGroupActive === pending) R.queryGroupActive = null;
-      return reply('invalid_response', undefined, undefined, reason);
+      pending.status = 'invalid_response'; pending.reason = reason; closeDetail(pending); R.queryPending.delete(requestId); if (R.queryGroupActive === pending) R.queryGroupActive = null;
+      var invalid = JSON.parse(reply('invalid_response', undefined, undefined, pending.reason));
+      invalid.diagnostics = pending.diagnostics || [];
+      return JSON.stringify(invalid);
     }
     return reply('rejected', undefined, 500, String(e).slice(0,160));
   }
 })()"#,
     );
     for (needle, value) in [
+        ("__PILOT_9_9_36__", pilot_9_9_36.to_string()),
         ("__REQUEST__", json_string(request_id)),
         ("__ACCOUNT__", json_string(&scope.account)),
         ("__NONCE__", json_string(&scope.host_nonce.to_string())),
@@ -544,7 +769,10 @@ pub fn build_query_poll_js(request_id: &str, scope: &QueryScope) -> String {
   if(p.scope.account!==account||p.scope.hostNonce!==nonce||p.scope.sessionGeneration!==gen||p.scope.connectionEpoch!==epoch||p.sid!==String(R.sid))return out('rejected',undefined,409,'request binding mismatch');
   if(p.status==='pending'&&Date.now()>=p.deadline){p.status='timeout';p.reason='query timeout';}
   if(p.status==='pending')return out('pending');
-  var result=out(p.status,p.data,p.code ?? (p.status==='invalid_response'?422:undefined),p.reason);R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return result;
+  closeDetail(p);
+  var result=JSON.parse(out(p.status,p.data,p.code ?? (p.status==='invalid_response'?422:undefined),p.reason));
+  if(p.status==='invalid_response')result.diagnostics=p.diagnostics||[];
+  R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return JSON.stringify(result);
 })()"#,
     );
     for (needle, value) in [
@@ -565,6 +793,11 @@ pub fn build_query_poll_js(request_id: &str, scope: &QueryScope) -> String {
     let mut prefix = String::from(
         "function sameScope(b,s,sid){return b&&b.account===s.account&&b.hostNonce===s.hostNonce&&b.sessionGeneration===s.sessionGeneration&&b.connectionEpoch===s.connectionEpoch&&b.sid===String(sid);}\n",
     );
+    js = js.replacen(
+        "  function out(",
+        &format!("{}\n  function out(", QUERY_STATE_JS),
+        1,
+    );
     prefix.push_str(&js);
     prefix
 }
@@ -572,7 +805,7 @@ pub fn build_query_poll_js(request_id: &str, scope: &QueryScope) -> String {
 /// Build cancellation without unregistering the retained group listener.
 pub fn build_query_cancel_js(request_id: &str, scope: &QueryScope) -> String {
     let mut js = String::from(
-        r#"(function(){var R=globalThis.__caligo_d8,id=__REQUEST__,s={account:__ACCOUNT__,hostNonce:__NONCE__,sessionGeneration:__GEN__,connectionEpoch:__EPOCH__};function same(b){return b&&b.account===s.account&&b.hostNonce===s.hostNonce&&b.sessionGeneration===s.sessionGeneration&&b.connectionEpoch===s.connectionEpoch&&b.sid===String(R.sid);}if(!R||!(R.queryPending instanceof Map)||!same(R.queryBinding))return JSON.stringify({status:'rejected',code:409,reason:'scope binding mismatch'});var p=R.queryPending.get(id);if(!p)return JSON.stringify({status:'rejected',code:404,reason:'request missing'});p.status='cancelled';p.reason='cancelled by caller';R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return JSON.stringify({status:'cancelled'});})()"#,
+        r#"(function(){var R=globalThis.__caligo_d8,id=__REQUEST__,s={account:__ACCOUNT__,hostNonce:__NONCE__,sessionGeneration:__GEN__,connectionEpoch:__EPOCH__};function same(b){return b&&b.account===s.account&&b.hostNonce===s.hostNonce&&b.sessionGeneration===s.sessionGeneration&&b.connectionEpoch===s.connectionEpoch&&b.sid===String(R.sid);}if(!R||!(R.queryPending instanceof Map)||!same(R.queryBinding))return JSON.stringify({status:'rejected',code:409,reason:'scope binding mismatch'});var p=R.queryPending.get(id);if(!p)return JSON.stringify({status:'rejected',code:404,reason:'request missing'});closeDetail(p);if(p.status!=='invalid_response'){p.status='cancelled';p.reason='cancelled by caller';}R.queryPending.delete(id);if(R.queryGroupActive===p)R.queryGroupActive=null;return JSON.stringify({status:p.status,reason:p.reason});})()"#,
     );
     for (needle, value) in [
         ("__REQUEST__", json_string(request_id)),
@@ -589,7 +822,11 @@ pub fn build_query_cancel_js(request_id: &str, scope: &QueryScope) -> String {
     ] {
         js = js.replace(needle, &value);
     }
-    js
+    js.replacen(
+        ";function same(b)",
+        &format!(";{};function same(b)", QUERY_STATE_JS),
+        1,
+    )
 }
 
 /// Decode a terminal result. A pending response is returned as an error so

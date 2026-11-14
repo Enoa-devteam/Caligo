@@ -65,6 +65,7 @@ fn group(group_id: &str) -> GroupInfo {
 fn actions() -> Vec<(&'static str, Value, HostQuery)> {
     vec![
         ("get_login_info", json!({}), HostQuery::LoginInfo),
+        ("get_login_info", json!({"no_cache":true}), HostQuery::SelfProfile),
         ("get_friend_list", json!({}), HostQuery::FriendList),
         ("get_group_list", json!({}), HostQuery::GroupList),
         (
@@ -91,6 +92,11 @@ fn successful_queries_preserve_fields_and_full_width_ids_with_exactly_one_call()
                 online: true,
             }),
             json!({"user_id":u64::MAX,"nickname":"Host name"}),
+        ),
+        (
+            "get_login_info", json!({"no_cache":true}), HostQuery::SelfProfile,
+            QueryData::SelfProfile(LoginInfo {user_id:u64::MAX.to_string(), nickname:"Fresh self".into(), online:true}),
+            json!({"user_id":u64::MAX,"nickname":"Fresh self"}),
         ),
         (
             "get_friend_list",
@@ -194,6 +200,7 @@ fn wrong_success_variants_invalid_ids_and_wrong_group_fail_closed() {
             nickname: "Host".into(),
             online: true,
         }),
+        QueryData::SelfProfile(LoginInfo {user_id:"1".into(), nickname:"Fresh".into(), online:true}),
         QueryData::FriendList(vec![]),
         QueryData::GroupList(vec![]),
         QueryData::GroupInfo(group(&u64::MAX.to_string())),
@@ -206,6 +213,7 @@ fn wrong_success_variants_invalid_ids_and_wrong_group_fail_closed() {
             let expected = matches!(
                 (&query, data),
                 (HostQuery::LoginInfo, QueryData::LoginInfo(_))
+                    | (HostQuery::SelfProfile, QueryData::SelfProfile(_))
                     | (HostQuery::FriendList, QueryData::FriendList(_))
                     | (HostQuery::GroupList, QueryData::GroupList(_))
                     | (HostQuery::GroupInfo { .. }, QueryData::GroupInfo(_))
@@ -614,6 +622,7 @@ mod normal_pipe {
                 scope: scope.clone(),
                 capabilities: vec![
                     QueryCapability::LoginInfo,
+                    QueryCapability::SelfProfile,
                     QueryCapability::FriendList,
                     QueryCapability::GroupList,
                     QueryCapability::GroupInfo,
@@ -644,6 +653,21 @@ mod normal_pipe {
                 0,
             ),
             (
+                "get_login_info", json!({"no_cache":true}), HostQuery::SelfProfile,
+                QueryOutcome::Success(QueryData::SelfProfile(LoginInfo {user_id:"10001".into(), nickname:"Fresh pipe self".into(), online:true})),
+                json!({"user_id":10001,"nickname":"Fresh pipe self"}), 0,
+            ),
+            (
+                "get_login_info", json!({"no_cache":true}), HostQuery::SelfProfile,
+                QueryOutcome::Success(QueryData::LoginInfo(LoginInfo {user_id:"10001".into(), nickname:"Cached".into(), online:true})),
+                Value::Null, RET_BAD_REQUEST,
+            ),
+            (
+                "get_login_info", json!({"no_cache":true}), HostQuery::SelfProfile,
+                QueryOutcome::Success(QueryData::SelfProfile(LoginInfo {user_id:"10002".into(), nickname:"Other account".into(), online:true})),
+                Value::Null, RET_BAD_REQUEST,
+            ),
+            (
                 "get_friend_list",
                 json!({}),
                 HostQuery::FriendList,
@@ -655,8 +679,8 @@ mod normal_pipe {
                 "get_group_list",
                 json!({}),
                 HostQuery::GroupList,
-                QueryOutcome::Success(QueryData::GroupList(vec![group("99")])),
-                json!([{"group_id":99,"group_name":"Synthetic directory","member_count":17,"max_member_count":500}]),
+                QueryOutcome::Success(QueryData::GroupList(vec![GroupInfo { member_count: 501, ..group("99") }])),
+                json!([{"group_id":99,"group_name":"Synthetic directory","member_count":501,"max_member_count":500}]),
                 0,
             ),
             (
@@ -722,6 +746,36 @@ mod normal_pipe {
         drop(bridge);
     }
     #[test]
+    fn self_profile_requires_independent_authority_and_clears_it_on_reconnect() {
+        let lab=Lab::new();let handler=action_handler(lab.daemon.clone());let (mut bridge,scope)=lab.connect();
+        let params=json!({"no_cache":true});
+        bridge.send(&BridgeMsg::QueryCapabilities {revision:CAPABILITY_QUERY_REVISION,scope:scope.clone(),capabilities:vec![QueryCapability::LoginInfo]}).unwrap();
+        bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+        assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));
+        assert_eq!(handler("get_login_info",&params,Value::Null).retcode,RET_UNSUPPORTED);
+        assert_eq!(lab.daemon.pending_query_count(),0);
+        bridge.send(&BridgeMsg::QueryCapabilities {revision:CAPABILITY_QUERY_REVISION,scope:scope.clone(),capabilities:vec![QueryCapability::SelfProfile]}).unwrap();
+        bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+        assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));
+        assert_eq!(handler("get_login_info",&json!({}),Value::Null).retcode,RET_UNSUPPORTED);
+        let h=handler.clone();let task=std::thread::spawn(move ||h("get_login_info",&params,json!("refresh")));
+        let CoreToBridgeMsg::Query {request_id,scope:actual,query,..}=bridge.recv().unwrap() else {panic!("expected self query")};
+        assert_eq!(query,HostQuery::SelfProfile);assert_eq!(actual,scope);
+        let outcome=QueryOutcome::Success(QueryData::SelfProfile(LoginInfo {user_id:"10001".into(),nickname:"Scoped fresh".into(),online:true}));
+        let mut stale=scope.clone();stale.connection_epoch+=1;
+        bridge.send(&BridgeMsg::QueryResult {request_id:request_id.clone(),scope:stale,outcome:outcome.clone()}).unwrap();
+        bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+        assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));assert!(!task.is_finished());
+        bridge.send(&BridgeMsg::QueryResult {request_id,scope:scope.clone(),outcome}).unwrap();
+        assert_eq!(task.join().unwrap().data,json!({"user_id":10001,"nickname":"Scoped fresh"}));
+        drop(bridge);
+        let (mut bridge,new_scope)=lab.connect();assert_ne!(new_scope.connection_epoch,scope.connection_epoch);
+        bridge.send(&BridgeMsg::Health {ingress_pending:0,native_ops_total:0}).unwrap();
+        assert!(matches!(bridge.recv().unwrap(),CoreToBridgeMsg::HealthAck {}));
+        assert_eq!(handler("get_login_info",&json!({"no_cache":true}),Value::Null).retcode,RET_UNSUPPORTED);
+    }
+
+    #[test]
     fn member_actions_traverse_scoped_pipe_and_clear_authority_on_reconnect() {
         let lab=Lab::new();let handler=action_handler(lab.daemon.clone());let (mut bridge,scope)=lab.connect();
         let params=json!({"group_id":30003});
@@ -749,4 +803,18 @@ mod normal_pipe {
         assert_eq!(handler("get_group_member_list",&json!({"group_id":30003}),Value::Null).retcode,RET_UNSUPPORTED);
     }
 
+}
+
+#[test]
+fn login_refresh_requires_a_boolean_and_never_falls_back() {
+    for value in [Value::Null, json!(1), json!("true"), json!([]), json!({})] {
+        let backend=FakeQueries::new(QueryOutcome::Unsupported);
+        assert_eq!(backend.run("get_login_info",json!({"no_cache":value}),Value::Null).retcode,RET_BAD_PARAMS);
+        assert!(backend.calls.borrow().is_empty());
+    }
+    for (params,query) in [(json!({"no_cache":false}),HostQuery::LoginInfo),(json!({"no_cache":true}),HostQuery::SelfProfile)] {
+        let backend=FakeQueries::new(QueryOutcome::Unsupported);
+        assert_eq!(backend.run("get_login_info",params,Value::Null).retcode,RET_UNSUPPORTED);
+        assert_eq!(*backend.calls.borrow(),[(query,QUERY_TIMEOUT)]);
+    }
 }

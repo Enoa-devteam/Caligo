@@ -559,9 +559,6 @@ fn public_id(id: &str) -> Option<u64> {
 }
 
 fn group_data(info: GroupInfo) -> Option<Value> {
-    if info.member_count > info.max_member_count {
-        return None;
-    }
     Some(serde_json::json!({
         "group_id":public_id(&info.group_id)?, "group_name":info.group_name,
         "member_count":info.member_count, "max_member_count":info.max_member_count
@@ -599,6 +596,9 @@ fn query_response_with_voice(
         QueryOutcome::Success(data) => match (query, data) {
             (HostQuery::LoginInfo, QueryData::LoginInfo(info)) => public_id(&info.user_id)
                 .map(|user_id| serde_json::json!({"user_id":user_id, "nickname":info.nickname})),
+            (HostQuery::SelfProfile, QueryData::SelfProfile(info))
+                if info.online && !info.nickname.trim().is_empty() && info.nickname.len() <= 4096 => public_id(&info.user_id)
+                .map(|user_id| serde_json::json!({"user_id":user_id, "nickname":info.nickname})),
             (HostQuery::FriendList, QueryData::FriendList(list)) => list.into_iter()
                 .map(|info| Some(serde_json::json!({
                     "user_id":public_id(&info.user_id)?, "nickname":info.nickname, "remark":info.remark
@@ -607,8 +607,10 @@ fn query_response_with_voice(
             (HostQuery::GroupMembers { group_id, .. }, QueryData::GroupMembers(list)) if list.matches(&group_id) =>
                 list.members.into_iter().map(|m|member_data(&group_id,m)).collect::<Option<Vec<Value>>>().map(Value::Array),
             (HostQuery::GroupList, QueryData::GroupList(list)) => list.into_iter()
-                .map(group_data).collect::<Option<Vec<Value>>>().map(Value::Array),
-            (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info)) if info.group_id == group_id => group_data(info),
+                .map(|info| (info.max_member_count != 0 || info.member_count == 0).then(|| group_data(info)).flatten())
+                .collect::<Option<Vec<Value>>>().map(Value::Array),
+            (HostQuery::GroupInfo { group_id }, QueryData::GroupInfo(info))
+                if info.group_id == group_id && info.member_count <= info.max_member_count => group_data(info),
             (HostQuery::VoiceDownload { .. } | HostQuery::ExactVoiceDownload { .. }, QueryData::VoiceDownload(download)) => {
                 if let Some((expected, format)) = record {
                     if let Some(bytes) = voice_bytes(expected, download) {
@@ -825,7 +827,13 @@ pub fn handle_action_with_queries(
                 None => ActionResponse::failed(RET_BAD_REQUEST, "message 不存在", echo),
             }
         }
-        ActionHandlerKind::GetLoginInfo => query_response(HostQuery::LoginInfo, queries, echo),
+        ActionHandlerKind::GetLoginInfo => {
+            if params.get("no_cache").is_some_and(|value| !value.is_boolean()) {
+                return ActionResponse::failed(RET_BAD_PARAMS, "no_cache 必须是布尔值", echo);
+            }
+            let refresh = params.get("no_cache").and_then(Value::as_bool).unwrap_or(false);
+            query_response(if refresh { HostQuery::SelfProfile } else { HostQuery::LoginInfo }, queries, echo)
+        }
         ActionHandlerKind::GetRecord => get_record(params, store, queries, echo),
         ActionHandlerKind::GetImage => get_image(params, store, queries, echo),
         ActionHandlerKind::GetFriendList => query_response(HostQuery::FriendList, queries, echo),
@@ -1059,6 +1067,9 @@ mod tests {
                     user_id: "1694717255".into(),
                     nickname: "caligo".into(),
                     online: true,
+                }),
+                HostQuery::SelfProfile => QueryData::SelfProfile(caligo_model::capability::LoginInfo {
+                    user_id: "10001".into(), nickname: "refreshed synthetic self".into(), online: true,
                 }),
                 HostQuery::FriendList => QueryData::FriendList(vec![]),
                 HostQuery::GroupList => QueryData::GroupList(vec![]),

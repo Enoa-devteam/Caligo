@@ -502,6 +502,15 @@ unsafe extern "C" fn pump_cb(_handle: *mut core::ffi::c_void) {
         }
         ENTRY.pumps.fetch_add(1, Ordering::Relaxed);
         if ENTRY.close_req.load(Ordering::Acquire) == 1 {
+            // The daemon hook revokes queries and removes its listeners on the
+            // owner before closing the pump. One-shot probes clean up separately.
+            if DAEMON_STOP.get().is_some_and(|stop| stop.load(Ordering::Acquire)) {
+                if let Ok(guard) = DRAIN_HOOK.lock() {
+                    if let Some(f) = guard.as_ref() {
+                        let _ = f();
+                    }
+                }
+            }
             let close: FnUvClose = EntrySymbols::to_fn(ENTRY.sym_uv_close.load(Ordering::Acquire));
             (close)(
                 ENTRY.handle.load(Ordering::Acquire) as *mut core::ffi::c_void,
@@ -789,6 +798,9 @@ pub struct QqOwnerAdapter {
     handle: EntryHandle,
     account: String,
     voice_profile: bool,
+    login_wrapper: Option<String>,
+    login_request: Option<(String, caligo_model::capability::QueryScope, bool)>,
+    login_cleanup_unknown: bool,
 }
 
 impl QqOwnerAdapter {
@@ -796,10 +808,23 @@ impl QqOwnerAdapter {
     pub fn new(handle: EntryHandle, account: String) -> Self {
         let (loaded_modules, snapshot_ok) = crate::collect_host_snapshot();
         let voice_profile = snapshot_ok && crate::qq_query::matches_voice_profile(&loaded_modules);
+        let login_wrapper = if voice_profile {
+            loaded_modules.into_iter().find(|path| {
+                std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case("wrapper.node"))
+            })
+        } else {
+            None
+        };
         Self {
             handle,
             account,
             voice_profile,
+            login_wrapper,
+            login_request: None,
+            login_cleanup_unknown: false,
         }
     }
 
@@ -990,6 +1015,10 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
     }
 
     fn cancel_query(&mut self, request_id: &str, scope: &caligo_model::capability::QueryScope) {
+        if self.owns_login(request_id, scope) {
+            self.cancel_login();
+            return;
+        }
         let script = crate::qq_query::build_query_cancel_js(request_id, scope);
         let _ = crate::qq_v8::run_fixed_query_script(&script);
     }
@@ -1005,22 +1034,201 @@ impl crate::host_adapter::HostAdapter for QqOwnerAdapter {
         if !self.query_capabilities().contains(&query.capability()) {
             return Some(caligo_model::capability::QueryOutcome::Unsupported);
         }
+        if matches!(query, caligo_model::capability::HostQuery::LoginInfo | caligo_model::capability::HostQuery::SelfProfile) {
+            return self.query_login(request_id, scope, poll_only, matches!(query, caligo_model::capability::HostQuery::SelfProfile));
+        }
         let script = if poll_only {
             crate::qq_query::build_query_poll_js(request_id, scope)
         } else {
-            crate::qq_query::build_query_start_js(request_id, scope, query, timeout_ms)
+            crate::qq_query::build_profile_query_start_js(
+                request_id,
+                scope,
+                query,
+                timeout_ms,
+                self.voice_profile,
+            )
         };
         let output = crate::qq_v8::run_fixed_query_script(&script).ok()?;
+        if matches!(query, caligo_model::capability::HostQuery::FriendList | caligo_model::capability::HostQuery::GroupList |
+            caligo_model::capability::HostQuery::GroupInfo { .. } | caligo_model::capability::HostQuery::GroupMembers { .. }) {
+            if let Some(detail) = crate::query_diagnostics::sanitized_query_diagnostic(&output) {
+                append_stage_simple("directory_query_contract", false, &detail);
+            }
+        }
         match crate::qq_query::decode_query_poll(query, scope, &output) {
             Ok(Some(outcome)) => Some(outcome),
             Ok(None) => None,
-            Err(_) => Some(caligo_model::capability::QueryOutcome::InvalidResponse),
+            Err(error) => {
+                let code = match error {
+                    "query response data shape" => "typed_response_shape",
+                    "query response contract mismatch" => "typed_response_contract_mismatch",
+                    "query response over budget" => "typed_response_over_budget",
+                    _ => "typed_contract",
+                };
+                append_stage_simple("directory_query_contract", false, code);
+                Some(caligo_model::capability::QueryOutcome::InvalidResponse)
+            }
         }
     }
 }
 
 impl QqOwnerAdapter {
+    fn owns_login(&self, request_id: &str, scope: &caligo_model::capability::QueryScope) -> bool {
+        self.login_request
+            .as_ref()
+            .is_some_and(|(id, binding, _)| id == request_id && binding == scope)
+    }
+
+    fn cancel_login(&mut self) {
+        self.login_request = None;
+        self.login_cleanup_unknown = !matches!(
+            crate::qq_v8::cancel_uid_map_probe().as_deref(),
+            Ok("CANCELLED")
+        );
+        if self.login_cleanup_unknown {
+            append_stage_simple("login_listener_cleanup", false, "listener removal unverified");
+        }
+    }
+
+    fn query_login(
+        &mut self,
+        request_id: &str,
+        scope: &caligo_model::capability::QueryScope,
+        poll: bool,
+        refresh: bool,
+    ) -> Option<caligo_model::capability::QueryOutcome> {
+        use caligo_model::capability::QueryOutcome;
+
+        if scope.account != self.account || scope.host_nonce != crate::daemon_client::host_instance_nonce() {
+            return Some(QueryOutcome::Disconnected);
+        }
+        if self.login_cleanup_unknown {
+            return Some(QueryOutcome::NotReady);
+        }
+        if !poll {
+            if self.login_request.is_some() {
+                return Some(QueryOutcome::NotReady);
+            }
+            let Some(path) = self.login_wrapper.as_deref() else {
+                return Some(QueryOutcome::Unsupported);
+            };
+            let script = if refresh {
+                crate::qq_v8::build_scoped_self_profile_start(path, &scope.account)
+            } else {
+                crate::qq_v8::build_scoped_login_start(path, &scope.account)
+            };
+            self.login_request = Some((request_id.to_owned(), scope.clone(), refresh));
+            match crate::qq_v8::run_fixed_query_script(&script).as_deref() {
+                Ok("DISPATCHED" | "SURFACE_DONE") => return None,
+                Ok("BUSY") => {
+                    self.login_request = None;
+                    self.login_cleanup_unknown = true;
+                    return Some(QueryOutcome::NotReady);
+                }
+                Err(crate::qq_v8::V8Error::NoCurrentContext) => {
+                    self.login_request = None;
+                    return Some(QueryOutcome::NotReady);
+                }
+                _ => {
+                    self.cancel_login();
+                    return Some(QueryOutcome::NotReady);
+                }
+            }
+        }
+        if !self.owns_login(request_id, scope) || self.login_request.as_ref().map(|r| r.2) != Some(refresh) {
+            return Some(QueryOutcome::Disconnected);
+        }
+        let output = match if refresh { crate::qq_v8::poll_scoped_self_profile() } else { crate::qq_v8::poll_scoped_login() } {
+            Ok(output) if output == "PENDING" => return None,
+            Ok(output) => output,
+            Err(crate::qq_v8::V8Error::NoCurrentContext) => return None,
+            Err(_) => {
+                self.cancel_login();
+                return Some(QueryOutcome::InvalidResponse);
+            }
+        };
+        let Ok(report) = serde_json::from_str::<serde_json::Value>(&output) else {
+            self.cancel_login();
+            return Some(QueryOutcome::InvalidResponse);
+        };
+        self.login_request = None;
+        if report["status"] == "self_status_listener_cleanup_unverified" {
+            self.login_cleanup_unknown = true;
+            append_stage_simple("login_listener_cleanup", false, "listener removal unverified");
+        }
+        if !report["listenerRegistration"].is_null() && report["listenerRegistration"] != "remove_returned" {
+            self.login_cleanup_unknown = true;
+            return Some(QueryOutcome::NotReady);
+        }
+        Some(decode_login_report(&report, scope, refresh))
+    }
+
     fn handle_env(&self) -> usize {
         ENTRY.env.load(Ordering::Acquire)
+    }
+}
+
+fn decode_login_report(
+    report: &serde_json::Value,
+    scope: &caligo_model::capability::QueryScope,
+    refresh: bool,
+) -> caligo_model::capability::QueryOutcome {
+    use caligo_model::capability::{LoginInfo, QueryData, QueryOutcome};
+    let expected = if refresh { "profile_refresh_match" } else { "current_login_match" };
+    if report["status"] != expected || report["nicknameStatus"] != "matched"
+        || report["listenerRegistration"] != "remove_returned" {
+        return QueryOutcome::NotReady;
+    }
+    let login = &report["currentLogin"];
+    let profile = &report["profileRefresh"];
+    if refresh && (profile["requested_source"] != 1 || profile["returned_source"] != 1
+        || profile["matching_notification_observed"] != true
+        || !profile["profile"]["uid"].as_str().is_some_and(|uid| uid.starts_with("u_") && uid.len() > 2)
+        || profile["profile"]["uid"] != login["uid"] || profile["profile"]["uin"] != login["uin"]) {
+        return QueryOutcome::InvalidResponse;
+    }
+    let identity = if refresh { &profile["profile"] } else { login };
+    let (Some(user_id), Some(nickname)) = (identity["uin"].as_str(), identity["nickname"].as_str()) else {
+        return QueryOutcome::InvalidResponse;
+    };
+    if user_id != scope.account || nickname.trim().is_empty() || nickname.len() > 4096 {
+        return QueryOutcome::InvalidResponse;
+    }
+    let info = LoginInfo { user_id: user_id.into(), nickname: nickname.into(), online: true };
+    QueryOutcome::Success(if refresh { QueryData::SelfProfile(info) } else { QueryData::LoginInfo(info) })
+}
+
+#[cfg(test)]
+mod profile_report_tests {
+    use super::decode_login_report;
+    use caligo_model::capability::{QueryData, QueryOutcome, QueryScope};
+    use serde_json::json;
+
+    #[test]
+    fn scoped_refresh_uses_the_fresh_row_and_refuses_cached_or_wrong_account_results() {
+        let scope = QueryScope { account: "10001".into(), host_nonce: 1, session_generation: 2, connection_epoch: 3 };
+        let report = json!({
+            "status":"profile_refresh_match", "nicknameStatus":"matched", "listenerRegistration":"remove_returned",
+            "currentLogin":{"uin":"10001","uid":"u_self","nickname":"Cached"},
+            "profileRefresh":{"requested_source":1,"returned_source":1,"matching_notification_observed":true,
+                "profile":{"uin":"10001","uid":"u_self","nickname":"Fresh"}}
+        });
+        let QueryOutcome::Success(QueryData::SelfProfile(info)) = decode_login_report(&report, &scope, true) else {panic!("expected refresh")};
+        assert_eq!(info.nickname, "Fresh");
+        assert_eq!(decode_login_report(&report, &scope, false), QueryOutcome::NotReady);
+        for (pointer, value) in [
+            ("/status", json!("current_login_match")),
+            ("/listenerRegistration", json!("remove_unknown")),
+            ("/profileRefresh/returned_source", json!(0)),
+            ("/profileRefresh/matching_notification_observed", json!(false)),
+            ("/profileRefresh/profile/uid", json!("u_other")),
+            ("/profileRefresh/profile/uin", json!("10002")),
+            ("/profileRefresh/profile/nickname", json!(" ")),
+        ] {
+            let mut bad=report.clone(); *bad.pointer_mut(pointer).unwrap()=value;
+            assert!(!matches!(decode_login_report(&bad,&scope,true), QueryOutcome::Success(_)), "{pointer}");
+        }
+        let mut other=scope;other.account="10002".into();
+        assert_eq!(decode_login_report(&report,&other,true), QueryOutcome::InvalidResponse);
     }
 }

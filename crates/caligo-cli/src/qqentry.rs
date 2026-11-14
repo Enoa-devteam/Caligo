@@ -1,7 +1,7 @@
 //! K4-D7 候选 B 首入的 CLI 入口(research 运行时门控;普通构建拒绝)。
 //!
 //! 新路线专用命令:加载 bridge(仅 LoadLibrary+probe)→ 远程调用
-//! `caligo_qq_entry_bootstrap` / `caligo_qq_entry_shutdown`。
+//! `caligo_qq_entry_bootstrap`。状态/关闭只访问已映射且匹配的 bridge。
 //! 不使用旧 async/exec 载荷;门 1(manifest)+ 门 2(实例确认)与 inject 同源。
 
 use std::io::Write as _;
@@ -33,6 +33,8 @@ struct QqEntryArgs {
     uid_map_profile_service: bool,
     /// Obtain current identity from the exact-build ProfileService.
     current_login: bool,
+    /// Research-only, one server-source refresh after verified current identity.
+    refresh_current_profile: bool,
     uid_map_result: Option<PathBuf>,
     uid_map_timeout_ms: u32,
 }
@@ -83,6 +85,7 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
             "--uid-map-surface-only" => a.uid_map_surface_only = true,
             "--uid-map-profile-service" => a.uid_map_profile_service = true,
             "--current-login" => a.current_login = true,
+            "--refresh-current-profile" => a.refresh_current_profile = true,
             "--uid-map-timeout-ms" => {
                 a.uid_map_timeout_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(60_000)
             }
@@ -134,7 +137,7 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] --current-login --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] (--current-login | --refresh-current-profile) --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
 }
 
@@ -143,7 +146,7 @@ fn usage() {
 enum UidMapRequest {
     RoundTrip { uin: u64, output: PathBuf },
     SurfaceOnly { output: PathBuf },
-    CurrentLogin { output: PathBuf },
+    CurrentLogin { output: PathBuf, refresh: bool },
 }
 
 /// 公共前置:研究门控 + 必填参数 + 门 1(manifest)+ 门 2(实例确认)。
@@ -163,8 +166,8 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
-    if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service || a.current_login) {
-        eprintln!("[uid-map] surface-only, current-login and ProfileService modes require qq-entry");
+    if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service || a.current_login || a.refresh_current_profile) {
+        eprintln!("[uid-map] surface-only, current-login, profile-refresh and ProfileService modes require qq-entry");
         return Err(ExitCode::FAILURE);
     }
     let uid_map_mode_valid = if need_env {
@@ -172,7 +175,7 @@ fn gates(
             (
                 a.uid_map_uin.is_some(),
                 a.uid_map_surface_only,
-                a.current_login,
+                a.current_login || a.refresh_current_profile,
                 a.uid_map_result.is_some(),
             ),
             (true, false, false, true)
@@ -183,15 +186,16 @@ fn gates(
     } else {
         a.uid_map_uin.is_some() == a.uid_map_result.is_some()
     };
-    if !uid_map_mode_valid || (a.uid_map_profile_service && a.uid_map_uin.is_none()) {
-        eprintln!("[uid-map] 请选择 --uid-map-uin、--uid-map-surface-only 或 --current-login，并提供 --uid-map-result");
+    if !uid_map_mode_valid || (a.uid_map_profile_service && a.uid_map_uin.is_none())
+        || (a.current_login && a.refresh_current_profile) {
+        eprintln!("[uid-map] 请选择单个 --uid-map-uin、--uid-map-surface-only、--current-login 或 --refresh-current-profile，并提供 --uid-map-result");
         return Err(ExitCode::FAILURE);
     }
     if need_env && a.uid_map_uin == Some(0) {
         eprintln!("[uid-map] round-trip UIN 必须大于零");
         return Err(ExitCode::FAILURE);
     }
-    if (a.uid_map_uin.is_some() || a.uid_map_surface_only || a.current_login)
+    if (a.uid_map_uin.is_some() || a.uid_map_surface_only || a.current_login || a.refresh_current_profile)
         && (a.daemon_pipe.is_some() || a.daemon_auth.is_some()
             || a.daemon_generation.is_some() || a.daemon_account.is_some())
     {
@@ -442,7 +446,7 @@ fn print_uid_map_surface_summary(path: &Path, expected_pid: u32) -> bool {
 }
 
 #[cfg(feature = "research")]
-fn print_current_login_summary(path: &Path, expected_pid: u32) -> bool {
+fn print_current_login_summary(path: &Path, expected_pid: u32, refresh: bool) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
@@ -451,9 +455,11 @@ fn print_current_login_summary(path: &Path, expected_pid: u32) -> bool {
     };
     let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
     println!("[current-login] status={status}; identity evidence is local");
-    status == "current_login_match"
+    status == if refresh { "profile_refresh_match" } else { "current_login_match" }
         && result.get("pid").and_then(|v| v.as_u64()) == Some(u64::from(expected_pid))
         && result.get("current_login").is_some_and(|v| v.is_object())
+        && (!refresh || (result.get("profile_refresh").is_some_and(|v| v.is_object())
+            && result.get("listener_registration").and_then(|v| v.as_str()) == Some("remove_returned")))
 }
 
 pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
@@ -462,7 +468,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         Err(c) => return c,
     };
     #[cfg(feature = "research")]
-    if extra.uid_map_profile_service || extra.current_login {
+    if extra.uid_map_profile_service || extra.current_login || extra.refresh_current_profile {
         let manifest = extra
             .manifest
             .as_deref()
@@ -487,7 +493,8 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             }
         },
         (None, _, Some(path)) => match prepare_uid_map_result(path) {
-            Ok(output) if extra.current_login => Some(UidMapRequest::CurrentLogin { output }),
+            Ok(output) if extra.current_login || extra.refresh_current_profile =>
+                Some(UidMapRequest::CurrentLogin { output, refresh: extra.refresh_current_profile }),
             Ok(output) => Some(UidMapRequest::SurfaceOnly { output }),
             Err(e) => {
                 eprintln!("[uid-map-surface] {e}");
@@ -580,7 +587,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
                 (uin, mode, output)
             }
             UidMapRequest::SurfaceOnly { output } => (0, 1, output),
-            UidMapRequest::CurrentLogin { output } => (0, 3, output),
+            UidMapRequest::CurrentLogin { output, refresh } => (0, if refresh { 4 } else { 3 }, output),
         };
         let query = unsafe {
             remote_uid_map_probe(
@@ -606,7 +613,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         let operation_ok = if query_code == Some(caligo_bridge::uid_map_probe::code::OK) {
             match mode {
                 1 => print_uid_map_surface_summary(&output, pid),
-                3 => print_current_login_summary(&output, pid),
+                3 | 4 => print_current_login_summary(&output, pid, mode == 4),
                 _ => print_uid_map_summary(&output),
             }
         } else {
@@ -787,40 +794,38 @@ unsafe fn remote_daemon_start(pid: u32, remote_base: usize, cfg_json: &str) -> R
     }
 }
 
+/// Resolve only an existing image. Never load/probe as a status/stop fallback.
+fn existing_bridge_base(pid: u32, bridge: &Path) -> Result<usize, String> {
+    select_mapped_bridge(bridge, &winutil::modules_in(pid)?)
+}
+
+fn select_mapped_bridge(bridge: &Path, modules: &[winutil::ModuleInfo]) -> Result<usize, String> {
+    let expected = bridge.canonicalize().map_err(|e| format!("bridge path: {e}"))?;
+    let expected_hash = super::sha256_file(&expected)?;
+    let name = expected.file_name().and_then(|v| v.to_str()).ok_or("invalid bridge filename")?;
+    let mut matching = modules.iter().filter(|m| m.name.eq_ignore_ascii_case(name));
+    let mapped = matching.next().ok_or("bridge is not mapped; loading is forbidden for status/stop")?;
+    if matching.next().is_some() || mapped.base == 0 {
+        return Err("ambiguous or invalid mapped bridge".into());
+    }
+    let actual = mapped.path.canonicalize().map_err(|e| format!("mapped bridge path: {e}"))?;
+    if !actual.to_string_lossy().eq_ignore_ascii_case(&expected.to_string_lossy())
+        || super::sha256_file(&actual)? != expected_hash {
+        return Err("mapped bridge path/hash differs from requested image".into());
+    }
+    Ok(mapped.base)
+}
+
 /// QQ 内 worker 计数取证:远程调用 caligo_qq_daemon_status → 打印报告尾部。
 pub fn cmd_qq_status(args: &[String]) -> ExitCode {
     let (pid, bridge, report, _env, _ws, _wm, _extra) = match gates(args, false) {
         Ok(v) => v,
         Err(c) => return c,
     };
-    let probe_report = report.with_file_name("qq-status-probe.json");
-    let remote_base = match unsafe {
-        winutil::inject_and_probe(
-            pid,
-            &bridge,
-            &probe_report,
-            None,
-            None,
-            false,
-            20_000,
-            None,
-            None,
-            None,
-            None,
-            None,
-            10_000,
-            None,
-            10_000,
-            None,
-            0,
-            None,
-            None,
-            None,
-        )
-    } {
-        Ok(o) => o.remote_base,
-        Err(e) => {
-            eprintln!("[qq-status] bridge 加载失败:{e}");
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[qq-status] 已映射 bridge 校验失败: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -1236,34 +1241,10 @@ pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
         Ok(v) => v,
         Err(c) => return c,
     };
-    let probe_report = report.with_file_name("qq-entry-stop-probe.json");
-    let remote_base = match unsafe {
-        winutil::inject_and_probe(
-            pid,
-            &bridge,
-            &probe_report,
-            None,
-            None,
-            false,
-            20_000,
-            None,
-            None,
-            None,
-            None,
-            None,
-            10_000,
-            None,
-            10_000,
-            None,
-            0,
-            None,
-            None,
-            None,
-        )
-    } {
-        Ok(o) => o.remote_base,
-        Err(e) => {
-            eprintln!("[qq-entry-stop] bridge 加载失败:{e}");
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[qq-entry-stop] 已映射 bridge 校验失败: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -1351,5 +1332,34 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32) -> Result<
             return Err(format!("shutdown wait failed: code {wr:#x}"));
         }
         Ok(code)
+    }
+}
+
+#[cfg(test)]
+mod mapped_bridge_tests {
+    use super::{existing_bridge_base, select_mapped_bridge};
+    use crate::winutil::ModuleInfo;
+
+    #[test]
+    fn existing_image_resolution_reads_own_toolhelp_entry_without_loading() {
+        let exe=std::env::current_exe().unwrap();
+        let first=existing_bridge_base(std::process::id(),&exe).unwrap();
+        assert_ne!(first,0);
+        assert_eq!(existing_bridge_base(std::process::id(),&exe).unwrap(),first);
+    }
+
+    #[test]
+    fn missing_wrong_path_duplicate_and_zero_base_images_are_rejected() {
+        let dir=std::env::temp_dir().join(format!("caligo-mapped-{}-{:?}",std::process::id(),std::thread::current().id()));
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        let expected=dir.join("caligo_bridge.dll");let other=dir.join("other/caligo_bridge.dll");
+        std::fs::write(&expected,b"synthetic image").unwrap();std::fs::write(&other,b"synthetic image").unwrap();
+        let image=|path,base|ModuleInfo {name:"caligo_bridge.dll".into(),path,base,size:4096};
+        assert!(select_mapped_bridge(&expected,&[]).is_err());
+        assert!(select_mapped_bridge(&expected,&[image(other,1)]).is_err());
+        assert!(select_mapped_bridge(&expected,&[image(expected.clone(),1),image(expected.clone(),2)]).is_err());
+        assert!(select_mapped_bridge(&expected,&[image(expected.clone(),0)]).is_err());
+        assert_eq!(select_mapped_bridge(&expected,&[image(expected.clone(),1)]).unwrap(),1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -1014,19 +1014,15 @@
     },
     "login_partial": {
       "status": "partial_offline",
-      "reason": "Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.",
+      "reason": "The normal OneBot login route queries the exact-profile owner adapter for current host identity and nickname under the authenticated connection scope.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/onebot.rs",
           "symbol": "pub fn handle_action_with_queries("
         },
         {
-          "path": "crates/caligo-core/src/daemon.rs",
-          "symbol": "impl StoreReader for Daemon"
-        },
-        {
-          "path": "crates/caligo-core/src/message_store.rs",
-          "symbol": "impl StoreReader for MessageStore"
+          "path": "crates/caligo-bridge/src/qq_entry.rs",
+          "symbol": "fn query_login("
         }
       ],
       "normal_entry": [
@@ -1059,21 +1055,27 @@
       },
       "backend_dependencies": [
         {
-          "name": "Daemon StoreReader and persisted MessageStore/session state",
-          "state": "wired_offline",
+          "name": "Scoped owner query using the current ProfileService notification and exact nickname lookup",
+          "state": "partial_offline",
           "evidence": [
             {
-              "path": "crates/caligo-core/src/daemon.rs",
-              "symbol": "impl StoreReader for Daemon"
+              "path": "crates/caligo-bridge/src/qq_v8.rs",
+              "symbol": "pub(crate) fn build_scoped_login_start("
             },
             {
-              "path": "crates/caligo-core/src/message_store.rs",
-              "symbol": "impl StoreReader for MessageStore"
+              "path": "crates/caligo-bridge/src/resident.rs",
+              "symbol": "pub fn drain_queries(&self)"
             }
           ]
         }
       ],
-      "supported_versions": null,
+      "supported_versions": {
+        "declared": [
+          "9.9.36-53644 pilot"
+        ],
+        "accepted": [],
+        "reason": "Exact loaded-module files are hash checked. Caligo has only offline evidence."
+      },
       "acceptance": {
         "declared": true,
         "implemented": true,
@@ -1084,15 +1086,11 @@
         "production": "not_accepted",
         "evidence": [
           {
-            "path": "docs/execution/2026-11-13-snowcat-capability-integration-continued.md",
-            "symbol": "消息修订：default/research Store 各 6/6"
-          },
-          {
-            "path": "crates/caligo-core/src/onebot.rs",
-            "symbol": "fn get_msg_returns_complete_standard_fields_and_int32_id()"
+            "path": "crates/caligo-core/tests/daemon_client_lab.rs",
+            "symbol": "fn login_query_runs_on_owner_and_revokes_a_stale_epoch()"
           }
         ],
-        "limits": "Offline fake-store login response only; actual normal-path nickname/account result is not established."
+        "limits": "A fresh matching host result is required on each call. Broader dual-account, account switch, and reconnect acceptance remain open."
       }
     },
     "directory_pending": {
@@ -1179,12 +1177,12 @@
             "symbol": "#[test]"
           }
         ],
-        "limits": "Host integration is not final. No QQ field acceptance; LoginInfo is unsupported and directory OneBot routes remain pending full end-to-end validation."
+        "limits": "Directory OneBot routes remain pending full end-to-end validation. Scoped login has a separate assessment."
       }
     },
     "capability_query": {
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "implementation": [
         {
           "path": "crates/caligo-core/src/capability_broker.rs",
@@ -1262,7 +1260,7 @@
             "symbol": "#[test]"
           }
         ],
-        "limits": "Advertised host query set excludes LoginInfo. No QQ field acceptance or completed host end-to-end integration is claimed."
+        "limits": "The exact pilot advertises LoginInfo and a separate self-only SelfProfile for get_login_info no_cache=true. Results require active-scope identity checks; refreshed replies never fall back to LoginInfo. Normal-entry self-refresh field acceptance and other native queries remain open."
       }
     },
     "account_manager": {
@@ -2615,7 +2613,7 @@
       "reference_id": "onebot.action.get_login_info",
       "category": "actions",
       "status": "partial_offline",
-      "reason": "Registry and StoreReader route exist, but normal-session login identity/nickname binding is incomplete; get_login_info can return not-ready.",
+      "reason": "The normal OneBot login route queries the exact-profile owner adapter for current host identity and nickname under the authenticated connection scope.",
       "assessment": "login_partial"
     },
     {
@@ -31581,14 +31579,14 @@
       "reference_id": "wrapper_interface.NodeIKernelBuddyService.getBuddyListV2.6",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelBuddyService.getBuddyListV2.16",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
@@ -33240,14 +33238,14 @@
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getUinByUids.66",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getUidByUins.72",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
@@ -33408,7 +33406,7 @@
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getGroupList.159",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
@@ -33422,7 +33420,7 @@
       "reference_id": "wrapper_interface.NodeIKernelGroupService.getGroupDetailInfo.163",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
@@ -35466,7 +35464,7 @@
       "reference_id": "wrapper_interface.NodeIKernelMsgService.getMsgsByMsgId.195",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {
@@ -37832,7 +37830,7 @@
       "reference_id": "wrapper_interface.NodeIKernelProfileService.getCoreAndBaseInfo.16",
       "category": "wrapper_interfaces",
       "status": "implemented_pending_validation",
-      "reason": "Bounded scoped broker and fixed wrapper query implementations exist for six advertised query kinds; host integration and end-to-end validation remain pending.",
+      "reason": "The scoped broker dispatches bounded fixed queries through the daemon owner pump. Additional query kinds require the exact pilot profile.",
       "assessment": "capability_query"
     },
     {

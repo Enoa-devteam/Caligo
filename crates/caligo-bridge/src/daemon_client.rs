@@ -938,13 +938,14 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
     };
     resident.invalidate_queries_except(&query_scope);
     resident.set_bridge_scope(Some(query_scope.clone()));
-    struct ClearScope<'a, A: crate::host_adapter::HostAdapter>(&'a Resident<A>);
+    struct ClearScope<'a, A: crate::host_adapter::HostAdapter>(&'a Resident<A>, &'a dyn Fn() -> bool);
     impl<A: crate::host_adapter::HostAdapter> Drop for ClearScope<'_, A> {
         fn drop(&mut self) {
             self.0.set_bridge_scope(None);
+            (self.1)();
         }
     }
-    let _clear_scope = ClearScope(resident);
+    let _clear_scope = ClearScope(resident, wake);
     for msg in capability_messages(resident, &query_scope) {
         if send_json(conn, &msg).is_err() {
             return SessionEnd::Broken;
@@ -1264,6 +1265,9 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             }
             Err(PipeError::TimedOut) => {
                 tick.store(false, Ordering::Relaxed);
+                if resident.has_pending_queries() {
+                    wake();
+                }
             }
             Err(_) => return SessionEnd::Broken,
         }
