@@ -2,6 +2,18 @@
 
 ## Current State
 
+2026-11-14 按用户要求收口第一阶段现场验收，提交至 PR #6。范围包括固定 QQ build 的登录/当前资料刷新、只读目录与群成员、私聊/登记群文本、单 PNG 与原始 SILK 两方向及下载、双账号 HTTP 鉴权和单端停止隔离。各项为指定样本、跨代次证据，转码、其它媒体/协议、真实重连/换号和长期资源仍待验；不提升整体 feature 或生产状态，本次不启动新现场。[第一阶段清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)
+
+2026-11-14 已发群语音原始 SILK 下载现场通过。新 A 38256 使用修复版对原消息 get_msg/get_record 均 HTTP 200 / 0，预登记缓存回调 validated，2,575 字节与发送样本逐字节、MD5 和 SHA-256 一致。daemon/owner 正常停止，HTTP/SSE 关闭，QQ 响应并保留 bridge，本轮零发送。结合前轮 B 确认，登记群主动语音及下载闭环已有跨代次证据。下一块语音转码仍待独立准备与验收，feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已发群语音-silk-现场通过)
+
+2026-11-14 已发群语音只读 get_msg 通过、get_record 1501，零错误空会话回调未命中登记缓存，现场已正常停止。离线复现后将固定 pilot 成功自发 .silk 缓存登记扩展到 group，查询合同 7/7、default/research 全仓及隔离 release 通过；新构建未加载，原消息不重发，待新 A 只读复验。feat-008 保持 in-progress。[现场与修复](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已发群语音只读下载与缓存适配)
+
+2026-11-14 主动群语音发送及 B 播放现场通过。A 38620 单次 send_group_msg/get_msg 均 HTTP 200 / 0，持久 ID、唯一账本记录、登记群和 2,575 字节 SILK 元数据一致；用户确认 B 收到一条，播放为三个依次降低的提示音。原现场服务正常关闭，本次未重复发送。已发群语音下载仍待独立只读验收，feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-主动群语音播放现场通过)
+
+2026-11-14 登记群语音入站与原始 SILK 下载现场通过。更正方向后，B 单次发语音，A 的 SSE、账本、`get_msg` 和用户播放核对通过。首轮下载 1501，由固定版本的入站群缓存修复解决。新 A 54700 对同一消息只读取得 7,294 字节，长度、MD5、SILK 头和此前缓存 SHA-256 一致。现场服务已正常停止，群主动发送与转码待验。feat-008 保持 in-progress。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-登记群入站语音-silk-现场通过)
+
+2026-11-14 已发私聊语音的原始 SILK 下载现场通过。新 A 33668 使用修复版对原消息各执行一次 `get_msg` 和 `get_record`，均返回 HTTP 200 / OneBot 0。回调命中预登记的缓存路径，返回的 2,584 字节与发送样本逐字节一致。daemon、owner 和 HTTP/SSE 已关闭，QQ 响应并保留 bridge。群语音和转码待验，feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已发私聊语音-silk-现场通过)
+
 2026-11-14 主动私聊语音现场通过。新 A 53416 经正常 OneBot HTTP 向登记 B 单次发送 0.9 秒合成 SILK，`send_private_msg` 和 `get_msg` 成功，持久消息 ID、账本目标、语音长度与 MD5 核对通过。用户确认 B 收到一条，播放出三个依次升高的提示音。daemon/owner/HTTP/SSE 已关闭，QQ 响应并保留 bridge。feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-主动私聊语音发送现场通过)
 
 2026-11-14 普通私聊入站语音的原始 SILK 下载现场通过。新 A 11908 使用修复版只读原录音，`get_msg` 和 `get_record` 均返回 HTTP 200 / OneBot 0。回调命中预登记的缓存路径，7,344 字节通过长度、MD5 和 SILK 头校验。已关闭 daemon/owner/HTTP/SSE，QQ 响应并保留 bridge。主动语音发送待验，feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已收私聊语音-silk-现场通过)

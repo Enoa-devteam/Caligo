@@ -112,14 +112,14 @@ fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
         element_id: "9007199254740994".into(),
     };
     let quote = |s: &str| serde_json::to_string(s).unwrap();
-    let exact = |chat_type, peer_uid: &str, sender_uin: &str| {
-        qq_query::build_query_start_js("voice", &scope, &HostQuery::ExactVoiceDownload {
+    let exact = |chat_type, peer_uid: &str, sender_uin: &str, pilot| {
+        qq_query::build_profile_query_start_js("voice", &scope, &HostQuery::ExactVoiceDownload {
             chat_type, peer_uid: peer_uid.into(), sender_uin: sender_uin.into(),
             message_id: "90071992547409939999".into(), element_id: "9007199254740994".into(),
-        }, 1000)
+        }, 1000, pilot)
     };
     let script = format!(
-        "const arm={}, drain={}, stop={}, start={}, poll={}, cancel={}, group={}, sent={};\n",
+        "const arm={}, drain={}, stop={}, start={}, poll={}, cancel={}, group={}, sent={}, pilotSent={}, pilotGroup={}, pilotIncomingGroup={}, legacyGroup={};\n",
         quote(D8_START_JS),
         quote(D8_POLL_JS),
         quote(D8_STOP_JS),
@@ -128,8 +128,12 @@ fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
         )),
         quote(&qq_query::build_query_poll_js("voice", &scope)),
         quote(&qq_query::build_query_cancel_js("voice", &scope)),
-        quote(&exact(2, "30003", "20002")),
-        quote(&exact(1, "u_voice_peer", "10001")),
+        quote(&exact(2, "30003", "20002", false)),
+        quote(&exact(1, "u_voice_peer", "10001", false)),
+        quote(&exact(1, "u_voice_peer", "10001", true)),
+        quote(&exact(2, "30003", "10001", true)),
+        quote(&exact(2, "30003", "20002", true)),
+        quote(&exact(2, "30003", "10001", false)),
     ) + r#"
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -142,6 +146,7 @@ const msgId='90071992547409939999', elementId='9007199254740994';
 let listener, requested, calls = 0, delayed, mode = 'pending';
 let chatType=1, peerUid='u_voice_peer', peerUin='20002', senderUin='20002';
 let voiceCachePath;
+let sendStatus=2;
 const service = {
   sendMsg() {},
   addKernelMsgListener(value) { listener=value; return 7; },
@@ -151,7 +156,7 @@ const service = {
     assert.deepEqual(peer,{chatType,peerUid,guildId:''});
     assert.deepEqual(ids,[msgId]);
     const result = {result:0,msgList:[{msgId,chatType,peerUid,peerUin,
-      senderUid:'u_voice_peer',senderUin,sendStatus:2,elements:[{elementId,elementType:4,
+      senderUid:'u_voice_peer',senderUin,sendStatus,elements:[{elementId,elementType:4,
       pttElement:{fileSize:String(silk.length),md5HexStr:md5,filePath:voiceCachePath}}]}]};
     if (mode === 'delayed') return new Promise(resolve => delayed=()=>resolve(result));
     return Promise.resolve(result);
@@ -247,8 +252,9 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   const cachePath=account=>path.join(cacheRoot,account,'nt_qq','nt_data','Ptt','2026-11','Ori',md5+'.amr');
   const ownCache=cachePath('10001');
   const otherCache=cachePath('10002');
+  const sentCache=path.join(path.dirname(ownCache),md5+'.silk');
   try {
-    for (const target of [ownCache,otherCache]) {
+    for (const target of [ownCache,otherCache,sentCache]) {
       fs.mkdirSync(path.dirname(target),{recursive:true});
       fs.writeFileSync(target,silk);
     }
@@ -282,9 +288,83 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:ownCache}));
     assert.equal(call(poll).status,'invalid_response');
     assert.equal(fs.existsSync(ownCache),true);
+
+    senderUin='10001';
+    voiceCachePath=sentCache;
+    sendStatus=1;
+    const beforeUnsatisfiedSend=calls;
+    assert.equal(call(pilotSent).status,'pending'); await tick();
+    assert.equal(call(poll).status,'invalid_response');
+    assert.equal(calls,beforeUnsatisfiedSend);
+    sendStatus=2;
+
+    for (const source of [sent,legacyGroup]) {
+      chatType=source===sent ? 1 : 2;
+      peerUid=source===sent ? 'u_voice_peer' : '30003';
+      peerUin=source===sent ? '20002' : '30003';
+      assert.equal(call(source).status,'pending'); await tick();
+      listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:sentCache}));
+      assert.equal(call(poll).status,'pending');
+      fs.writeFileSync(requested,silk);
+      listener.onRichMediaDownloadComplete(completion());
+      assert.equal(call(poll).status,'success');
+    }
+    chatType=1; peerUid='u_voice_peer'; peerUin='20002';
+    assert.equal(call(pilotSent).status,'pending'); await tick();
+    for (const extra of [{filePath:ownCache},{filePath:requested},{msgId:'99'},{msgElementId:'99'},{chatType:'1'}]) {
+      listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:sentCache,...extra}));
+      assert.equal(call(poll).status,'pending');
+    }
+    listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:sentCache}));
+    assert.equal(call(poll).data?.data?.silk_hex,silk.toString('hex'),'exact self-sent cache callback must finish');
+    assert.deepEqual(fs.readFileSync(sentCache),silk);
+
+    chatType=2; peerUid=peerUin='30003';
+    sendStatus=1;
+    const beforeUnsentGroup=calls;
+    assert.equal(call(pilotGroup).status,'pending'); await tick();
+    assert.equal(call(poll).status,'invalid_response');
+    assert.equal(calls,beforeUnsentGroup,'unsent group voice must not download');
+    sendStatus=2;
+    peerUin='30004';
+    assert.equal(call(pilotGroup).status,'pending'); await tick();
+    assert.equal(call(poll).status,'invalid_response');
+    assert.equal(calls,beforeUnsentGroup,'wrong group must not download');
+    peerUin='30003';
+    assert.equal(call(pilotGroup).status,'pending'); await tick();
+    for (const extra of [{filePath:ownCache},{filePath:otherCache},{filePath:requested},
+                         {msgId:'99'},{msgElementId:'99'},{chatType:1},{chatType:'2'},
+                         {chatType:undefined},{fileErrCode:'5'}]) {
+      listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:sentCache,...extra}));
+      assert.equal(call(poll).status,'pending');
+    }
+    listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:sentCache}));
+    assert.equal(call(poll).data?.data?.silk_hex,silk.toString('hex'),'exact self-sent group cache callback must finish');
+    assert.deepEqual(fs.readFileSync(sentCache),silk);
+    assert.equal(fs.existsSync(path.dirname(requested)),false);
+
+    chatType=2; peerUid=peerUin='30003'; senderUin='20002';
+    fs.writeFileSync(ownCache,silk);
+    voiceCachePath=ownCache;
+    const beforeWrongGroup=calls;
+    peerUin='30004';
+    assert.equal(call(pilotIncomingGroup).status,'pending'); await tick();
+    assert.equal(call(poll).status,'invalid_response');
+    assert.equal(calls,beforeWrongGroup);
+    peerUin='30003';
+    assert.equal(call(pilotIncomingGroup).status,'pending'); await tick();
+    for (const extra of [{filePath:sentCache},{msgId:'99'},{msgElementId:'99'},{chatType:1}]) {
+      listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:ownCache,...extra}));
+      assert.equal(call(poll).status,'pending');
+    }
+    listener.onRichMediaDownloadComplete(completion({chatType:null,filePath:ownCache}));
+    assert.equal(call(poll).data?.data?.silk_hex,silk.toString('hex'),'exact incoming group cache callback must finish');
+    assert.deepEqual(fs.readFileSync(ownCache),silk);
   } finally {
     fs.rmSync(cacheRoot,{recursive:true,force:true});
   }
+  senderUin='20002';
+  chatType=1; peerUid='u_voice_peer'; peerUin='20002';
   voiceCachePath=undefined;
   const callsBeforeStop=calls;
   mode='delayed';

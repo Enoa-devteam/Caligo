@@ -2,7 +2,15 @@
 
 ## 2026-11-13 SnowCat integration — Current Objective
 
-2026-11-14 主动私聊语音单次发送、持久回读和 B 实际播放通过。A 53416 的 daemon/owner/HTTP/SSE 正常关闭，QQ 响应并保留 bridge。本机 `local-evidence/snowcat-private-voice-send-field-20261114/field-summary.private.json` 保存字段和用户核对结果。下一块可先准备已发语音原始 SILK 的只读复查，沿用原持久 ID 和样本 SHA-256，在新指定 A 上独立验收；群语音与转码另按各自准入。feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-主动私聊语音发送现场通过)
+2026-11-14 用户要求先收口第一阶段并提交 PR #6。本次只提交语音缓存修复/回归与验收、状态文档，随分支推送既有 1e8dbb9，并以 PR 评论列明已验收功能和未验边界。范围与证据以[第一阶段清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)为准；PR 保持 draft，不合并。本阶段现场已停止；转码与任何下一阶段工作等待后续任务，不自行启动。各 feature 状态与产品 NOT READY 保留。下方“尚未提交”描述为各历史检查点，当前提交状态以 git log 和 PR #6 为准。
+
+2026-11-14 已发群语音 SILK 只读现场通过。新 A 38256 用 B7D38EBB…5764F8F 修复版对原持久消息各执行一次 get_msg/get_record(silk)，均 HTTP 200 / 0；缓存回调 validated，返回 2,575 字节与原三音降调样本逐字节及 SHA-256 一致，账本登记群匹配。daemon/owner 停止 exit 0，最终 HTTP/SSE 无监听、QQ 响应并保留 bridge，不复用或热卸载。本轮零发送，前轮单次群发送及 B 播放确认证据保留，原 1501 失败不覆盖。本机 `local-evidence/snowcat-sent-group-voice-cache-repair-20261114/field-summary.private.json` 保存结果；修复和验收记录尚未提交，HEAD 仍 1e8dbb9。普通私聊/登记群语音两方向及原始 SILK 各有现场样本，转码/其它媒体/长期资源与恢复仍待验，feat-008 in-progress。下一块只准备语音转码工具配置、原消息只读范围和输出校验方案，未准备或启动新现场；准备完成后按新指定 A 准入，不重发。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已发群语音-silk-现场通过)
+
+2026-11-14 登记测试群 B → A 的语音入站、用户播放与原始 SILK 下载通过。新 A 54700 读回原消息并下载 7,294 字节，匹配预登记缓存回调与此前缓存摘要。daemon、owner 和 HTTP/SSE 已关闭，QQ 响应并保留 bridge。原方向更正和接收证据在本机 `local-evidence/snowcat-group-voice-receive-20261114/`，复验在 `local-evidence/snowcat-group-voice-cache-repair-20261114/`。下一工作块为群主动语音发送，需按该动作独立准入。feat-008 保持 in-progress。[现场记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-登记群入站语音-silk-现场通过)
+
+2026-11-14 已发私聊语音的 `get_msg`、原始 SILK `get_record` 和逐字节核对通过。新 A 33668 正常停止 daemon 和 owner，HTTP/SSE 端口已关闭，QQ 响应并保留 bridge。本机 `local-evidence/snowcat-sent-private-voice-cache-repair-20261114/` 保存回调与字节校验证据。已发语音缓存修复和本轮记录尚未提交，前阶段提交为 `1e8dbb9`。下一工作块可先准备登记测试群的语音入站，在新指定 A 上核对 SSE、持久消息 ID 和原始 SILK。群发送与转码各自验收，feat-008 保持 in-progress。[现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-已发私聊语音-silk-现场通过)
+
+2026-11-14 主动私聊语音单次发送、持久回读和 B 实际播放通过。A 53416 的 daemon/owner/HTTP/SSE 正常关闭，QQ 响应并保留 bridge。本机 `local-evidence/snowcat-private-voice-send-field-20261114/field-summary.private.json` 保存字段和用户核对结果。已发语音的只读下载由 A 33668 的上述结果接续。[发送现场证据](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-主动私聊语音发送现场通过)
 
 上一代诊断版 A 53180 捕获了同消息、同元素的零错误回调，因 `chatType=null` 且目标路径不同返回 1501，现场已正常停止。该样本由上面的修复版结果接续。[诊断记录](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-私聊语音缓存回调定位与适配)
 

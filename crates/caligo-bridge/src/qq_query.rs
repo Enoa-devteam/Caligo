@@ -244,7 +244,7 @@ const COMMON_JS: &str = r#"
       if (R.mediaDiagnostics.length < 8) R.mediaDiagnostics.push(row);
     } catch (_) {}
   }
-  function startMediaDownload(R, p, service, info, chatType, voiceCachePath) {
+  function startMediaDownload(R, p, service, info, chatType, voiceCache) {
     var fs = process.getBuiltinModule('node:fs');
     var path = process.getBuiltinModule('node:path');
     var os = process.getBuiltinModule('node:os');
@@ -263,9 +263,10 @@ const COMMON_JS: &str = r#"
           (windows && !/^[a-zA-Z]:[\\/]/.test(cacheFile)) || !samePath(path.basename(cacheFile),info.md5+'.png') ||
           !samePath(fs.realpathSync(path.dirname(cacheFile)),path.dirname(cacheFile))) throw new Error('image cache path shape');
     }
-    // The PTT path comes from the already matched wrapper element. Limit this
-    // exception to the account's original voice cache layout observed on the pilot.
-    if (pilot9936 && !image && chatType === 1 && typeof voiceCachePath === 'string' &&
+    // The PTT path comes from the already matched wrapper element. The pilot
+    // uses .amr for incoming voice and .silk for self-sent private/group voice.
+    var voiceCachePath = voiceCache && voiceCache.path;
+    if (pilot9936 && !image && typeof voiceCachePath === 'string' &&
         voiceCachePath.length <= 1024 && path.isAbsolute(voiceCachePath) &&
         voiceCachePath === path.normalize(voiceCachePath) &&
         (!windows || /^[a-zA-Z]:[\\/]/.test(voiceCachePath))) {
@@ -275,7 +276,7 @@ const COMMON_JS: &str = r#"
       var expectedParent = [p.scope.account, 'nt_qq', 'nt_data', 'Ptt', month, 'Ori'].join(path.sep);
       if (/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) &&
           samePath(cacheParts.slice(-6).join(path.sep), expectedParent) &&
-          samePath(path.basename(voiceCachePath), info.md5 + '.amr')) {
+          samePath(path.basename(voiceCachePath), info.md5 + voiceCache.extension)) {
         try {
           if (samePath(fs.realpathSync(cacheParent), cacheParent)) cacheFile = voiceCachePath;
         } catch (_) {}
@@ -301,7 +302,7 @@ const COMMON_JS: &str = r#"
         info.sender_uin === p.scope.account && result && result.chatType === null &&
         cacheFile !== null && sourceFile === cacheFile;
     }
-    function cachedIncomingVoice(result, sourceFile) {
+    function cachedVoice(result, sourceFile) {
       return !image && result && result.chatType === null && result.fileErrCode === '0' &&
         cacheFile !== null && sourceFile === cacheFile;
     }
@@ -343,7 +344,7 @@ const COMMON_JS: &str = r#"
       noteDownload('callback', result);
       var sourceFile = callbackFile(result);
       if (!result || result.msgId !== info.message_id || result.msgElementId !== info.element_id ||
-          (result.chatType !== chatType && !cachedSelfChat(result, sourceFile) && !cachedIncomingVoice(result, sourceFile)) ||
+          (result.chatType !== chatType && !cachedSelfChat(result, sourceFile) && !cachedVoice(result, sourceFile)) ||
           typeof result.fileErrCode !== 'string' ||
           sourceFile === null || R.voiceDownload !== complete) return;
       var descriptor;
@@ -530,7 +531,15 @@ pub fn build_profile_query_start_js(
         }
         if (R.voiceDownload) { p.status = 'rejected'; p.code = 409; return; }
         if (pilot9936) noteMedia(R, {media:'voice',stage:'readback_matched'});
-        startMediaDownload(R, p, voiceService, info, chatType, pilot9936 && !exact ? voice.filePath : undefined);
+        var voiceCache = null;
+        if (pilot9936) {
+          if (!exact || (chatType === 2 && message.senderUin !== scope.account)) {
+            voiceCache = {path:voice.filePath,extension:'.amr'};
+          } else if ((chatType === 1 || chatType === 2) && message.senderUin === scope.account && message.sendStatus === 2) {
+            voiceCache = {path:voice.filePath,extension:'.silk'};
+          }
+        }
+        startMediaDownload(R, p, voiceService, info, chatType, voiceCache);
       });
       return reply('pending');
     }

@@ -824,3 +824,98 @@ GitNexus 增量索引对共享查询入口和测试报 CRITICAL，含 G2 与脚�
 用户授权 A 到登记 B 单次发送，并重启 A 登录主界面。新 A 53416（创建 `2026-11-14T13:05:47.3502667Z`）通过固定 9.9.36-53644 模块哈希、PE/backend 审计、唯一 envscan、`listener_armed` 和 LoginInfo。单次发送 reservation 持久落盘后，经正常 OneBot HTTP 提交 `send_private_msg`，返回 retcode 0 和持久消息 ID。独立 `get_msg` 返回 retcode 0，同一消息 ID、私聊类型、发送者和 `record` 标识匹配。持久账本目标匹配登记 B，语音长度和 MD5 匹配输入。用户确认 B 收到一条、可以播放、听到三个依次升高的提示音。
 
 daemon 和 owner 停止均 exit 0，HTTP/SSE 已关闭，QQ 仍响应并保留 bridge。现场凭据、录音、真实身份及回执只留本机，见上述目录 `field-summary.private.json` 和 `A/final-health.private.json`。已发送语音的原始 SILK 下载、群语音和转码仍待验，feat-008 保持 in-progress。
+
+### 2026-11-14 修复提交与已发私聊语音复查准备
+
+本地提交 `1e8dbb9` 保存已验证的登录与目录查询、会话撤权、文本及媒体修复与证据。提交前将真实账号、昵称、群号和扫描地址留在本机，仓库证据以别名描述。默认和研究模式全仓测试、覆盖结构检查和 staged diff 检查通过。GitNexus 对全部 35 个变更文件报告 296 个变化符号、83 条受影响流程，整体风险为 critical，分析未截断或降级。日志在本机 `local-evidence/snowcat-fixes-checkpoint-20261114/`。
+
+已发私聊语音的只读复查已准备。使用已停止发送账本的校验副本和原发送样本，核对登记 A/B、私聊类型、持久消息 ID、语音标识、长度及 MD5。仍使用上轮经验证的固定构建，源码快照、构建哈希、账本哈希和 PowerShell/Python 脚本均通过检查。新 A 准入后按原 ID 各执行一次 `get_msg` 与 `get_record(out_format=silk)`，对返回内容执行逐字节比较。失败保留 30 秒回调观察后正常关闭。原始样本和现场脚本在本机 `local-evidence/snowcat-sent-private-voice-readback-20261114/`。待用户提供新 A 代次，feat-008 保持 in-progress。
+
+### 2026-11-14 已发私聊语音缓存回调修复
+
+用户重启后的 A 10044（创建 `2026-11-14T13:15:13.0596075Z`）通过固定模块哈希、PE/backend 审计、唯一 envscan 和 LoginInfo。原已发消息的 `get_msg` 返回 HTTP 200 / OneBot 0，`get_record` 返回 HTTP 200 / OneBot 1501。诊断捕获同消息、同元素和同请求槽的零错误回调，`chatType=null`，目标既非独立临时路径也未登记。其它回调因消息和元素不同被过滤。观察 30 秒后 daemon 和 owner 正常停止，HTTP/SSE 监听关闭，QQ 响应且保留 bridge。本次只读，原始证据在本机 `local-evidence/snowcat-sent-private-voice-readback-20261114/`。
+
+同账号 `nt_qq/nt_data/Ptt/<month>/Ori` 下发现与 2,584 字节发送样本 SHA-256 一致的 `<md5>.silk`。修复限定在精确 9.9.36-53644 的成功自发私聊记录，从精确回读的 `pttElement.filePath` 预登记同账号、同 MD5 和规范缓存路径。零错误的空会话回调须匹配该路径和原消息及元素，文件仍须通过身份、长度、MD5 和 SILK 头验证。原入站 `.amr` 规则继续适用。GitNexus 共享 builder 风险为 CRITICAL，嵌入 JS 未单独索引，已核对 owner 路由和语音及图片调用者。
+
+合成回归先复现已发回调无法完成，修复后查询与语音合同 7/7、图片合同 4/4，默认及研究模式全仓测试、隔离 release 和文档检查通过。用例覆盖成功发送状态、固定 profile、私聊范围和精确路径，保留原缓存。新 bridge SHA-256 为 `F30094F975D07CFA0B07679AC479FBDC7A5B8BC01EEFA525A02CFC855E2736E4`。构建、验证日志和只读复查材料在本机 `local-evidence/snowcat-sent-private-voice-cache-repair-20261114/`，复用同一发送账本和样本。现场下载待新 A 准入复查。
+
+### 2026-11-14 已发私聊语音 SILK 现场通过
+
+用户正常重启 A。新进程 33668（创建 `2026-11-14T13:21:41.8333472Z`）通过精确 9.9.36-53644 模块哈希、PE/backend 审计、唯一 envscan、`listener_armed` 和 LoginInfo。上节修复版使用已停止的发送账本副本，对原持久消息各调用一次 `get_msg` 和 `get_record(out_format=silk)`，均为 curl exit 0 / HTTP 200 / OneBot 0。
+
+QQ 的零错误完成回调为 `chatType=null`，匹配原消息、语音元素、在途请求和预登记的缓存路径，进入 `validated`。返回的 2,584 字节与原发送样本逐字节相同，独立复核的 SHA-256 为 `557d6b3260d5d9c4bf2700bc902da6a6c840166722be9ebc53057baf59b5b907`。本轮仅查询原消息，发送与 B 播放证据沿用上一轮现场记录。
+
+daemon 和 owner 均正常停止，退出码为 0。HTTP/SSE 监听均关闭，QQ 响应并保留 bridge。现场摘要及验后健康记录留在本机 `local-evidence/snowcat-sent-private-voice-cache-repair-20261114/` 的 `field-summary.private.json`、`A/summary.json` 和 `A/final-health.private.json`。本次执行未修改源码或重建二进制，使用上节通过全仓离线验证的修复版。群语音与转码待验，feat-008 保持 in-progress。
+
+### 2026-11-14 登记群语音入站与缓存回调修复
+
+用户更正首条消息方向后，现场核对原 SSE 连接仍在线，账本和采集文件均未出现符合目标范围的语音。沿用 A 8392 的同一接入和采集窗口，为正确方向使用新的口令。用户确认 B 在登记群只发一条录音，A 收到并能播放，所听内容与新口令一致。SSE、持久账本和 `get_msg` HTTP 200 / OneBot 0 匹配同一消息、发送方、群和 `record` 标识。
+
+单次 `get_record` 返回 HTTP 200 / OneBot 1501。精确回读和派发完成，匹配原消息与元素的回调错误码为字符串 `0`，会话类型为 `null`，路径未登记。其它消息和元素的回调被过滤。观察 30 秒后停止 daemon 和 owner，两项退出码为 0，HTTP/SSE 已关闭，QQ 响应且保留 bridge。A 账号缓存中发现一个长度与 MD5 匹配的 7,294 字节 `.amr` 文件，SILK v3 头通过检查。初次验收没有获得 API 下载字节。采集日志、用户方向更正、播放确认及缓存摘要留在本机 `local-evidence/snowcat-group-voice-receive-20261114/`。
+
+合成回归复现后，将入站语音的 `.amr` 缓存规则扩展到精确 9.9.36-53644 的入站群语音。仅在原消息、群、发送方和元素均通过精确回读后登记该元素的同账号缓存路径，继续校验真实父目录、MD5 文件名、请求槽、文件身份、长度和 SILK 文件头。空会话类型只对零错误且命中预登记路径的回调生效。群自发语音继续使用原路径合同。GitNexus 共享 builder 为 LOW，嵌入 JS 与测试的未知影响面由 owner 路由及两个媒体调用点补查。定向语音及查询合同 7/7、图片 4/4，隔离 release 构建完成。并行全仓首轮 journal 测试因共享临时目录报路径不存在，保留失败日志并串行复验。新构建及同一录音的只读验收材料留在本机 `local-evidence/snowcat-group-voice-cache-repair-20261114/`。
+### 2026-11-14 登记群入站语音 SILK 现场通过
+
+串行 `init.ps1 -Mode all` 通过默认和研究模式全仓测试。首次并行失败的 journal 测试在串行复验中通过，其用例以进程 ID 共用临时目录。修复版 bridge SHA-256 为 `E5749D9D73798C1E40B4F702AE999EFAF3E6A38A79FC9EC328A202C919818F6A`。用户重启后的新 A 54700（创建 `2026-11-14T13:35:32.5649300Z`）通过模块哈希、PE/backend 审计、唯一 envscan 和 LoginInfo。
+
+在停止账本的校验副本上，`get_msg` 和 `get_record(out_format=silk)` 对原消息各执行一次，均返回 HTTP 200 / OneBot 0。匹配消息和元素的零错误回调命中预登记路径，进入 `validated`。返回内容 7,294 字节，长度、MD5、SILK 头均通过，SHA-256 与首次采集后独立找到的缓存一致。B 的语音、A 的 SSE 与播放证据均来自上一代现场，本轮仅只读复验。daemon 和 owner 正常停止，HTTP/SSE 已关闭，QQ 继续响应。复验摘要与健康记录在本机 `local-evidence/snowcat-group-voice-cache-repair-20261114/`。群主动语音、群自发下载和转码待验。
+
+### 2026-11-14 主动群语音发送端通过，播放待核对
+
+恢复任务时发现，本机 `local-evidence/snowcat-group-voice-send-field-20261114/` 已有单次发送及正常收尾记录，交接首段仍停留在“方案已准备”。本次只读复核这批证据，没有再次发送、接入或卸载 bridge。原发送授权绑定单次请求摘要，发送预留已消耗，不能重跑该发送脚本。
+
+原现场使用新 A 38620（创建 `2026-11-14T13:40:18.4020644Z`），通过固定 QQ 9.9.36-53644 模块哈希、PE/backend 审计、唯一 envscan、owner 就绪及 LoginInfo，bridge SHA-256 为 `E5749D9D73798C1E40B4F702AE999EFAF3E6A38A79FC9EC328A202C919818F6A`。正常 OneBot HTTP 向登记群单次提交 0.9 秒三音降调 SILK，`send_group_msg` 和 `get_msg` 均 HTTP 200 / OneBot 0。独立复核持久 ID 相同，账本恰有一条匹配记录，账号、群目标、2,575 字节长度和 MD5 均与发送样本一致；样本 SILK 头及 SHA-256 `75547048ca48a4f9d532855b3526c3f3ac6fe56012c2df327426bb803d1f2a6b` 核对通过。
+
+daemon 与 owner 的停止退出码均为 0；`A/final-health.private.json` 在 `2026-11-14T13:41:25.1700406Z` 记录 QQ 响应、daemon 停止、HTTP/SSE 无监听，bridge 保留。此为原采样时的健康证据，不据此推断恢复任务时的进程状态。`A/summary.json` 的对端播放仍为 `pending_user_check`，本次已请求用户核对 B 是否仅收到一条且播放为三个依次降低的提示音；未获确认前不宣称群语音端到端发送通过。该消息尚无 `get_record` 证据，后续只读原消息、另行核实新 A 准入，不重发。
+
+本次未改 Rust，源码 SHA-256 与该现场的 `source-snapshot.json` 全部一致，沿用前节已通过的定向及串行全仓测试，不重复运行。feat-008 保持 in-progress，转码及其他媒体/恢复边界不提升。
+
+本次复核摘要保存为同目录 `recovery-audit.private.json`。HEAD `1e8dbb996a09ae522e783f076281b2748e6896af`；Windows PowerShell 执行 `init.ps1 -Mode docs` 通过（15 份维护文档、360 条本地链接、36 个历史入口、10 个 feature）。WSL Git 的 `git diff --check` 将既有 CRLF 行尾报告为尾随空白，exit 2；随后 Windows Git 的同一检查 exit 0，仅有行尾转换提示。已审阅本次四个状态/证据文件的增量，未提交。
+
+### 2026-11-14 主动群语音播放现场通过
+
+用户随后确认：“收到一条，播放为三个依次降低的提示音”。结合上一节同一消息的正常 OneBot 单次发送、持久 ID、get_msg、登记群和语音元数据，主动群语音发送及 B 端实际播放现场通过。确认另存本机 `local-evidence/snowcat-group-voice-send-field-20261114/recipient-playback-confirmation.private.json` 和 `field-summary.private.json`，保留原 `A/summary.json` 的待确认快照，不覆盖历史。本轮不再发送；已发群语音 SILK 下载、转码和长期资源/恢复仍各自待验，feat-008 保持 in-progress。
+
+### 2026-11-14 已发群语音只读下载与缓存适配
+
+用户确认新 A 已登录主界面后，以唯一新建、无 bridge 的主进程 38428（创建 `2026-11-14T13:51:20.6693180Z`）准入。固定 9.9.36-53644 模块、PE/backend 审计、唯一 envscan、owner 就绪和 LoginInfo 均通过。使用停止发送账本的哈希校验副本，原群语音 `get_msg` HTTP 200 / 0；单次 `get_record(out_format=silk)` HTTP 200 / 1501，未取得下载字节。匹配原消息、元素和请求槽的零错误回调为 `chatType=null`，缓存路径未登记；其它消息/元素回调被过滤。观察 30 秒后正常关闭 daemon 和 owner，均 exit 0；最终健康核对 QQ 响应、HTTP/SSE 关闭，旧 bridge 保留。本轮零发送，不重试，证据在本机 `local-evidence/snowcat-sent-group-voice-readback-20261114/`。
+
+同账号缓存发现与 2,575 字节发送样本长度、MD5、SHA-256 和 SILK 头一致的 `.silk` 文件；缓存文件存在不等于正常下载通过。代码此前只为成功自发私聊登记 `.silk` 缓存，群自发没有登记。新增合成回归先复现匹配群自发缓存回调不能终结，再将精确 pilot 的成功自发 `.silk` 规则扩展到 group。登记仍取自匹配的消息/群/发送者/元素回读，要求 sendStatus=2、同账号规范缓存目录及 MD5 文件名；零错误空会话回调仍须命中精确预登记路径，后续身份/长度/MD5/SILK 验证与缓存保留不变。回归覆盖错误群、非成功发送、错误账号/路径/消息/元素/会话类型/错误码和非 pilot 拒绝。
+
+GitNexus 绑定 `E:\stella\Caligo`，HEAD `1e8dbb9`，刷新索引后查询。FTS 不可用导致概念搜索降级；具名 context/impact 可用，builder 上游为 owner query 和默认 builder，risk LOW，影响 owner 查询流程。测试函数的 UNKNOWN 通过 `#[test]` 入口、唯一文本定义及 Cargo 定向运行补证；嵌入 JS 的影响面用两个媒体调用点补查。完整日志在上述 readback 目录，修复前失败回归和后续验证在本机 `local-evidence/snowcat-sent-group-voice-cache-repair-20261114/`。新构建尚未现场复验，不把本适配记为下载通过。
+
+修复前定向回归因 `exact self-sent group cache callback must finish` 失败；修复后 wrapper 查询合同 7/7。首次 `init.ps1 -Mode all` 在 PowerShell 5 内合并 native stderr 时将 Cargo 编译输出提升为脚本错误，未形成全仓结果，保留 `all-serial.log`。改由外层 shell 捕获原生输出后，同一 `init.ps1 -Mode all` 顺序执行 default/research 两套全仓并通过（含图片合同），日志为 `all-serial-native-streams.log`；该次没有设置 Windows 测试线程上限，不声称进程内单线程测试。Windows Git `diff --check` 通过。GitNexus 全量变更检查覆盖 6 个文件、18 个变化符号，risk LOW；嵌入 JS 的跨语言边界仍以上述补查为准。
+
+隔离 research release 构建通过，目录 `target-harness/snowcat-sent-group-voice-cache-repair-20261114/release/`，bridge SHA-256 `B7D38EBB6890890B4A10B0D1F68C5F61D60EA6FA2363A5E42448AE2385764F8F`。独立只读脚本、原停止账本副本、发送样本、精确 read-plan、源码快照和三项二进制 pins 已准备并核对，尚未接入。现场 runner 使用已验证保留时间戳字符串的 Windows PowerShell 5，脚本语法通过；查询仍只有 get_msg/get_record，各一次、不重试，finally 正常停止并保留 bridge。已请求用户再次正常重启 A，待其就绪后重新准入；旧 A 38428 不重接、不热卸载。feat-008 保持 in-progress。
+
+### 2026-11-14 已发群语音 SILK 现场通过
+
+用户确认再次正常重启 A 并进入聊天主界面。唯一新建、无 bridge 的根进程 38256（创建 `2026-11-14T14:01:04.3746538Z`）通过固定 QQ 9.9.36-53644 模块哈希、PE/backend 审计、唯一 envscan、owner 就绪和 LoginInfo。使用上节修复构建，bridge SHA-256 `B7D38EBB6890890B4A10B0D1F68C5F61D60EA6FA2363A5E42448AE2385764F8F`，源码快照及构建 pins 均匹配；本轮未修改 Rust 或重新构建，沿用上节全仓验证。
+
+在原停止发送账本的哈希校验副本上，对原持久消息各执行一次 `get_msg` 与 `get_record(out_format=silk)`，均 curl exit 0 / HTTP 200 / OneBot 0。零错误空会话类型回调匹配消息、元素、在途请求和预登记缓存路径，进入 `validated`。返回 2,575 字节，与原三音降调发送样本逐字节相同，长度、MD5、SILK 头及 SHA-256 `75547048ca48a4f9d532855b3526c3f3ac6fe56012c2df327426bb803d1f2a6b` 均通过。独立核对消息 ID 和账本登记群一致，匹配账本记录恰有一条。本轮零发送、不重试；群发送及 B 端实际播放证据沿用前轮，原失败样本保留。
+
+daemon 与 owner 正常停止，退出码均为 0。最终健康在 `2026-11-14T14:02:59.5788649Z` 核对同一 QQ 代次仍响应、daemon 已停止、HTTP/SSE 无监听，修复 bridge 保留，不重接或热卸载。现场回执、字节文件、回调和健康证据只留本机 `local-evidence/snowcat-sent-group-voice-cache-repair-20261114/`，摘要为 `field-summary.private.json`、`A/summary.json` 和 `A/final-health.private.json`。
+
+至此，登记群主动语音发送/B 播放与该已发消息的原始 SILK 下载均有现场证据，属于跨代次闭环。结合此前样本，普通私聊与登记群语音的两个方向及原始 SILK 各有对应现场样本；转码、长期资源寿命、恢复及其它媒体仍须独立验收，feat-008 保持 in-progress。下一工作块为语音转码，须先准备工具配置、只读范围与校验方案，再按新 A 准入执行；本轮不自动启动下一现场或提交。
+
+收尾在 HEAD `1e8dbb996a09ae522e783f076281b2748e6896af` 执行 Windows `init.ps1 -Mode docs` 通过（15 份维护文档、362 条本地链接、36 个历史入口、10 个 feature），Windows Git `diff --check` 通过；已审阅本轮状态与验收增量。源码未变，不重复前节已通过的定向/default/research 测试；上述结构检查不提升转码或生产验收状态。
+
+### 2026-11-14 第一阶段现场验收收口
+
+用户要求在此收口第一阶段，将当前修复和验收记录提交至 PR #6，并评论列明验收功能。本次只整理、检查和提交，不启动语音转码或新 QQ 现场。现场范围为 Windows x64、精确 hash 绑定的 QQ 9.9.36-53644、登记 A/B 与测试群；实际模块 hash、构建和进程代次仍由各样本记录约束。以下为跨代次、跨修复构建的指定样本结果，不宣称最终构建已重跑全部现场矩阵。
+
+| 本阶段已验收的功能 | 现场证据与范围 |
+|---|---|
+| 正常入口当前登录账号与昵称 | [双账号查询](#2026-11-14-双账号登录查询隔离)、[新代次复验](#2026-11-14-新代次双账号-logininfo-现场)；各自身份独立核对 |
+| 当前账号资料刷新 | [正常入口 SelfProfile](#2026-11-14-正常入口当前账号资料刷新现场)；不扩展为任意目标或服务器新鲜度保证 |
+| 好友列表、群列表、群详情、完整成员列表与指定成员查询 | [A 目录复验](#2026-11-14-a-好友列表复验与群目录计数修复)、[双账号群成员](#2026-11-14-双账号群成员通过与-a-目录诊断)；证据来自登记账号及对应群 |
+| 普通私聊与登记群文本入站及主动发送 | [文本入站](#2026-11-14-普通文本入站现场与空提及字段适配)、[登记群回读](#2026-11-14-登记测试群现场-http-回读通过)、[主动私聊](#2026-11-14-caligo-主动私聊现场通过)、[主动群聊](#2026-11-14-caligo-主动群聊现场通过)；SSE/持久账本/get_msg 与对端显示按方向核对 |
+| 普通单 PNG 私聊/登记群入站、主动发送与下载 | [私聊入站下载](#2026-11-14-私聊-png-正常下载现场通过)、[群入站下载](#2026-11-14-登记群-png-入站与下载现场通过)、[私聊发送后下载](#2026-11-14-已发送私聊-png-正常下载现场通过)、[群发送后下载](#2026-11-14-已发送群-png-正常下载现场通过)；下载与原图字节/摘要一致，发送的对端可见性另有用户确认 |
+| 原始 SILK 私聊/登记群语音入站、主动发送、播放与下载 | [私聊入站下载](#2026-11-14-已收私聊语音-silk-现场通过)、[私聊发送播放](#2026-11-14-主动私聊语音发送现场通过)、[私聊发送后下载](#2026-11-14-已发私聊语音-silk-现场通过)、[群入站下载](#2026-11-14-登记群入站语音-silk-现场通过)、[群发送播放](#2026-11-14-主动群语音播放现场通过)、[群发送后下载](#2026-11-14-已发群语音-silk-现场通过)；对端/接收端实际播放与原始文件验证分列 |
+| 双账号 HTTP 鉴权与单端停止隔离、样本收尾 | [双账号隔离](#2026-11-14-双账号登录查询隔离)；交叉 token 403、无 token 401、停 A 后 B 查询可用。媒体样本分别记录正常停止 daemon/owner、HTTP/SSE 关闭及 QQ 响应；不等于长期静默或安全热卸载 |
+
+保留的未验范围：WAV/OGG 转码、@/reply 与其它媒体/组合消息、完整 OneBot transport/真实下游应用矩阵、真实断线重连/换号/core 重启交错、持续身份撤权、长期资源寿命与回调静默。相关部分虽有实现或 LAB 证据，不能算本阶段 FIELD 通过；feat-005/006 的既有 blocked、feat-008/009 的 in-progress 及产品 NOT READY 均不提升。旧失败、unknown 与已消耗请求继续保留。
+
+提交范围为已验证的语音缓存适配、对应正反回归及状态/验收记录；既有本地修复提交 `1e8dbb9` 随同分支推送到 PR #6。最新源码与已通过的 default/research 全仓和隔离 release 快照一致，本次不重复运行 Rust 测试。提交前重新运行文档、暂存差异和完整 GitNexus 变更检查；真实身份、凭据、聊天原文、原始媒体、QQ 二进制及现场脚本仍只留本机 `local-evidence/`。PR 维持现有 draft 状态，不自动合并。
+
+收口检查：Windows `init.ps1 -Mode docs` 通过（15 份维护文档、364 条本地链接、36 个历史入口、10 个 feature）；Windows Git `diff --check` 通过。GitNexus 全量 JSON 覆盖当前 6 文件/18 个变化符号，risk LOW，`partial=false`、`truncated=false`；先前 `1e8dbb9` 的 35 文件/296 符号、83 流程与 CRITICAL 总体风险记录继续保留，不用当前小增量抵消整条 PR 的影响面。已扫描 PR 远端检查点之后新增行中的登记身份及本轮凭据，未命中已知敏感值；该扫描不替代人工审阅。检查日志留在本机 `local-evidence/snowcat-phase1-close-20261114/`。
