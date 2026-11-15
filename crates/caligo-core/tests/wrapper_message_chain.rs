@@ -165,6 +165,69 @@ process.stdout.write(JSON.stringify(first));
 }
 
 #[test]
+fn d8_same_text_ids_and_unknown_chat_do_not_cross_sessions() {
+    let start = serde_json::to_string(caligo_bridge::qq_v8::D8_START_JS).unwrap();
+    let poll = serde_json::to_string(caligo_bridge::qq_v8::D8_POLL_JS).unwrap();
+    let fixture = r#"
+const assert = require('node:assert/strict');
+let listener;
+const service = {sendMsg() { throw Error('must not send'); },
+  addKernelMsgListener(value) { listener = value; return 1; }};
+const session = {getSessionId: () => '1', getMsgService: () => service};
+process._linkedBinding = () => ({NodeIQQNTWrapperSession:{getNTWrapperSession: () => session}});
+const caligoVoiceAccount = '10001';
+assert.ok(eval(start).startsWith('ARMED'));
+function row(id, chatType, peerUid, peerUin, senderUid, senderUin) {
+  return {msgId:id,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId:'',
+    chatType,msgType:2,subMsgType:0,peerUid,peerUin,senderUid,senderUin,
+    elements:[{elementType:1,textElement:{content:'same text',atType:0}}]};
+}
+listener.onRecvMsg([
+  row('101',1,'u_friend','20002','u_friend','20002'),
+  row('102',1,'u_friend','20002','u_friend','20002'),
+  row('103',99,'u_friend','20002','u_friend','20002'),
+  row('104',2,'30003','30003','u_friend','20002')
+]);
+process.stdout.write(eval(poll));
+"#;
+    let script = format!("const start={start}, poll={poll};\n{fixture}");
+    let out = std::process::Command::new("node")
+        .args(["--unhandled-rejections=strict", "-e", &script])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let resident = Resident::new(OfflineHost, ResidentLimits::default());
+    resident.bootstrap().unwrap();
+    let binding = WrapperBinding {
+        account: "10001".into(),
+        session_generation: 1,
+        host_nonce: 9,
+        wrapper_session: "nt_0".into(),
+    };
+    let batch = resident
+        .ingest_wrapper_batch(std::str::from_utf8(&out.stdout).unwrap(), &binding)
+        .unwrap();
+    assert_eq!(batch.stats.rejected, 1);
+    let events = resident.take_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.iter().map(|e| e.native_id.as_str()).collect::<Vec<_>>(),
+        ["101", "102", "104"]
+    );
+    assert!(events
+        .iter()
+        .all(|e| e.text == "same text" && e.msg_time == Some(1794567890)));
+    assert_eq!(events[0].peer_uin, "20002");
+    assert_eq!(events[1].peer_uin, "20002");
+    assert_eq!(events[2].peer_uin, "30003");
+    assert!(events.iter().all(|e| e.sender_uin == "20002"));
+}
+
+#[test]
 fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
     let json = script_batch();
     let resident = Resident::new(OfflineHost, ResidentLimits::default());

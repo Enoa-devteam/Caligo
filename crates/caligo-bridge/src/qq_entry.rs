@@ -1103,10 +1103,14 @@ impl QqOwnerAdapter {
             return Some(QueryOutcome::Disconnected);
         }
         if self.login_cleanup_unknown {
+            #[cfg(feature = "research")]
+            append_stage_simple("login_diagnostic", false, "cleanup_unknown");
             return Some(QueryOutcome::NotReady);
         }
         if !poll {
             if self.login_request.is_some() {
+                #[cfg(feature = "research")]
+                append_stage_simple("login_diagnostic", false, "request_busy");
                 return Some(QueryOutcome::NotReady);
             }
             let Some(path) = self.login_wrapper.as_deref() else {
@@ -1121,15 +1125,21 @@ impl QqOwnerAdapter {
             match crate::qq_v8::run_fixed_query_script(&script).as_deref() {
                 Ok("DISPATCHED" | "SURFACE_DONE") => return None,
                 Ok("BUSY") => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "script_busy");
                     self.login_request = None;
                     self.login_cleanup_unknown = true;
                     return Some(QueryOutcome::NotReady);
                 }
                 Err(crate::qq_v8::V8Error::NoCurrentContext) => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "no_current_context");
                     self.login_request = None;
                     return Some(QueryOutcome::NotReady);
                 }
                 _ => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "script_start_failed");
                     self.cancel_login();
                     return Some(QueryOutcome::NotReady);
                 }
@@ -1152,6 +1162,12 @@ impl QqOwnerAdapter {
             return Some(QueryOutcome::InvalidResponse);
         };
         self.login_request = None;
+        #[cfg(feature = "research")]
+        if !matches!(decode_login_report(&report, scope, refresh), QueryOutcome::Success(_)) {
+            for label in login_diagnostic_labels(&report) {
+                append_stage_simple("login_diagnostic", false, label);
+            }
+        }
         if report["status"] == "self_status_listener_cleanup_unverified" {
             self.login_cleanup_unknown = true;
             append_stage_simple("login_listener_cleanup", false, "listener removal unverified");
@@ -1166,6 +1182,57 @@ impl QqOwnerAdapter {
     fn handle_env(&self) -> usize {
         ENTRY.env.load(Ordering::Acquire)
     }
+}
+
+/// Fixed labels only: native reports can contain identity and must never be logged verbatim.
+#[cfg(feature = "research")]
+fn login_diagnostic_labels(report: &serde_json::Value) -> [&'static str; 3] {
+    let status = match report["status"].as_str() {
+        Some("current_login_match") => "status_current_login_match",
+        Some("current_account_mismatch") => "status_current_account_mismatch",
+        Some("current_session_changed") => "status_current_session_changed",
+        Some("current_session_id_invalid") => "status_current_session_id_invalid",
+        Some("current_login_check_failed") => "status_current_login_check_failed",
+        Some("self_forward_not_map") => "status_self_forward_not_map",
+        Some("self_forward_mismatch") => "status_self_forward_mismatch",
+        Some("self_reverse_not_map") => "status_self_reverse_not_map",
+        Some("self_reverse_mismatch") => "status_self_reverse_mismatch",
+        Some("self_status_listener_id_invalid") => "status_listener_id_invalid",
+        Some("self_status_listener_surface_missing") => "status_listener_surface_missing",
+        Some("self_status_listener_cleanup_unverified") => "status_cleanup_unverified",
+        Some("self_status_offline") => "status_self_offline",
+        Some("self_status_ack_failed") => "status_self_ack_failed",
+        Some("self_status_ack_invalid") => "status_self_ack_invalid",
+        Some("self_status_conflict") => "status_self_conflict",
+        Some("self_status_event_invalid") => "status_self_event_invalid",
+        Some("self_status_rejected") => "status_self_rejected",
+        Some("self_status_threw") => "status_self_threw",
+        Some("profile_methods_unavailable") => "status_profile_methods_unavailable",
+        Some("profile_require_missing") => "status_profile_require_missing",
+        Some("profile_service_accessor_missing") => "status_profile_service_accessor_missing",
+        Some("profile_service_missing") => "status_profile_service_missing",
+        Some("profile_wrapper_accessor_missing") => "status_profile_wrapper_accessor_missing",
+        Some("profile_wrapper_require_failed") => "status_profile_wrapper_require_failed",
+        _ => "status_other_or_missing",
+    };
+    let nickname = match report["nicknameStatus"].as_str() {
+        Some("matched") => "nickname_matched",
+        Some("query_rejected") => "nickname_query_rejected",
+        Some("result_not_map") => "nickname_result_not_map",
+        Some("profile_identity_mismatch") => "nickname_identity_mismatch",
+        Some("nickname_invalid") => "nickname_invalid",
+        Some("accessor_missing") => "nickname_accessor_missing",
+        Some("query_threw") => "nickname_query_threw",
+        _ => "nickname_other_or_missing",
+    };
+    let listener = match report["listenerRegistration"].as_str() {
+        Some("remove_returned") => "listener_remove_returned",
+        Some("registered") => "listener_registered",
+        Some("remove_unknown") => "listener_remove_unknown",
+        Some("unknown") => "listener_unknown",
+        _ => "listener_other_or_missing",
+    };
+    [status, nickname, listener]
 }
 
 fn decode_login_report(
@@ -1203,6 +1270,17 @@ mod profile_report_tests {
     use super::decode_login_report;
     use caligo_model::capability::{QueryData, QueryOutcome, QueryScope};
     use serde_json::json;
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn login_diagnostics_are_fixed_labels_and_never_include_report_values() {
+        use super::login_diagnostic_labels;
+        let report = json!({"status":"current_account_mismatch", "nicknameStatus":"query_rejected",
+            "listenerRegistration":"remove_returned", "currentLogin":{"uin":"PRIVATE"}});
+        assert_eq!(login_diagnostic_labels(&report), ["status_current_account_mismatch", "nickname_query_rejected", "listener_remove_returned"]);
+        let injected = json!({"status":"PRIVATE", "nicknameStatus":"PRIVATE", "listenerRegistration":"PRIVATE"});
+        assert_eq!(login_diagnostic_labels(&injected), ["status_other_or_missing", "nickname_other_or_missing", "listener_other_or_missing"]);
+    }
 
     #[test]
     fn scoped_refresh_uses_the_fresh_row_and_refuses_cached_or_wrong_account_results() {

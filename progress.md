@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-15 feat-003 验收启动：基于 main `db188c45` 的跟踪 PR 分支，在隔离 worktree 核对 N1/T04/T05。新增 [wrapper 接收测试](crates/caligo-core/tests/wrapper_message_chain.rs)，验证同私聊同文不同 native ID 均保留、未知会话类型拒绝且不影响随后群消息。Windows x64 锁定依赖离线测试：`qq_wire_golden` 6/6、`qq_text_codec` 4/4、`runtime_contract` 11/11、原 wrapper 链路及新增用例各通过；`init.ps1 -Mode default` 与正式 release EXE/bridge 构建通过。首次用 PowerShell 5 内部重定向运行 default 时将 Cargo stderr 误判为错误，改进程外重定向后通过，原日志保留本机。上述是 LAB，不替代真实记录字段与同文不同 native ID 的现场证据；feat-003 仍 in-progress。现场须指定新鲜 A 进程、逐项准入后才能接入，见 [handoff](session-handoff.md)。
+
+同日现场两轮：指定 A 的两次新进程分别通过固定模块、PE/backend 与唯一 Environment 只读准入，各以正式 release 单次接入并报告 `listener_armed`。两次管理端登录核验均 HTTP 409；首轮未保存正文，第二轮等待 Active 后返回“桥接尚未就绪”，具体来源未确定。两轮均未采集或发送消息；manager 与 owner 退出码均为 0，QQ 响应并保留 bridge。私有记录分别在 ignored `local-evidence/feat003-acceptance-20261115/` 和 `local-evidence/feat003-acceptance-attempt2-20261115/`。先离线定位 NotReady，再按当次准入合同决定下一步；不在旧进程重接。
+
+GitNexus 首次变更检查报告 CRITICAL、511 条受影响流程；CLI 仅显示前 10 条，结果截断。后续重建索引并通过 MCP 保存全量结构化结果：4 文件、6 个符号、122 条流程、CRITICAL，未报告 partial/truncated；结果保留于本机 `local-evidence/feat003-acceptance-20261115/gitnexus-mcp-final.json`。图中跨语言推断仍有覆盖限制，不能把结果视为现场安全证明。`init.ps1 -Mode docs` 与 `git diff --check` 通过。
+
+2026-11-15 后续离线定位：`NotReady` 可由多个不同层级返回，第二轮没有足够日志确定其来源。`query_login` 上游 impact 为 HIGH；在 [qq_entry](crates/caligo-bridge/src/qq_entry.rs) 添加仅 `research` 构建启用的固定白名单诊断，未知/恶意字段归为固定 other 标签，不输出原始报告、身份或昵称，不修改查询结果与清理分支。隐私定向测试通过；标签扩展前 Windows `init.ps1 -Mode all` 通过，扩展后隐私测试与研究 release 重建通过。诊断版 EXE SHA-256 `875D02AF33739BDD618A395CE2AABEE970142A724185D8BB842F61C784E8DF79`，bridge `E539112CEBA9E96B9013288C74366BD1BC8F27CEE6D4EA747B2D9424C9A3F7CF`；基于 main 加本次研究诊断源码构建。诊断可能不覆盖 resident 预检或 broker 层的失败；缺标签时仍为 unknown。新现场仍需用户重启指定 A 和当次准入。
+
 2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。本机 Windows `init.ps1 -Mode default` 与锁定依赖的普通 release 构建通过；打包首次因 Windows Git 无法解析 WSL 工作树路径失败，显式指定工作树 Git 路径后通过。CI 和发布资产以 GitHub Release 为准；未运行现场验收。
 
 2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。
