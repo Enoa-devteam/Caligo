@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 观测候选离线对照：WPR/xperf 和 PMU 来源可见，但 LBR 采集未启动，本会话未提升；自建双线程同回调 workload 已确认两条独立间接调用和线程真值，首版调用点合并与正反验证均保留，详见 [progress](progress.md#current-state)。下一步先审查系统级采样隐私、会话所有权/清理、丢失和 TID 归属，再在满足权限及隔离条件的自建进程开展 LBR 校验；无法关联请求则保持 unknown，不对 QQ 使用未验证方案。未接入 QQ、未发送；PID `5384` 当次仍响应且 bridge 未映射，后续重新核验代次和准入，不重发旧样本。
+
 2026-11-15 feat-004 只读现场：用户重启后 PID `5384` 通过固定模块、backend、唯一 Environment 准入；只读进程内存核对 `sendMsg` 描述项的指针和名称，错误目标负例拒绝。未加载 bridge、未发送，结束时 QQ 响应；详细 hash、首次工具错误及证据见 [progress](progress.md#current-state)。描述项不证明类注册或实际回调；继续先建立符合[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)的原生入口、对象关联及线程采集和离线负例，后续现场重核 PID/创建时间、模块、backend、唯一 Environment 和账号；旧授权单次样本不重发，未证寿命不热卸载。
 
 2026-11-15 feat-004 固定 hash 静态续核：sendMsg 命名 thunk → NodeIOperateCallback 引用对 → 虚槽 +0x118 → 候选 KernelMsgService → lambda 捕获 → callback 虚槽 +8 → 分派器，已在限定接收者类型及分支条件下逐指令/RTTI/栈布局核对；正反断言、首次算式错误和 hash 见 [progress](progress.md#current-state)。同 hash 的 `sendMsg` 属性表与 `napi_define_class` 初始化路径亦有条件静态核对；不证明实际接收者、类注册成功、现场执行、callback 线程或最终 owner/drain。后续先验证运行时接收者与可安全观测的线程合同；新现场须新鲜代次准入，不重发、不热卸载。
