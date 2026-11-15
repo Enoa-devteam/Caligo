@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 只读现场：用户重启后 PID `5384` 通过固定模块、backend、唯一 Environment 准入；只读进程内存核对 `sendMsg` 描述项的指针和名称，错误目标负例拒绝。未加载 bridge、未发送，结束时 QQ 响应；详细 hash、首次工具错误及证据见 [progress](progress.md#current-state)。描述项不证明类注册或实际回调；继续先建立符合[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)的原生入口、对象关联及线程采集和离线负例，后续现场重核 PID/创建时间、模块、backend、唯一 Environment 和账号；旧授权单次样本不重发，未证寿命不热卸载。
+
 2026-11-15 feat-004 固定 hash 静态续核：sendMsg 命名 thunk → NodeIOperateCallback 引用对 → 虚槽 +0x118 → 候选 KernelMsgService → lambda 捕获 → callback 虚槽 +8 → 分派器，已在限定接收者类型及分支条件下逐指令/RTTI/栈布局核对；正反断言、首次算式错误和 hash 见 [progress](progress.md#current-state)。同 hash 的 `sendMsg` 属性表与 `napi_define_class` 初始化路径亦有条件静态核对；不证明实际接收者、类注册成功、现场执行、callback 线程或最终 owner/drain。后续先验证运行时接收者与可安全观测的线程合同；新现场须新鲜代次准入，不重发、不热卸载。
 
 2026-11-15 feat-004 请求级轨迹群聊现场：用户授权后新根 `39500` 准入，登记群单次文本的 HTTP 发送/get_msg、持久账本和用户确认一条均通过；新解析器观察两批同一代次/序号，scope 与完整性仍为 unknown。manager/owner 正常停止、端口关闭，QQ 响应且保留 bridge；不重接、不热卸载或重发。证据、固定构建和解析器 hash 见 [progress](progress.md#current-state)。真实迟到、QQ native callback OS 线程和最终 owner/drain 仍待独立证据；新现场须新进程重新准入。
