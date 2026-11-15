@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 feat-004 阶段日志离线解析（起点 `e5bd754`）：新增 `scripts/analyze-text-send-trace.mjs`，只读解析 `append_stage` 双引号替换后的受限格式；严格验证字段、白名单、代次/序号范围、批次数和输入大小。无记录、明确 incomplete、畸形或超限返回 unknown，错误不输出原始日志；成功仅输出临时数字和固定阶段，始终标 `scope: unverified` 与 `completeness: unknown`。它不证明跨进程/环境关联、真实 callback 线程或报告未丢失。对 `feat004-scoped-trace-send-20261115/entry.private.jsonl` 只读复核得到两批、代次 1/序号 1 及已记录的八个阶段；原现场 runner 的误判与独立审计均保留。
+
+Node 测试新增 3 项；空数据、损坏/多余/重复字段、伪造阶段、零序号、明确 incomplete、条数/字节超限及敏感值不回显均覆盖；scope 标记回归先失败后通过。三组 Node tooling 合并 19 PASS / 2 SKIP，文档检查通过；缺失文件 CLI 返回 exit 2 和不含路径的 unknown。本轮仅离线处理，不接入 QQ、不发送或修改既有现场日志；feat-004 保持 in-progress。
+
 2026-11-15 feat-004 请求级诊断单次私聊现场（起点 `491221e`）：用户明确授权向登记好友 B 单次发送新标记并重启 QQ；新根 PID `50664`、创建 `2026-11-15T13:06:13.9041195Z`，固定 9.9.36-53644 manifest、模块 hash、PE/backend 审计及唯一 Environment（0 读失败）通过。使用 research EXE/bridge hash `048455F7F6FC68C7682FA8A380778E751419EF83B6685384C11F13FC8F89B83C` / `FD6EB1507200BFEA589263BCB13950E02EB5267DEA50EDECFF8D9A403B8771B7`，listener 与登记账号登录核验后单次发送。HTTP 发送和 `get_msg` 均 retcode 0，正文、账号、会话与持久 ID 匹配；用户确认 B 收到且仅收到一条、内容相符。
 
 独立审计核对同一请求 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、账本 native 身份和回读；两次轮询阶段均为同一 JS 代次 1 / 临时序号 1、`incomplete=false`，顺序为 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled。现场只有一个授权发送请求，序号与该请求的关联由该单请求采样条件和独立账本证据共同限定，不能泛化为多请求已现场验证。阶段日志 TID 匹配 listener owner/轮询线程，不等于 QQ native callback OS 线程。合成停止探针 pass；manager/owner 退出码 0、HTTP/SSE 端口关闭，QQ 响应且保留 bridge，不重接、不热卸载；不重发该消息。
