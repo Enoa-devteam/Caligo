@@ -24,13 +24,9 @@ env:
 
 jobs:
   test:
-    name: Windows x64 / ${{ matrix.mode }}
+    name: Windows x64 / formal bridge
     runs-on: windows-2025
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [default, research]
     defaults:
       run:
         shell: pwsh
@@ -46,8 +42,7 @@ jobs:
         run: rustup show active-toolchain
       - name: Fetch locked dependencies for offline tests
         run: cargo fetch --locked
-      - name: Verify docs and workspace contracts
-        run: ./.github/scripts/run-tests.ps1 -Mode ${{ matrix.mode }}
+      - name: Verify docs and formal bridge workspace contracts
+        run: ./.github/scripts/run-tests.ps1
       - name: Test capability tooling
-        if: matrix.mode == 'default'
         run: node --test scripts/check-snowcat-coverage.test.mjs scripts/extract-snowcat-capabilities.test.mjs

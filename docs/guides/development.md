@@ -28,8 +28,10 @@ Windows x64 + Rust MSVC 工具链；安装所需 Rust/Windows SDK 是环境准�
 
 [Test](../../.github/workflows/test.yml) 在面向 `main` 的 PR、`main` 推送、手动触发
 和 reusable 调用时运行。Windows 2025 x64 MSVC runner 使用仓库 toolchain 与 Node.js 24，
-先 `cargo fetch --locked` 准备干净 runner，再按 default/research 矩阵执行 init 离线测试；
-default 额外执行两份 Node capability tooling 测试。没有参考源码或指定 registry 二进制时，
+先 `cargo fetch --locked` 准备干净 runner，再由单个 `Windows x64 / formal bridge` 作业
+执行 `init.ps1 -Mode default` 和两份 Node capability tooling 测试。正式桥的命名管道、core 重启、
+文本编解码、原生 adapter 和模块指纹回归都在默认构建运行。研究探针的本地入口为
+`init.ps1 -Mode research`。没有参考源码或指定 registry 二进制时，
 Node 测试中的两项可选核验会 skip；这不构成参考源码完整性或现场验收证据。
 旧 bridge FFI fixture 使用共享静态对象，因此 CI 设置 `RUST_TEST_THREADS=1`，测试内部显式
 创建的并发线程照常执行。[runner 入口](../../.github/scripts/run-tests.ps1) 在当前测试进程
@@ -39,8 +41,8 @@ finally 恢复原默认 owner；不修改 DACL、不跳过账号隔离断言。�
 固定 SHA 的 capability inventory 通过 `.gitattributes` 使用 LF，防止 Windows checkout
 改变证据字节；CI 不重新生成清单或替换其预期 SHA。
 
-[Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用 Test 的
-default/research 两套测试，再构建一套普通 Windows x64 发布包。标签必须为 workspace
+[Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用同一个 Test
+作业，再构建一套普通 Windows x64 发布包。标签必须为 workspace
 版本的 `v<version>` 或 `v<version>-<prerelease>`。改版本时同步 Cargo manifests 和 lock
 后再打标签。手动运行上传保留 14 天的 Actions artifact。标签运行将同一 ZIP 和
 SHA-256 文件发布为 GitHub prerelease。
@@ -48,6 +50,8 @@ SHA-256 文件发布为 GitHub prerelease。
 `caligo-<版本>-windows-x64.zip` 内的唯一 EXE 为 `caligo.exe`。包还包含
 `caligo_bridge.dll`、README、LICENSE 和 build-info.json。build-info 记录源码 commit、
 工具链、target、research 开关和包内文件 SHA-256。启动方式见 [README](../../README.md#windows-release-启动)。
+正式 bridge 编译 owner、V8 适配、daemon 客户端及作用域查询。research feature 用于历史
+探针和其测试，已验证的托管链路在默认构建中运行。
 
 在干净的目标目录中复现同一发布包：
 

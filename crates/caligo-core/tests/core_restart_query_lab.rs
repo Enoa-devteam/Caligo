@@ -1,5 +1,4 @@
 //! Two actual caligod processes, one real bridge worker, synthetic owner only.
-#![cfg(feature = "research")]
 
 use std::io::BufRead;
 use std::path::Path;

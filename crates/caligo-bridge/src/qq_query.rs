@@ -40,8 +40,7 @@ pub fn is_supported(query: &HostQuery) -> bool {
 
 /// Verify the paths of the modules actually mapped in the current process.
 /// A caller-provided baseline label or installed version is insufficient.
-#[cfg(feature = "research")]
-pub(crate) fn matches_voice_profile(loaded_modules: &[String]) -> bool {
+pub fn matches_voice_profile(loaded_modules: &[String]) -> bool {
     use sha2::{Digest, Sha256};
     use std::path::Path;
 
@@ -911,7 +910,6 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(feature = "research")]
     #[test]
     fn voice_profile_rejects_missing_duplicate_and_wrong_modules() {
         assert!(!matches_voice_profile(&[]));

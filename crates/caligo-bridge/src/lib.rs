@@ -46,7 +46,6 @@ pub mod probe_code {
 pub mod asyncrun;
 #[cfg(feature = "research")]
 pub mod consumer_probe;
-#[cfg(feature = "research")]
 pub mod daemon_client;
 pub mod envrun;
 pub mod exec;
@@ -68,15 +67,10 @@ pub mod native_response;
 pub mod native_send_sink;
 pub mod native_session;
 pub mod obs;
-#[cfg(feature = "research")]
 pub mod qq_entry;
-#[cfg(feature = "research")]
 pub mod qq_query;
-#[cfg(feature = "research")]
 pub mod qq_v8;
-#[cfg(feature = "research")]
 mod query_diagnostics;
-#[cfg(feature = "research")]
 mod receive_diagnostics;
 pub mod register;
 pub mod resident;
@@ -176,6 +170,7 @@ fn wide_string_len(ptr: *const u16) -> Option<usize> {
 }
 
 fn collect_host_snapshot() -> (Vec<String>, bool) {
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, GetLastError};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW, TH32CS_SNAPMODULE,
     };
@@ -191,6 +186,7 @@ fn collect_host_snapshot() -> (Vec<String>, bool) {
         let mut entries = Vec::new();
         let mut entry: MODULEENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
+        let mut complete = false;
         if Module32FirstW(handle, &mut entry) != 0 {
             loop {
                 let len = entry
@@ -200,16 +196,19 @@ fn collect_host_snapshot() -> (Vec<String>, bool) {
                     .unwrap_or(entry.szExePath.len());
                 let path = String::from_utf16_lossy(&entry.szExePath[..len]);
                 let lowered = path.to_ascii_lowercase();
-                if lowered.contains("\\tencent\\") || lowered.ends_with(".node") {
+                if lowered.contains("\\tencent\\") || lowered.ends_with(".node")
+                    || lowered.ends_with("\\qqnt.dll")
+                {
                     entries.push(path);
                 }
                 if Module32NextW(handle, &mut entry) == 0 {
+                    complete = GetLastError() == ERROR_NO_MORE_FILES;
                     break;
                 }
             }
         }
         windows_sys::Win32::Foundation::CloseHandle(handle);
-        (entries, true)
+        (entries, complete)
     }
 }
 
@@ -617,7 +616,7 @@ pub unsafe extern "system" fn caligo_exec_run(ctx: *mut exec::ExecCtx) -> u32 {
 // ctx 布局与 CLI 加载器的写入序列一致(repr(C),8 字节对齐)。
 // ---------------------------------------------------------------------------
 
-/// 首入导出结果码(纯常量,两构建皆可引用;执行导出本身仍 research 门控)。
+/// Owner bootstrap and shutdown results.
 pub mod qq_entry_code {
     pub const OK: u32 = 0;
     pub const ERR_NULL_CTX: u32 = 1;
@@ -630,6 +629,7 @@ pub mod qq_entry_code {
     pub const ERR_UV_INIT: u32 = 0x14;
     pub const ERR_TIMEOUT: u32 = 0x15;
     pub const ERR_ALREADY: u32 = 0x16;
+    pub const ERR_UNSUPPORTED_PROFILE: u32 = 0x17;
     /// 关闭协议:未就绪。
     pub const ERR_SHUTDOWN_NOT_READY: u32 = 0x20;
     /// 关闭协议:超时(句柄保留,不冒充成功)。
@@ -637,7 +637,6 @@ pub mod qq_entry_code {
 }
 
 /// 首入参数块(加载器写入;指针字段位于本进程)。
-#[cfg(feature = "research")]
 #[repr(C)]
 pub struct QqEntryCtx {
     pub qqnt_base: usize,
@@ -645,7 +644,15 @@ pub struct QqEntryCtx {
     /// NUL 结尾 UTF-16 报告路径。
     pub report_path: usize,
     pub wait_s: u32,
-    pub _pad: u32,
+    pub mode: u32,
+}
+
+pub const QQ_MANAGED_ENTRY: u32 = 1;
+
+/// Loader-visible ABI marker for the profile-checked owner entry.
+#[no_mangle]
+pub extern "system" fn caligo_qq_managed_entry_abi() -> u32 {
+    QQ_MANAGED_ENTRY
 }
 
 /// 候选 B 首入(计划 §7-D7)。每宿主代次一次;重复调用返回 ERR_ALREADY。
@@ -654,7 +661,6 @@ pub struct QqEntryCtx {
 ///
 /// `ctx` 必须指向本进程内有效的 [`QqEntryCtx`](由加载器写入);
 /// `qqnt_base`/`env` 须经 loader 侧解析与 envscan 提供。
-#[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) -> u32 {
     use qq_entry::{EntryConfig, EntryError, bootstrap};
@@ -663,6 +669,21 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
     }
     // SAFETY: 调用方保证 ctx 有效(repr(C) 布局)。
     let view = unsafe { &*ctx };
+    match view.mode {
+        QQ_MANAGED_ENTRY => {
+            use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+            let name: Vec<_> = "QQNT.dll".encode_utf16().chain([0]).collect();
+            let host_base = unsafe { GetModuleHandleW(name.as_ptr()) } as usize;
+            let (modules, complete) = collect_host_snapshot();
+            if host_base == 0 || host_base != view.qqnt_base || !complete
+                || !qq_query::matches_voice_profile(&modules)
+            {
+                return qq_entry_code::ERR_UNSUPPORTED_PROFILE;
+            }
+        }
+        0 if gate::research_enabled() => {}
+        _ => return gate::ERR_RESEARCH_DISABLED,
+    }
     if view.report_path == 0 {
         return qq_entry_code::ERR_BAD_PATH;
     }
@@ -753,7 +774,6 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
 
 /// 关闭协议(计划 §6.7:owner 线程 uv_close,等待关闭回调)。
 /// 超时返回 ERR_SHUTDOWN_TIMEOUT —— 句柄保留,不冒充成功。
-#[cfg(feature = "research")]
 #[no_mangle]
 pub extern "system" fn caligo_qq_entry_shutdown(wait_ms: u32) -> u32 {
     use qq_entry::EntryError;
@@ -775,7 +795,6 @@ pub extern "system" fn caligo_qq_entry_shutdown(wait_ms: u32) -> u32 {
 }
 
 /// daemon client 启动结果码。
-#[cfg(feature = "research")]
 pub mod daemon_client_code {
     pub const OK: u32 = 0;
     pub const ERR_NULL_CFG: u32 = 1;
@@ -787,7 +806,6 @@ pub mod daemon_client_code {
 
 /// daemon client 的 JSON 配置(caligo-cli 写入):
 /// `{"pipe_name":"...","auth_token":"...","session_generation":1,"account":"...","module_baseline":"..."}`
-#[cfg(feature = "research")]
 static DAEMON_CFG: std::sync::Mutex<Option<qq_entry::DaemonStartup>> = std::sync::Mutex::new(None);
 
 /// 启动常驻 daemon 客户端(bootstrap 成功后调用;每代次一次)。
@@ -802,7 +820,6 @@ static DAEMON_CFG: std::sync::Mutex<Option<qq_entry::DaemonStartup>> = std::sync
 /// # Safety
 ///
 /// `cfg_json_ptr` 须指向本进程内有效 NUL 结尾 UTF-8 缓冲。
-#[cfg(feature = "research")]
 #[no_mangle]
 pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const u8) -> u32 {
     use daemon_client_code as c;
@@ -838,6 +855,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     ) else {
         return c::ERR_BAD_CFG;
     };
+    let (modules, complete) = collect_host_snapshot();
+    if !complete || !qq_query::matches_voice_profile(&modules) {
+        return c::ERR_NOT_BOOTSTRAPPED;
+    }
     let session_generation = v
         .get("session_generation")
         .and_then(|x| x.as_u64())
@@ -849,7 +870,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         .and_then(|x| x.as_str())
         .and_then(|h| usize::from_str_radix(h.strip_prefix("0x").unwrap_or(h), 16).ok())
         .unwrap_or(0);
-    if qqnt_base != 0 {
+    if qqnt_base == 0 || qqnt_base != qq_entry::qqnt_base() || !qq_entry::is_ready() {
+        return c::ERR_NOT_BOOTSTRAPPED;
+    }
+    {
         let rp = get("report_path").unwrap_or_default();
         if !crate::qq_v8::store_symbols(qqnt_base, &rp) {
             eprintln!("[qq-daemon] V8 符号解析失败(监听器不可用)");
@@ -1018,7 +1042,6 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
 }
 
 /// 宽字符串常驻缓冲(每代次一次登记;随进程回收 —— 单份固定资源,非逐请求泄漏)。
-#[cfg(feature = "research")]
 fn leaked_wide(mut wide: Vec<u16>) -> &'static [u16] {
     if let Some(pos) = wide.iter().position(|c| *c == 0) {
         wide.truncate(pos + 1);
@@ -1028,7 +1051,6 @@ fn leaked_wide(mut wide: Vec<u16>) -> &'static [u16] {
 
 /// daemon worker 计数取证(写入 bootstrap 登记的报告 JSONL)。
 /// 单参占位(CreateRemoteThread 需要参数;导出不读它)。
-#[cfg(feature = "research")]
 #[no_mangle]
 pub extern "system" fn caligo_qq_daemon_status(_reserved: usize) -> u32 {
     let counters = daemon_client::counters_snapshot();
@@ -1037,7 +1059,6 @@ pub extern "system" fn caligo_qq_daemon_status(_reserved: usize) -> u32 {
 }
 
 /// 把 NUL 结尾 UTF-16 指针读为 String(上限 32 KiB;失败返回 None)。
-#[cfg(feature = "research")]
 fn wide_ptr_to_string(p: *const u16) -> Option<String> {
     if p.is_null() {
         return None;
@@ -1070,6 +1091,23 @@ pub extern "system" fn DllMain(hinst: isize, reason: u32, _reserved: isize) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_entry_rejects_unidentified_host_before_using_ffi_addresses() {
+        let mut ctx = QqEntryCtx {
+            qqnt_base: usize::MAX,
+            env: usize::MAX,
+            report_path: usize::MAX,
+            wait_s: 1,
+            mode: QQ_MANAGED_ENTRY,
+        };
+        // SAFETY: ctx is valid; the test host lacks every pinned QQ module.
+        // Admission must return before accessing the sentinel pointers.
+        assert_eq!(
+            unsafe { caligo_qq_entry_bootstrap(&mut ctx) },
+            qq_entry_code::ERR_UNSUPPORTED_PROFILE,
+        );
+    }
 
     #[test]
     fn report_json_contains_handshake_fields() {

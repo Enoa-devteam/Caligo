@@ -190,6 +190,39 @@ pub struct AccountManager {
 }
 
 impl AccountManager {
+    /// The guided entry can start with an empty list on first run. An existing
+    /// configuration must always pass the normal validation and ACL checks.
+    pub(crate) fn load_for_selection(root: &Path) -> Result<Self> {
+        let root = prepare_root(root)?;
+        match fs::symlink_metadata(root.join("accounts.json")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+                root,
+                config: ManagerConfig {
+                    version: 1,
+                    accounts: Vec::new(),
+                },
+                running: BTreeMap::new(),
+            }),
+            _ => Self::new(&root, ManagerConfig::load(&root)?),
+        }
+    }
+
+    pub(crate) fn register_account(&mut self, account: u64) -> Result<()> {
+        let mut config = self.config.clone();
+        config.accounts.push(AccountSpec {
+            account,
+            data_dir: format!("qq-{account}"),
+            pipe_prefix: format!("caligo-{account}"),
+            // Existing bridge Hello protocol label. QQ module admission is
+            // performed independently by the loader on the designated host.
+            module_baseline: "qq-9.9.33-52230".into(),
+            expect_client_pid: 0,
+            ports: PortConfig::default(),
+        });
+        self.config = config.save_atomic(&self.root)?;
+        Ok(())
+    }
+
     pub fn new(root: impl AsRef<Path>, config: ManagerConfig) -> Result<Self> {
         config.validate()?;
         let root = prepare_root(root.as_ref())?;

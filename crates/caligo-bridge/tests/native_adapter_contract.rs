@@ -3,7 +3,6 @@
 //! 假宿主以与恢复 ABI 相同的 C 形状(repr(C) 布局、extern "system" 槽函数、
 //! callback move 协议、控制块计数)实现 QQ 侧对象模型 —— adapter 的
 //! unsafe 路径在此受试,零 QQ 依赖。真实入口在 G1 前不接线。
-#![cfg(feature = "research")]
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};

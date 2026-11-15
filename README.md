@@ -17,10 +17,19 @@
 ## Windows Release 启动
 
 下载并解压 `caligo-<版本>-windows-x64.zip`，在解压目录打开 PowerShell。
-运行 `.\caligo.exe --help` 查看入口。启动所需的参数和配置由子命令决定。
+首次使用运行 `.\caligo.exe manage`，打开终端显示的本机地址。用记事本打开终端提示的
+`management.token` 文件，复制内容到页面的「管理凭据」，然后添加或选择 QQ 号并点击「启动托管」。
+已准入的 QQ 桥接连接后，点击「核验 QQ 登录」确认接入的是所选账号。消息日志会自动刷新。
+终端用户可运行 `.\caligo.exe manage --terminal`，按提示添加或选择账号并查看消息。
+
+管理入口启动账号对应的 Caligo 服务。先在官方客户端登录 QQ，再按固定构建的准入流程，
+用同一个发布包里的 `caligo.exe` 和 `caligo_bridge.dll` 接入。
+运行 `.\caligo.exe --help` 可查看其他启动方式。
 
 | 用途 | 命令 |
 | --- | --- |
+| 在浏览器选择账号并查看日志 | `.\caligo.exe manage` |
+| 在终端选择账号并查看日志 | `.\caligo.exe manage --terminal` |
 | 启动单账号服务 | `.\caligo.exe daemon --pipe-prefix <name> --journal <path> --baseline <id> --account <uin>` |
 | 启动多账号管理 | `.\caligo.exe manager --root <私有配置目录的绝对路径>` |
 | 使用媒体工具 | `.\caligo.exe media --help` |

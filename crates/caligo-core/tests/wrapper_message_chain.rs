@@ -1,5 +1,4 @@
 //! Offline production D8 script -> owner decoder -> resident -> IPC -> daemon journal.
-#![cfg(feature = "research")]
 
 use caligo_bridge::daemon_client::{event_payload, DaemonClientConfig};
 use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};

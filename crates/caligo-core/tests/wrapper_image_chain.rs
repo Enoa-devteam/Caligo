@@ -1,5 +1,5 @@
 //! Real Windows pipes and production D8 decoding, using synthetic PNG metadata only.
-#![cfg(all(windows, feature = "research"))]
+#![cfg(windows)]
 
 use caligo_bridge::daemon_client::{event_payload, DaemonClientConfig};
 use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};

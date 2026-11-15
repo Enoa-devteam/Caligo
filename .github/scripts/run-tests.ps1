@@ -1,9 +1,5 @@
 [CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet('default', 'research')]
-    [string]$Mode
-)
+param()
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -53,7 +49,7 @@ try {
     if ($owner.Value -ne $identity.User.Value) { throw 'Runner file owner does not match current user' }
     Remove-Item -LiteralPath $probe
     Write-Host 'Runner current-user file ownership preflight passed; original ACL assertions remain enabled.'
-    & (Join-Path $PSScriptRoot '../../init.ps1') -Mode $Mode
+    & (Join-Path $PSScriptRoot '../../init.ps1') -Mode default
     $testExit = $LASTEXITCODE
 }
 finally {

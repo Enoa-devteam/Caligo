@@ -2,6 +2,24 @@
 
 ## Current State
 
+2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 将 GitHub Test 收敛为单个 `Windows x64 / formal bridge` 作业。PR、main、手动调用与 Release 复用同一默认 Windows x64 流程。桥接命名管道、core 重启、文本编解码、合成原生 adapter 和版本指纹拒绝测试均纳入默认构建，Node capability tooling 在同一作业执行。研究诊断保留本地 `init.ps1 -Mode research` 入口。
+
+本机用与 CI 一致的环境执行 `.github/scripts/run-tests.ps1`，文件 owner 预检与默认全仓通过，其中 daemon client 9/9、core 重启 2/2、原生 adapter 7/7、文本编解码 4/4，版本指纹拒绝用例通过。Node tooling 16 PASS、2 个依赖外部输入的 SKIP。YAML 结构检查确认 Release 的打包依赖同一个可复用 Test 作业。[开发与验证指南](docs/guides/development.md#github-actions-test--release)
+
+2026-11-15 正式桥统一在 `codex/unified-qq-bridge` 落地。普通发布构建包含 QQ owner pump、V8 适配、daemon 客户端和查询。正式 CLI 验证指定 PID 的创建时间、DLL 接口、QQ 9.9.36-53644 的已加载模块指纹和唯一 Environment，bridge 在宿主内复核模块指纹与基址。旧注入式诊断继续受 research 门控。[正式接入说明](docs/guides/management-ui.md#接入-qq-与核验)
+
+正式桥 FIELD 样本使用 `4f9aaf4` 的同一个普通 release `caligo.exe` 启动管理器、加载桥、随后停止 owner。EXE SHA-256 为 `5F4B90E4CB9AFC8DF461A5C74DA7EE2FDE39BABF130FD19B7392957017508AEE`，bridge SHA-256 为 `7B1CD538A4E010E287C2366E6E2DEB46C8115ED989BD78566A769E1D678258BE`。操作者重启并指定 A，PE/backend 审计及精确模块哈希通过。Edge 管理页只启动 A，监听就绪和 LoginInfo 核验通过。用户从登记 B 发一条私聊，页面出现唯一记录，消息 ID、发送方、会话和正文与 A 的持久账本一致。切到未启动的 B 后页面清空日志。manager 与 owner 退出码均为 0，管理端口关闭，QQ 保持响应并保留 bridge。本机原始证据位于 ignored `local-evidence/unified-bridge-field-20261115-*`。
+
+普通和研究全仓测试均使用 `--locked --offline` 串行通过。首次研究编译发现旧 UID-map 探针关闭调用缺少新参数，修复后全仓复验通过。默认构建覆盖无确认、过期进程及未识别宿主的拒绝路径。普通 Windows x64 release 构建与 PE 导出核对通过，历史 `inject` 仍返回门控码 3。本次现场范围为 Web UI 的登录和一条私聊入站，正式终端路径保留离线验证，feat-010 保持 in-progress。
+
+2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 补测 QQ 9.9.36-53644 固定构建。源码为 `c0ba200`，普通 release 管理器和同源受控桥接构建分开启动，bridge SHA-256 为 `2A151396FFBA8F210E029AB332B524F00CC32B5514B8EC195274C685966F98CF`。操作者重启并指定测试账号 A，按精确模块哈希、PE/backend 审计、唯一 Environment 和进程代次准入。Edge 管理页只启动选中的 A。确认 `listener_armed` 后，页面通过 `LoginInfo` 核验当前登录账号。
+
+登记 B 向 A 发一条私聊文本，页面自动出现唯一记录，发送者、会话、消息 ID 和正文与 A 的持久账本一致。切换至未启动的 B，页面清空 A 的日志，B 未创建账号凭据。通过页面关闭管理器，manager 和 owner 退出码均为 0，管理端口关闭，QQ 仍响应并保留已映射 bridge。此前一代因验收脚本过早读取监听就绪报告而提前停止，新一代等待就绪后通过。原始现场材料留在 ignored `local-evidence/account-startup-field-20261115-*`。本次 FIELD 范围为 Web UI 的单账号接入和单条私聊入站，终端保留 LAB 证据。feat-010 保持 in-progress。
+
+2026-11-15 在 v0.2.0 的 d1df5dc 基线上新增 `caligo.exe manage` 和 `manage --terminal`。首次可添加 QQ 号，启动时只启动显式选择的账号。两端均可发起一次当前连接的 LoginInfo 核验，并查看该账号账本最近 100 条消息预览。Web UI 在切换账号或锁定时清空当前日志。普通发布构建加载门控、原生准入及本阶段既有现场结论继续适用。[操作与接入指南](docs/guides/management-ui.md)
+
+本地验证：`management_http_lab` 8/8、`manager_smoke` 3/3，研究全仓和默认全仓通过。默认全仓首轮并行的 `onebot_private_send_lab` 以 0xC0000409 异常退出，保留原日志；同一工作树串行及再次并行均通过，独立 v0.2.0 原始基线同套件 5/5，异常原因未确定。锁定依赖的 Windows x64 release 构建通过，Edge 的桌面和窄屏页面与终端均使用该 EXE 完成真实命名管道上的合成身份核验及新消息显示。UI 样本含字面 HTML，终端样本含控制字符，均按普通消息文本显示。本地预览 ZIP 的四个文件及 SHA-256 已核对。未安排本次真实 QQ 验收。
+
 2026-11-15 `main` 的 Caligo 发布版本更新为 `0.2.0`。`cargo update --workspace --offline` 同步了四个工作区包，Windows x64 锁定依赖 release 构建、打包、`caligo.exe --help`、五文件清单和 SHA-256 核对通过。下载资产及托管验证见 [v0.2.0 发布页](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)。QQ 现场能力范围见[第一阶段验收清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)。
 
 2026-11-15 Release 改为一套普通 Windows x64 ZIP 和 SHA-256。包内唯一 EXE 为 `caligo.exe`，子命令复用现有 daemon、账号管理、媒体和 CLI 实现，旧源码构建入口与 default/research 测试矩阵继续可用。启动入口见 [README](README.md#windows-release-启动)，打包见[开发指南](docs/guides/development.md#github-actions-test--release)。本机 `init.ps1 -Mode all`、actionlint、PowerShell 语法和 Node tooling（16 PASS、2 依赖外部输入的 SKIP）通过。独立核对 ZIP 根目录、两份 x64 PE、包内与 ZIP 的 SHA-256。从解压包实测 CLI 帮助、bridge 导出、默认门控、媒体帮助、manager 配置检查，以及合成账号 daemon 的 HTTP 鉴权、管道 Health 和正常 Stop。实际标签发布与 QQ 现场验收独立跟踪。

@@ -99,7 +99,6 @@ async function read(record) {
         .is_err());
 }
 
-#[cfg(feature = "research")]
 #[test]
 fn voice_download_waits_for_correlated_callback_and_verifies_owned_file() {
     use caligo_bridge::qq_v8::{D8_POLL_JS, D8_START_JS, D8_STOP_JS};

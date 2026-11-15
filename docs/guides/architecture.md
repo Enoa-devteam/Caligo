@@ -9,13 +9,13 @@
 | 模块 | 责任与源码入口 |
 |---|---|
 | caligo-model | 共享身份/事件模型、IPC v2/v3、帧与文本 wire；[lib.rs](../../crates/caligo-model/src/lib.rs)、[qq_wire/send.rs](../../crates/caligo-model/src/qq_wire/send.rs) |
-| caligo-bridge | QQ 进程内 ABI、句柄、研究入口与 resident；[lib.rs](../../crates/caligo-bridge/src/lib.rs)、[native_resident.rs](../../crates/caligo-bridge/src/native_resident.rs) |
+| caligo-bridge | QQ 进程内 ABI、owner pump、resident 与诊断入口；[lib.rs](../../crates/caligo-bridge/src/lib.rs)、[qq_entry.rs](../../crates/caligo-bridge/src/qq_entry.rs) |
 | caligo-core | 进程外 actor、journal、IPC、消息索引与 OneBot；[runtime.rs](../../crates/caligo-core/src/runtime.rs)、[daemon.rs](../../crates/caligo-core/src/daemon.rs) |
-| caligo-cli | 只读 PE/进程工具及受门控研究 loader；[lib.rs](../../crates/caligo-cli/src/lib.rs)、[winutil.rs](../../crates/caligo-cli/src/winutil.rs) |
+| caligo-cli | 只读 PE/进程工具、正式 bridge 接入与受门控诊断；[lib.rs](../../crates/caligo-cli/src/lib.rs)、[qqentry.rs](../../crates/caligo-cli/src/qqentry.rs) |
 
 [Cargo.toml](../../Cargo.toml) 是依赖权威；bridge 同时生成 rlib/cdylib。
-`caligo-core/research` 转发 `caligo-bridge/research`，默认门控由
-[gate.rs](../../crates/caligo-bridge/src/gate.rs) 决定。
+`caligo-core/research` 转发诊断 feature，历史探针门控由 [gate.rs](../../crates/caligo-bridge/src/gate.rs) 决定。
+正式 bridge 在两种构建中共用精确版本的 owner pump 与 IPC 实现。
 各源文件头中的 K1/K4 说明记录其起源；当前行为须读取实现与最新台账。
 
 ## 常驻发送路径

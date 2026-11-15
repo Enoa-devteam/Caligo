@@ -5,7 +5,6 @@
 //! `FIELD_NUMBERS_VERIFIED=false`)——本文件验证的是**逻辑层合同**
 //! (有界解码/身份不串/不伪造回执);字段级真实性在 G1/G2 拿到真实样本
 //! 后以 captured fixture 替换并复核。
-#![cfg(feature = "research")]
 
 use caligo_core::qq_protocol::identity::{classify_incoming, validate_pairing, SessionKind};
 use caligo_core::qq_protocol::receipt::{parse_send_receipt, SendReceipt};

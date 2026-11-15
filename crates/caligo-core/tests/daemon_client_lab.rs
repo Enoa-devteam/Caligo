@@ -1,11 +1,10 @@
-//! K4-D7b daemon_client LAB 集成测试(research 构建)。
+//! K4-D7b daemon_client LAB 集成测试。
 //!
 //! 真实 caligod daemon(core)+ 真实 bridge worker(管道客户端)对接:
 //! - 连接失败 → 退避重试 → 服务端就绪后接入(重连计数,**零 bootstrap 调用**);
 //! - Dispatch 全链:NativeStarted → resident 提交 → owner drain → SendResult
 //!   → actor 终态关联原生 ID → 控制面可查;
 //! - Stopped → worker 干净退出。
-#![cfg(feature = "research")]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};

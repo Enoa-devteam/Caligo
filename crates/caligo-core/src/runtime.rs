@@ -495,6 +495,14 @@ impl AccountActor {
         self.phase
     }
 
+    pub(crate) fn recent_messages(&self) -> Vec<crate::account_console::MessageRow> {
+        self.message_store
+            .iter()
+            .flat_map(|store| store.newest(crate::account_console::MESSAGE_LIMIT))
+            .map(crate::account_console::MessageRow::from)
+            .collect()
+    }
+
     pub fn degraded_reason(&self) -> Option<&str> {
         self.degraded_reason.as_deref()
     }

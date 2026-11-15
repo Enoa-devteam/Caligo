@@ -17,6 +17,10 @@
 
 ## 执行前与停止边界
 
+正式托管使用同一套发布版 EXE 与 bridge。正式 `qq-entry` 在加载前核验指定 QQ
+进程代次、已加载模块的固定哈希和唯一 Environment。bridge 在宿主内再次核对模块哈希与基址。
+PE/backend 审计和测试实例指定属于现场准入。历史诊断入口继续受 research 门控。
+
 1. 从本轮请求确认现场范围；文档或离线任务只执行对应工作。
 2. 核对固定 build/hash、当次实例身份及准入，记录 PID 与创建时间和选择依据。
 3. 按实际工作读取 [thread contract](../research/qq-native-thread-contract.md)、
