@@ -61,3 +61,7 @@ research 模式为每个已登记文本请求分配 JS 环境中本监听器代�
 自建 Python 进程使用 Windows `StartTraceW` 和 `ControlTraceW`，仅创建无 provider、无文件、无系统标志的 in-process private buffering 会话，按成功返回的句柄查询和停止；另一个实验中同名第二次启动返回 183，两个不同私有会话均可查询，停止第一个后第二个仍能查询，最后只按各自取得的句柄停止。实际 API 结果和本机脚本 hash 见 [progress](../../progress.md#current-state)。这验证当前 Windows/当前 token 下指定私有会话的正常及冲突样本，不证明系统 logger、PMC、LBR、跨进程数据、崩溃清理或其他身份隔离。后续系统级实现仍受上面的前置条件约束。
 
 微软 [StartTraceW 文档](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)建议使用能说明组件用途的稳定会话名，避免以随机名堆积跟踪会话；该建议与识别本次实际所有权是不同问题。会话名、GUID 或运行前的无冲突检查本身均不能证明所有权；遇到已存在会话不得仅凭同名停止，需独立核实后按合同处理。不得将进程内私有会话的观察外推为系统会话可以用相同方式安全恢复。
+
+### 无事件的具名系统会话尝试
+
+自建脚本配置描述性名称、非内核默认 GUID、system logger 与有界内存缓冲；`EnableFlags=0`，不配置 provider、文件、PMC、LBR 或 QQ。当前未提升 token 调用 `StartTraceW` 返回 `ERROR_ACCESS_DENIED`（5），没有取得句柄，因此没有调用 query/stop。四个模拟后端测试覆盖权限拒绝、同名冲突、成功且持有句柄和成功但句柄为空；前两者不得停止任何会话。实际系统会话的启动成功、同名冲突、按句柄清理及崩溃残留均未验证；权限允许也不自动满足此前的会话所有权、隐私、采集及恢复门。[StartTraceW 错误与权限说明](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)及本机脚本/结果 hash 见 [progress](../../progress.md#current-state)。

@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 feat-004 空具名 system logger 尝试（起点 `95f934c`）：当前 token 未提升；自建脚本以固定描述性名称、非默认 GUID、system logger 与有界 buffering 调用 `StartTraceW`，`EnableFlags=0`，不配置 provider、文件、PMC、LBR 或 QQ。Windows 返回 `ERROR_ACCESS_DENIED`（5），未取得句柄，也没有调用 query 或 stop；这不是系统会话成功、冲突或清理证据。四个模拟后端测试覆盖拒绝/同名冲突时绝不停止、成功返回句柄后的查询和停止、成功但零句柄不停止，均通过。结束后 `wpr -status` 未记录、`logman query -ets` 返回空列表，仅代表当次查询。微软 [StartTraceW 文档](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)列出访问拒绝和权限条件；权限提升本身不满足隐私、实际所有权、全局 PMC 冲突或异常清理合同。
+
+本机 ignored `local-evidence/feat004-etw-system-20261115/` 的脚本/模拟测试/结果 SHA-256 分别为 `9E892FB1828EF644B477CC56746405D9FA02D2FF6F820F012AD0FBEE28A4EFAE` / `40A8FE4AF9BCFE9A07AEB320D4889C02668FC3BC0D84B754E1D819994DA5A90A` / `0C4A383453F198D2DDF37FA9E6E03C12DE9C7D5176443D1D8149459E8F5B74FE`；脚本复用上一轮独立 ABI 声明。下一步先为异常终止与会话所有权准备可审计的恢复方案，再在具备权限、隔离和其余门条件下验证无事件系统会话；当前不启用采样或重试。本轮不接入 QQ、不发送，feat-004 保持 in-progress。
+
 2026-11-15 feat-004 进程内 ETW 所有权对照（起点 `6c76d9c`）：在自建 Python 进程中，仅用 `StartTraceW` 创建无 provider、无文件、无系统标志的 in-process private buffering 会话，`ControlTraceW` 用成功返回的句柄查询/停止，三项返回码均 0。另起同类自建隔离实验：第一个会话启动 0，同名第二次返回 183；另一个独立私有会话启动 0，两个查询均 0，停止第一个 0 后第二个查询仍为 0，最后按其自身句柄停止 0。没有启用事件 provider、system logger、PMC/LBR 或访问 QQ；不证明跨进程、系统级所有权、崩溃清理、采样或线程关联。结束后 `wpr -status` 报未记录，`logman query -ets` 返回空列表，只代表这两项当次查询结果。参照微软 [StartTraceW](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew) 的描述性稳定名称建议；已存在不能仅凭同名接管或停止。
 
 本机 ignored `local-evidence/feat004-etw-private-20261115/` 的单会话脚本/摘要、隔离脚本/摘要 SHA-256 分别为 `39E8FA1A720BF82B48721140D52B04CD33B081173454EBF9C711666887EBDCB1` / `38072EE0F7D07A52FF90FD3BC743E749C24422CE4CCA61543230B9FDD7825ADD` / `B777E0F29F45594D8A59D5266797912EDD435775B164A2BB07E6BF72A915492E` / `9689880B4459162B2FF524053A8E33279C13CC8CEED11D3B5DFDE749B31479B8`。隔离实验只停止成功返回并记录的句柄。下一步须独立验证具名系统会话、全局 PMC 冲突、异常终止清理和数据范围，不能把私有会话通过当成 LBR 准入；feat-004 保持 in-progress。
