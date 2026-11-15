@@ -1,14 +1,16 @@
 //! Local management HTTP/UI over the real AccountManager. No QQ attachment.
 //! The caller provisions the private manager credential; it is never config data.
 
+use crate::account_console::{connection_id, parse_account, recent_messages, verify_login};
 use crate::account_manager::{AccountManager, ManagerConfig};
-use crate::onebot::{StoreReader, ACTION_REGISTRY};
+use crate::onebot::ACTION_REGISTRY;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -328,7 +330,7 @@ fn handle(stream: &mut TcpStream, context: &Context) -> HttpResult<Response> {
             body: UI.replace("__NONCE__", &context.nonce),
         });
     }
-    let mut manager = loop {
+    let manager = loop {
         if context.stop.load(Ordering::Acquire) {
             return Err((503, "management stopping"));
         }
@@ -348,17 +350,16 @@ fn handle(stream: &mut TcpStream, context: &Context) -> HttpResult<Response> {
             }
         }
     };
-    route(&head, &bytes[head_end..], &mut manager, context)
+    route(&head, &bytes[head_end..], manager, context)
 }
 fn account_view(manager: &AccountManager, account: u64) -> Value {
-    let running = manager.running_accounts().contains(&account);
-    // StoreReader reports actor session state, not a proven QQ login observation.
-    let session_active = manager
-        .daemon(account)
-        .ok()
-        .and_then(|daemon| daemon.online_status());
+    let daemon = manager.daemon(account).ok();
+    let running = daemon.is_some();
+    let connection = daemon.as_deref().and_then(connection_id);
     json!({
-        "account": account.to_string(), "running": running, "session_active": session_active,
+        "account": account.to_string(), "running": running,
+        "session_active": daemon.as_ref().map(|_| connection.is_some()),
+        "connection_id": connection,
         "online": null, "online_reason": "QQ login not observed",
         "status": if running { "running" } else { "stopped" }
     })
@@ -366,7 +367,7 @@ fn account_view(manager: &AccountManager, account: u64) -> Value {
 fn route(
     head: &Head,
     body: &[u8],
-    manager: &mut AccountManager,
+    mut manager: MutexGuard<'_, AccountManager>,
     context: &Context,
 ) -> HttpResult<Response> {
     match (head.method.as_str(), head.path.as_str()) {
@@ -382,9 +383,30 @@ fn route(
                 .config()
                 .accounts
                 .iter()
-                .map(|spec| account_view(manager, spec.account))
+                .map(|spec| account_view(&manager, spec.account))
                 .collect();
             return Ok(success(json!({"accounts": accounts})));
+        }
+        ("POST", "/v1/accounts") => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Register {
+                account: String,
+            }
+            let form: Register = serde_json::from_slice(body)
+                .map_err(|_| (400, "请输入有效的 QQ 账号"))?;
+            let account = parse_account(&form.account).ok_or((400, "请输入有效的 QQ 账号"))?;
+            if !manager.running_accounts().is_empty() {
+                return Err((409, "请先停止正在运行的账号"));
+            }
+            if manager.config().accounts.iter().any(|spec| spec.account == account) {
+                return Err((409, "此 QQ 账号已添加"));
+            }
+            if manager.config().accounts.len() >= 128 {
+                return Err((409, "账号列表已满"));
+            }
+            manager.register_account(account).map_err(|_| (500, "无法保存账号配置"))?;
+            return Ok(success(account_view(&manager, account)));
         }
         ("GET", "/v1/config") => return Ok(success(json!(manager.config()))),
         ("PUT", "/v1/config") => {
@@ -428,11 +450,7 @@ fn route(
     if segments.len() != 5 || segments[1] != "v1" || segments[2] != "accounts" {
         return Err((404, "management route not found"));
     }
-    let id = segments[3];
-    if id.is_empty() || id.starts_with('0') || !id.bytes().all(|b| b.is_ascii_digit()) {
-        return Err((400, "invalid account id"));
-    }
-    let account: u64 = id.parse().map_err(|_| (400, "invalid account id"))?;
+    let account = parse_account(segments[3]).ok_or((400, "invalid account id"))?;
     if !manager
         .config()
         .accounts
@@ -442,6 +460,23 @@ fn route(
         return Err((404, "account not configured"));
     }
     match (head.method.as_str(), segments[4]) {
+        ("GET", "messages") => {
+            let daemon = manager.daemon(account).map_err(|_| (409, "请先启动此账号"))?;
+            drop(manager);
+            let messages = recent_messages(&daemon).map_err(|error| (500, error))?;
+            Ok(success(json!({"account":account.to_string(), "messages":messages})))
+        }
+        ("POST", "verify-login") => {
+            empty_body(body)?;
+            let daemon = manager.daemon(account).map_err(|_| (409, "请先启动此账号"))?;
+            drop(manager);
+            let (connection, nickname) = verify_login(&daemon, &context.stop)
+                .map_err(|error| (409, error))?;
+            Ok(success(json!({
+                "account":account.to_string(), "connection_id":connection,
+                "nickname":nickname
+            })))
+        }
         ("GET", "capabilities") => Ok(success(json!({
             "account": account.to_string(), "declared": ACTION_REGISTRY,
             "backend_state": "unknown", "advertised": null,
@@ -461,7 +496,7 @@ fn route(
                     .stop(account)
                     .map_err(|_| (500, "account stop or join failed"))?;
             }
-            Ok(success(account_view(manager, account)))
+            Ok(success(account_view(&manager, account)))
         }
         _ => Err((405, "method not allowed for management resource")),
     }
@@ -542,40 +577,4 @@ fn reply(stream: &mut TcpStream, context: &Context, response: Response) -> io::R
     Ok(())
 }
 
-const UI: &str = r##"<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Caligo · 本机管理</title><style nonce="__NONCE__">
-:root{color-scheme:dark;font:15px/1.6 system-ui,sans-serif;background:#10151e;color:#e4eaf3}*{box-sizing:border-box}
-body{margin:0}main{max-width:1080px;margin:40px auto;padding:0 24px}h1{font-size:30px;margin:0}h2{font-size:19px;margin:0 0 14px}
-p{color:#aebcd0}section{background:#192230;border:1px solid #314158;border-radius:12px;padding:24px;margin:20px 0}
-label{display:block;color:#c7d4e6;margin-bottom:8px}input,textarea,button{font:inherit;border:1px solid #50627c;border-radius:6px;padding:9px 13px}
-input,textarea{background:#0e1723;color:#e4eaf3}input{width:min(100%,560px)}button{background:#2c486b;color:white;cursor:pointer;margin:4px 8px 4px 0}
-button:hover{background:#3a5d87}button:disabled{opacity:.45;cursor:wait}textarea{width:100%;min-height:340px;font:13px/1.6 ui-monospace,monospace;tab-size:2;resize:vertical}
-.row{padding:14px 0;border-top:1px solid #314158;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-small{display:block;color:#aebcd0}#feedback{white-space:pre-wrap;overflow-wrap:anywhere;min-height:30px}#capabilities{white-space:pre-wrap;overflow-wrap:anywhere;color:#c7d4e6}
-.good{color:#8cdbb6}.bad{color:#ffb4ad}.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}@media(max-width:600px){main{margin:20px auto;padding:0 14px}section{padding:17px}h1{font-size:25px}}
-</style></head><body><main><header><h1>Caligo 本机管理</h1><p>账号进程、配置与能力声明。运行状态与 QQ 登录状态分别显示。</p></header>
-<section><h2>连接管理器</h2><label for="credential">管理凭据（本机私有 token 文件）</label><input id="credential" type="password" autocomplete="off" spellcheck="false" placeholder="输入 64 位十六进制凭据">
-<div class="toolbar"><button id="connect">连接并读取</button><button id="forget">清除凭据</button><button id="refresh">刷新账号</button><button id="shutdown">关闭管理器</button></div>
-<small>凭据仅在当前页面内存中使用，刷新页面后重新输入。</small><p id="feedback" role="status" aria-live="polite">尚未连接。请输入管理凭据。</p></section>
-<section><h2>账号状态</h2><div id="accounts">尚未读取账号。</div><pre id="capabilities"></pre></section>
-<section><h2>账号配置</h2><p>编辑实际 accounts.json 的 JSON 内容。所有账号停止后才可保存；保存成功后显示服务器落盘回读的配置。</p>
-<label for="config">配置 JSON</label><textarea id="config" spellcheck="false" aria-label="账号配置 JSON"></textarea>
-<div class="toolbar"><button id="load">读取配置</button><button id="save">保存并回读</button></div></section>
-<footer><p>核心 daemon 启动不代表 QQ 已登录。能力声明不代表后端已启用或现场验收通过。</p></footer></main>
-<script nonce="__NONCE__">
-'use strict';
-let token='';let busy=false;const byId=id=>document.getElementById(id);
-function feedback(text,ok=false){byId('feedback').textContent=text;byId('feedback').className=ok?'good':'bad';}
-async function api(path,method='GET',body){if(!token)throw new Error('请先输入管理凭据并连接。');const options={method,headers:{Authorization:'Bearer '+token},cache:'no-store',credentials:'omit',redirect:'error'};if(body!==undefined){options.headers['Content-Type']='application/json';options.body=body;}const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error('HTTP '+response.status+' · '+(data.error||'请求失败'));return data;}
-function renderAccounts(data){const box=byId('accounts');box.replaceChildren();for(const account of data.accounts){const row=document.createElement('div');row.className='row';const label=document.createElement('div');const title=document.createElement('strong');title.textContent='账号 '+account.account;const state=document.createElement('small');state.textContent='核心 '+(account.running?'运行中':'已停止')+' · QQ '+(account.online===true?'在线':account.online===false?'离线':'未知');label.append(title,state);const controls=document.createElement('div');for(const [action,caption] of [['start','启动'],['stop','停止'],['capabilities','查看能力']]){const button=document.createElement('button');button.textContent=caption;button.disabled=busy;button.addEventListener('click',()=>run(async()=>{const path='/v1/accounts/'+encodeURIComponent(account.account)+'/'+action;if(action==='capabilities'){const result=await api(path);byId('capabilities').textContent='账号 '+result.account+' · 后端 '+result.backend_state+'\n'+result.declared.map(item=>item.name+' ['+item.permission+']').join('\n');feedback('能力声明已读取；后端广告状态为 '+result.backend_state,true);}else{const result=await api(path,'POST','{}');await refresh();feedback('账号 '+result.account+' · 核心 '+result.status+' · QQ '+(result.online===true?'在线':result.online===false?'离线':'未知'),true);}}));controls.append(button);}row.append(label,controls);box.append(row);}}
-async function refresh(){renderAccounts(await api('/v1/accounts'));}
-async function load(){byId('config').value=JSON.stringify(await api('/v1/config'),null,2);}
-async function run(task){if(busy)return;busy=true;document.querySelectorAll('button').forEach(button=>button.disabled=true);try{await task();}catch(error){feedback(error.message);}finally{busy=false;document.querySelectorAll('button').forEach(button=>button.disabled=false);}}
-byId('connect').addEventListener('click',()=>run(async()=>{token=byId('credential').value.trim();byId('credential').value='';await refresh();await load();feedback('已连接，账号与实际配置已读取。',true);}));
-byId('forget').addEventListener('click',()=>{token='';byId('credential').value='';byId('config').value='';byId('accounts').textContent='凭据已清除。';byId('capabilities').textContent='';feedback('管理凭据已从页面内存清除。',true);});
-byId('refresh').addEventListener('click',()=>run(async()=>{await refresh();feedback('账号状态已刷新。',true);}));
-byId('shutdown').addEventListener('click',()=>run(async()=>{await api('/v1/shutdown','POST','{}');token='';byId('config').value='';byId('accounts').textContent='管理器已关闭，所有账号已停止。';byId('capabilities').textContent='';feedback('管理器已关闭。重新使用需从本机命令启动。',true);}));
-byId('load').addEventListener('click',()=>run(async()=>{await load();feedback('实际配置已读取。',true);}));
-byId('save').addEventListener('click',()=>run(async()=>{const body=byId('config').value;JSON.parse(body);const saved=await api('/v1/config','PUT',body);byId('config').value=JSON.stringify(saved,null,2);await load();await refresh();feedback('配置已原子保存并回读。',true);}));
-</script></body></html>"##;
+const UI: &str = include_str!("management_ui.html");

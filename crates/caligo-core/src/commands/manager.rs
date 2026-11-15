@@ -3,18 +3,20 @@
 //! This binary owns only core daemons and loopback OneBot listeners. It never
 //! attaches QQ and never writes authentication material to stdout.
 
+use crate::account_console::{connection_id, parse_account, recent_messages, verify_login};
 use crate::account_manager::{AccountManager, ManagerConfig, PortConfig};
 use crate::daemon::Daemon;
 use crate::management_http::{ManagementHttpConfig, ManagementHttpServer};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{self, BufRead, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static CTRL_STOP: AtomicBool = AtomicBool::new(false);
 
@@ -28,6 +30,7 @@ struct Args {
     check: bool,
     set_config: Option<PathBuf>,
     management_bind: Option<SocketAddr>,
+    select: bool,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -35,6 +38,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut check = false;
     let mut set_config = None;
     let mut management_bind = None;
+    let mut select = false;
     let mut index = 0;
     while index < raw.len() {
         match raw[index].as_str() {
@@ -43,6 +47,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 root = raw.get(index).map(PathBuf::from);
             }
             "--check" => check = true,
+            "--select" => select = true,
             "--set-config" => {
                 index += 1;
                 set_config = raw.get(index).map(PathBuf::from);
@@ -78,6 +83,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         check,
         set_config,
         management_bind,
+        select,
     })
 }
 
@@ -311,8 +317,174 @@ fn install_ctrl_handler() {
     }
 }
 
+pub fn guided_entry(args: &[String]) {
+    let mut terminal = false;
+    let mut root = None;
+    let mut args = args.iter().map(String::as_str);
+    while let Some(arg) = args.next() {
+        match arg {
+            "-h" | "--help" => {
+                println!("用法：caligo.exe manage [--terminal] [--root <私有目录的绝对路径>]");
+                println!("默认使用 Web UI。使用 --terminal 在终端选择账号和查看消息。");
+                return;
+            }
+            "--terminal" => terminal = true,
+            "--root" => {
+                root = args.next().map(PathBuf::from);
+                if root.is_none() {
+                    eprintln!("--root 需要私有目录的绝对路径。");
+                    std::process::exit(2);
+                }
+            }
+            _ => {
+                eprintln!("未知选项。请运行 caligo.exe manage --help。");
+                std::process::exit(2);
+            }
+        }
+    }
+    let Some(root) = root.or_else(|| {
+        std::env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("Caligo"))
+    }) else {
+        eprintln!("无法找到本机数据目录。请用 --root 指定私有目录。");
+        std::process::exit(2);
+    };
+    let mut options = vec!["--select".into(), "--root".into(), root.to_string_lossy().into_owned()];
+    if !terminal {
+        options.extend(["--management-bind".into(), "127.0.0.1:0".into()]);
+    }
+    entry(&options);
+}
+
+fn select_account(manager: &mut AccountManager) -> io::Result<Option<u64>> {
+    let mut input = io::stdin().lock();
+    let mut line = String::new();
+    loop {
+        eprintln!("\nCaligo · 选择要托管的 QQ");
+        if manager.config().accounts.is_empty() {
+            eprintln!("还没有账号。输入 a 添加 QQ。");
+        }
+        for (index, spec) in manager.config().accounts.iter().enumerate() {
+            eprintln!("  {}. QQ {}", index + 1, spec.account);
+        }
+        eprint!("输入列表序号启动，a 添加账号，q 退出 > ");
+        io::stderr().flush()?;
+        line.clear();
+        if input.read_line(&mut line)? == 0 || line.trim().eq_ignore_ascii_case("q") {
+            return Ok(None);
+        }
+        if line.trim().eq_ignore_ascii_case("a") {
+            eprint!("输入 QQ 号，留空返回 > ");
+            io::stderr().flush()?;
+            line.clear();
+            if input.read_line(&mut line)? == 0 {
+                return Ok(None);
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            match parse_account(line.trim()) {
+                Some(account) if manager.config().accounts.iter().any(|spec| spec.account == account) => {
+                    eprintln!("此 QQ 账号已添加。");
+                }
+                Some(account) if manager.register_account(account).is_ok() => {
+                    eprintln!("QQ {account} 已添加。请选择要启动的账号。");
+                }
+                Some(_) => eprintln!("无法保存账号配置。"),
+                None => eprintln!("请输入有效的 QQ 号。"),
+            }
+            continue;
+        }
+        let selected = line.trim().parse::<usize>().ok().and_then(|index| index.checked_sub(1));
+        if let Some(spec) = selected.and_then(|index| manager.config().accounts.get(index)) {
+            return Ok(Some(spec.account));
+        }
+        eprintln!("请选择列表中的序号。");
+    }
+}
+
+struct TerminalLog {
+    account: u64,
+    verify: Receiver<()>,
+    next_refresh: Instant,
+    connection: Option<String>,
+    last_message: i32,
+    initialized: bool,
+    read_error: bool,
+}
+
+impl TerminalLog {
+    fn new(account: u64) -> Self {
+        eprintln!("QQ {account} 的核心服务已启动。请等待已准入的 QQ 桥接连接。");
+        eprintln!("输入 v 回车核验当前登录。按 Ctrl+C 停止服务。");
+        eprintln!("该账号最近 100 条 Caligo 消息记录将显示在下方。");
+        let (tx, verify) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            for line in io::stdin().lock().lines().map_while(Result::ok) {
+                if line.trim().eq_ignore_ascii_case("v") {
+                    let _ = tx.try_send(());
+                }
+            }
+        });
+        Self {
+            account,
+            verify,
+            next_refresh: Instant::now(),
+            connection: None,
+            last_message: 0,
+            initialized: false,
+            read_error: false,
+        }
+    }
+
+    fn poll(&mut self, daemon: &Daemon) {
+        if Instant::now() < self.next_refresh {
+            return;
+        }
+        self.next_refresh = Instant::now() + Duration::from_millis(750);
+        let connection = connection_id(daemon);
+        if connection != self.connection {
+            if connection.is_some() {
+                eprintln!("QQ 桥接已连接，输入 v 回车核验登录。");
+            } else {
+                eprintln!("QQ 桥接已断开，之前的登录核验已失效。");
+            }
+            self.connection = connection;
+        }
+        if self.verify.try_recv().is_ok() {
+            match verify_login(daemon, &CTRL_STOP) {
+                Ok((_, nickname)) => eprintln!("QQ {} 登录已核验 · {}", self.account, nickname.escape_debug()),
+                Err(error) => eprintln!("{error}"),
+            }
+        }
+        let messages = match recent_messages(daemon) {
+            Ok(messages) => messages,
+            Err(error) => {
+                if !self.read_error {
+                    eprintln!("{error}");
+                }
+                self.read_error = true;
+                return;
+            }
+        };
+        self.read_error = false;
+        if !self.initialized && messages.is_empty() {
+            eprintln!("暂无消息记录。");
+        }
+        if self.initialized && messages.last().is_some_and(|row| row.message_id > self.last_message.saturating_add(1)) {
+            eprintln!("日志更新较快，当前显示最近 100 条。");
+        }
+        let previous = self.last_message;
+        for row in messages.iter().rev().filter(|row| row.message_id > previous) {
+            let chat = if row.chat_type == "group" { "群聊" } else { "私聊" };
+            let sender = row.nickname.as_ref().or(row.sender.as_ref()).map_or("未知", String::as_str);
+            println!("#{} {chat} {} · {} · {}", row.message_id, row.peer.escape_debug(), sender.escape_debug(), row.preview.escape_debug());
+            self.last_message = row.message_id;
+        }
+        self.initialized = true;
+    }
+}
+
 pub fn entry(args: &[String]) {
-    install_ctrl_handler();
     let args = match parse_args(args) {
         Ok(args) => args,
         Err(error) => {
@@ -320,7 +492,7 @@ pub fn entry(args: &[String]) {
             std::process::exit(2);
         }
     };
-    let config = if let Some(input) = &args.set_config {
+    if let Some(input) = &args.set_config {
         let config = match read_config_file(input) {
             Ok(config) => config,
             Err(error) => {
@@ -338,39 +510,67 @@ pub fn entry(args: &[String]) {
                 std::process::exit(3);
             }
         }
+    }
+    let manager = if args.select && !args.check {
+        AccountManager::load_for_selection(&args.root).map_err(|_| {
+            eprintln!("[caligo-manager] 无法读取账号配置或打开私有目录。");
+            3
+        })
     } else {
-        match ManagerConfig::load(&args.root) {
+        let config = match ManagerConfig::load(&args.root) {
             Ok(config) => config,
             Err(_) => {
                 eprintln!("[caligo-manager] configuration load or validation failed");
                 std::process::exit(3);
             }
+        };
+        if args.check {
+            print_summary(&[], &config);
+            return;
         }
-    };
-    if args.check {
-        print_summary(&[], &config);
-        return;
-    }
-
-    let manager = match AccountManager::new(&args.root, config.clone()) {
-        Ok(manager) => Arc::new(Mutex::new(manager)),
-        Err(_) => {
+        AccountManager::new(&args.root, config).map_err(|_| {
             eprintln!("[caligo-manager] manager initialization failed");
-            std::process::exit(4);
-        }
+            4
+        })
     };
-    if manager.lock().expect("manager mutex poisoned").start_all().is_err() {
+    let mut manager = match manager {
+        Ok(manager) => manager,
+        Err(code) => std::process::exit(code),
+    };
+    let terminal_account = if args.select && args.management_bind.is_none() {
+        match select_account(&mut manager) {
+            Ok(Some(account)) => Some(account),
+            Ok(None) => return,
+            Err(error) => {
+                eprintln!("[caligo-manager] 无法读取终端输入：{error}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+    CTRL_STOP.store(false, Ordering::Release);
+    install_ctrl_handler();
+    let started = match terminal_account {
+        Some(account) => manager.start(account).map(|_| ()),
+        None if !args.select => manager.start_all(),
+        None => Ok(()),
+    };
+    if started.is_err() {
         eprintln!("[caligo-manager] account startup failed");
-        let _ = manager.lock().expect("manager mutex poisoned").shutdown();
+        let _ = manager.shutdown();
         std::process::exit(5);
     }
+    let config = manager.config().clone();
+    let manager = Arc::new(Mutex::new(manager));
 
     let mut listeners = BTreeMap::new();
     let initial_metadata;
     {
         let manager_guard = manager.lock().expect("manager mutex poisoned");
         let mut bound = Vec::new();
-        for spec in &config.accounts {
+        let running = manager_guard.running_accounts();
+        for spec in config.accounts.iter().filter(|spec| running.contains(&spec.account)) {
             match bind_account(&manager_guard, spec.account, &spec.ports) {
                 Ok(account) => bound.push(account),
                 Err(_) => {
@@ -382,7 +582,13 @@ pub fn entry(args: &[String]) {
                 }
             }
         }
-        initial_metadata = endpoint_summary(&bound, &config);
+        initial_metadata = if args.select {
+            let mut active = config.clone();
+            active.accounts.retain(|spec| running.contains(&spec.account));
+            endpoint_summary(&bound, &active)
+        } else {
+            endpoint_summary(&bound, &config)
+        };
         for account in bound {
             let account_id = account.account;
             let daemon = Arc::clone(&account.daemon);
@@ -432,10 +638,15 @@ pub fn entry(args: &[String]) {
     let mut metadata = initial_metadata;
     if let Some(server) = &management {
         metadata["management_endpoint"] = json!(format!("http://{}", server.local_addr()));
+        if args.select {
+            eprintln!("在浏览器打开 http://{}/", server.local_addr());
+            eprintln!("用记事本打开 {}，将文件内容粘贴到网页的「管理凭据」。", args.root.join("management.token").display());
+            eprintln!("按 Ctrl+C 可关闭管理器。");
+        }
     }
     // Endpoint metadata never contains account or management credentials.
     print_value(&metadata);
-    CTRL_STOP.store(false, Ordering::Release);
+    let mut terminal = terminal_account.map(TerminalLog::new);
 
     let mut listener_failure = false;
     loop {
@@ -444,6 +655,11 @@ pub fn entry(args: &[String]) {
             .is_some_and(|server| server.stop_flag().load(Ordering::Acquire));
         if CTRL_STOP.load(Ordering::Acquire) || management_stop {
             break;
+        }
+        if let Some(terminal) = &mut terminal {
+            if let Some(set) = listeners.get(&terminal.account) {
+                terminal.poll(&set.daemon);
+            }
         }
 
         let running: Vec<u64> = {

@@ -1,5 +1,15 @@
 # Session handoff
 
+## 2026-11-15 启动账号选择与消息日志
+
+工作分支 `codex/account-startup-message-log` 基于 v0.2.0。正常入口为
+`caligo.exe manage` 或 `caligo.exe manage --terminal`。代码接线在
+[manager](crates/caligo-core/src/commands/manager.rs) 和
+[管理 HTTP](crates/caligo-core/src/management_http.rs)，本地验证与首轮异常见[进度](progress.md#current-state)。
+下一步是使用受控的 research bridge 和新指定 QQ 实例，核对选中账号、真实构建准入、LoginInfo
+和私聊或登记群消息。在 QQ 官方客户端正常登录，沿用指定进程和 hash 门，结束后按原合同停止并保留 bridge。
+具体参数参见[本机管理指南](docs/guides/management-ui.md#接入-qq-与核验)。feat-010 保持 in-progress。
+
 ## 2026-11-15 Windows 发布 0.2.0
 
 `main` 已合并 [PR #8](https://github.com/Enoa-devteam/Caligo/pull/8) 的单 EXE 打包。版本由 workspace manifest 与锁文件统一，下载入口及托管验证见 [v0.2.0 发布页](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)。本地验证见 [progress](progress.md)，下次发布见[开发指南](docs/guides/development.md#github-actions-test--release)。现场实验继续按当前准入合同单独执行。

@@ -2,7 +2,11 @@
 #![cfg(windows)]
 
 use caligo_core::account_manager::{AccountManager, AccountSpec, ManagerConfig, PortConfig};
+use caligo_core::daemon::BridgeClient;
+use caligo_core::ipc::{BridgeMsg, CoreToBridgeMsg, EventPayload};
 use caligo_core::management_http::{ManagementHttpConfig, ManagementHttpServer};
+use caligo_model::capability::{HostQuery, LoginInfo, QueryCapability, QueryData, QueryOutcome, QueryScope};
+use caligo_model::ipc_v3::CAPABILITY_QUERY_REVISION;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -110,6 +114,96 @@ fn response(stream: &mut TcpStream) -> (u16, String) {
     assert!(headers.contains("frame-ancestors 'none'"));
     let code = headers.split_whitespace().nth(1).unwrap().parse().unwrap();
     (code, body.into())
+}
+
+#[test]
+fn selected_account_logs_follow_durable_messages_and_login_verifies_actual_result() {
+    let lab = Lab::new();
+    let eq = json!({});
+    let accounts = "/v1/accounts";
+    let first = "/v1/accounts/10001";
+    let messages = format!("{first}/messages");
+    let verify = format!("{first}/verify-login");
+    let start = format!("{first}/start");
+    let stop = format!("{first}/stop");
+    let exact_account = "9007199254740993";
+    let registered = lab.api("POST", accounts, Some(&json!({"account":exact_account})));
+    assert_eq!(registered.0, 200);
+    assert_eq!(registered.1["account"], exact_account);
+    assert_eq!(ManagerConfig::load(&lab.root).unwrap().accounts[2].account.to_string(), exact_account);
+    assert_eq!(lab.api("POST", accounts, Some(&json!({"account":exact_account}))).0, 409);
+    assert_eq!(lab.api("GET", &messages, None).0, 409);
+    assert_eq!(lab.api("POST", &start, Some(&eq)).0, 200);
+    assert_eq!(lab.manager.lock().unwrap().running_accounts(), vec![10001]);
+    assert_eq!(lab.api("POST", &verify, Some(&eq)).0, 409);
+    assert_eq!(lab.api("GET", &messages, None).1["messages"], json!([]));
+    let daemon = lab.manager.lock().unwrap().daemon(10001).unwrap();
+    let mut bridge = BridgeClient::connect(
+        &daemon.pipe_names().0, &daemon.auth_token(), "management-lab", 1, "10001",
+        "offline-http-lab", 12, "2026-11-15T00:00:00Z",
+    ).unwrap();
+    let scope = QueryScope {
+        account: "10001".into(), host_nonce: 12, session_generation: 1,
+        connection_epoch: daemon.connection_epoch(),
+    };
+    bridge.send(&BridgeMsg::QueryCapabilities {
+        revision: CAPABILITY_QUERY_REVISION, scope,
+        capabilities: vec![QueryCapability::LoginInfo],
+    }).unwrap();
+    bridge.send(&BridgeMsg::Event { event: EventPayload {
+        event_seq: 1,
+        session_generation: 1,
+        session: json!({"account":"10001","kind":"group","peer":"20001"}),
+        direction: "incoming".into(),
+        sender: "synthetic".into(),
+        native_id: "never-exposed-native-id".into(),
+        text: "<img src=x onerror=alert(1)> 测试消息".into(),
+        platform_time: Some(1700000000),
+        wrapper_message: None,
+        onebot_projection: Some(caligo_model::OneBotMessageProjection {
+            peer_id: 20001, sender_user_id: 9007199254740993, real_id: 77,
+            time: 1700000000, sender_nickname: Some("测试发送者".into()),
+            sub_type: Some("normal".into()), font: Some(0),
+        }),
+        observed_at_unix_ms: 1700000000000,
+        source: "recv".into(),
+    }}).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::EventAck { suppressed: false, .. }));
+    let (code, snapshot) = lab.api("GET", &messages, None);
+    assert_eq!(code, 200);
+    assert_eq!(snapshot, json!({"account":"10001", "messages":[{
+        "message_id":1, "time":1700000000, "chat_type":"group", "peer":"20001",
+        "sender":exact_account, "nickname":"测试发送者",
+        "preview":"<img src=x onerror=alert(1)> 测试消息"
+    }]}));
+    let address = lab.server.local_addr();
+    assert_eq!(lab.raw(&format!("GET {messages} HTTP/1.1\r\nHost: {address}\r\n\r\n")).0, 401);
+    let other = "/v1/accounts/10002";
+    assert_eq!(lab.api("POST", &format!("{other}/start"), Some(&eq)).0, 200);
+    assert_eq!(lab.api("GET", &format!("{other}/messages"), None).1["messages"], json!([]));
+    let host = std::thread::spawn(move || {
+        for user_id in ["10002", "10001"] {
+            let CoreToBridgeMsg::Query { request_id, scope, query: HostQuery::LoginInfo, .. } = bridge.recv().unwrap()
+            else { panic!("expected current-login query") };
+            bridge.send(&BridgeMsg::QueryResult {
+                request_id, scope, outcome: QueryOutcome::Success(QueryData::LoginInfo(LoginInfo {
+                    user_id: user_id.into(), nickname: "合成 QQ".into(), online: true
+                })),
+            }).unwrap();
+        }
+        bridge
+    });
+    assert_eq!(lab.api("POST", &verify, Some(&eq)).0, 409);
+    let (code, verified) = lab.api("POST", &verify, Some(&eq));
+    assert_eq!(code, 200);
+    assert_eq!(verified["nickname"], "合成 QQ");
+    assert_eq!(verified["connection_id"], lab.api("GET", accounts, None).1["accounts"][0]["connection_id"]);
+    drop(host.join().unwrap());
+    assert_eq!(lab.api("POST", &stop, Some(&eq)).0, 200);
+    assert_eq!(lab.api("GET", &messages, None).0, 409);
+    assert_eq!(lab.api("POST", &start, Some(&eq)).0, 200);
+    assert_eq!(lab.api("GET", &messages, None).1, snapshot, "the log replays the account ledger");
+    assert!(lab.api("GET", accounts, None).1["accounts"][0]["connection_id"].is_null());
 }
 
 #[test]
@@ -321,18 +415,20 @@ fn static_ui_uses_real_routes_and_memory_only_credentials() {
     ));
     assert_eq!(code, 200);
     for expected in [
-        "fetch(path,options)",
+        "fetch(path, options)",
         "/v1/accounts",
         "/v1/config",
         "/v1/shutdown",
-        "'start','启动'",
-        "'stop','停止'",
-        "'capabilities','查看能力'",
+        "accountPath('start')",
+        "accountPath('stop')",
+        "accountPath('capabilities')",
+        "accountPath('messages')",
+        "accountPath('verify-login')",
         "id=\"save\"",
         "id=\"config\"",
-        "Authorization:'Bearer '+token",
+        "Authorization: 'Bearer '+token",
         "textContent",
-        "await load();await refresh()",
+        "setInterval(() => void refresh()",
     ] {
         assert!(
             ui.contains(expected),

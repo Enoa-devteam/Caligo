@@ -439,6 +439,10 @@ impl MessageStore {
         self.by_id.get(&message_id)
     }
 
+    pub(crate) fn newest(&self, limit: usize) -> impl Iterator<Item = &StoredMessage> {
+        self.by_id.values().rev().take(limit)
+    }
+
     /// Resolve a OneBot ID only for an identity already persisted from a
     /// complete native message projection.
     pub fn message_id_for_identity(&self, identity: &MessageIdentity) -> Option<i32> {

@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 在 v0.2.0 的 d1df5dc 基线上新增 `caligo.exe manage` 和 `manage --terminal`。首次可添加 QQ 号，启动时只启动显式选择的账号。两端均可发起一次当前连接的 LoginInfo 核验，并查看该账号账本最近 100 条消息预览。Web UI 在切换账号或锁定时清空当前日志。普通发布构建加载门控、原生准入及本阶段既有现场结论继续适用。[操作与接入指南](docs/guides/management-ui.md)
+
+本地验证：`management_http_lab` 8/8、`manager_smoke` 3/3，研究全仓和默认全仓通过。默认全仓首轮并行的 `onebot_private_send_lab` 以 0xC0000409 异常退出，保留原日志；同一工作树串行及再次并行均通过，独立 v0.2.0 原始基线同套件 5/5，异常原因未确定。锁定依赖的 Windows x64 release 构建通过，Edge 的桌面和窄屏页面与终端均使用该 EXE 完成真实命名管道上的合成身份核验及新消息显示。UI 样本含字面 HTML，终端样本含控制字符，均按普通消息文本显示。本地预览 ZIP 的四个文件及 SHA-256 已核对。未安排本次真实 QQ 验收。
+
 2026-11-15 `main` 的 Caligo 发布版本更新为 `0.2.0`。`cargo update --workspace --offline` 同步了四个工作区包，Windows x64 锁定依赖 release 构建、打包、`caligo.exe --help`、五文件清单和 SHA-256 核对通过。下载资产及托管验证见 [v0.2.0 发布页](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)。QQ 现场能力范围见[第一阶段验收清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)。
 
 2026-11-15 Release 改为一套普通 Windows x64 ZIP 和 SHA-256。包内唯一 EXE 为 `caligo.exe`，子命令复用现有 daemon、账号管理、媒体和 CLI 实现，旧源码构建入口与 default/research 测试矩阵继续可用。启动入口见 [README](README.md#windows-release-启动)，打包见[开发指南](docs/guides/development.md#github-actions-test--release)。本机 `init.ps1 -Mode all`、actionlint、PowerShell 语法和 Node tooling（16 PASS、2 依赖外部输入的 SKIP）通过。独立核对 ZIP 根目录、两份 x64 PE、包内与 ZIP 的 SHA-256。从解压包实测 CLI 帮助、bridge 导出、默认门控、媒体帮助、manager 配置检查，以及合成账号 daemon 的 HTTP 鉴权、管道 Health 和正常 Stop。实际标签发布与 QQ 现场验收独立跟踪。

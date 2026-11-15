@@ -6,9 +6,10 @@ const USAGE: &str = "\
 Caligo for Windows
 
 Usage
+  caligo.exe manage [--terminal] [--root <absolute-private-root>]
   caligo.exe daemon --pipe-prefix <name> --journal <path> --baseline <id> --account <uin>
   caligo.exe manager --root <absolute-private-root> [--check] [--set-config <absolute-json>]
-                     [--management-bind <loopback-address>]
+                     [--select] [--management-bind <loopback-address>]
   caligo.exe media --config <absolute-json> <operation> --input <absolute-file>
   caligo.exe cli <command>
 
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         .map(|(command, rest)| (command.as_str(), rest))
     {
         None | Some(("-h" | "--help", [])) => print!("{USAGE}"),
+        Some(("manage", rest)) => manager::guided_entry(rest),
         Some(("daemon", rest)) => daemon::entry(rest, "caligo.exe daemon"),
         Some(("manager", rest)) => manager::entry(rest),
         Some(("media", rest)) => media::entry(rest, "caligo.exe media"),

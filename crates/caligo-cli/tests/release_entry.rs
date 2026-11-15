@@ -5,6 +5,16 @@ fn release_entry_routes_each_command() {
     for (args, code, expected) in [
         (&[][..], 0, "caligo.exe daemon"),
         (&["--help"][..], 0, "caligo.exe manager"),
+        (
+            &["manage", "--help"][..],
+            0,
+            "caligo.exe manage [--terminal]",
+        ),
+        (
+            &["manage", "--root", "relative"][..],
+            2,
+            "--root must be an absolute path",
+        ),
         (&["daemon"][..], 2, "caligo.exe daemon --pipe-prefix"),
         (
             &["manager", "--root", "relative"][..],

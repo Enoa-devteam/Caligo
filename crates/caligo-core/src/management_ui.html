@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caligo · QQ 托管</title>
+<style nonce="__NONCE__">
+:root {
+  color-scheme: dark;
+  font: 15px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #10141e;
+  color: #f3f5fc;
+  --panel: #181f2c;
+  --line: #30394d;
+  --muted: #b5bfd4;
+  --accent: #a8c2ff;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+main { max-width: 1160px; margin: auto; padding: 36px 28px; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 36px; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 32px; letter-spacing: -1px; line-height: 1.2; }
+h2 { font-size: 18px; }
+small, .muted, .hint { color: var(--muted); }
+small { display: block; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.mark { width: 30px; height: 30px; border-radius: 10px; background: #a8c2ff; color: #111a2c; display: grid; place-items: center; font-weight: 750; }
+.panel { border: 1px solid var(--line); border-radius: 18px; background: var(--panel); min-width: 0; }
+.subhead { padding: 20px; border-bottom: 1px solid var(--line); }
+.body { padding: 20px; }
+.grid { display: grid; grid-template-columns: minmax(250px, 305px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+button, input, textarea { font: inherit; color: inherit; }
+button {
+  cursor: pointer; border: 1px solid #4a5774; background: #232c3f; border-radius: 9px;
+  padding: 7px 12px; font-weight: 600; min-height: 38px;
+}
+button:hover { background: #313e57; }
+button.primary { background: var(--accent); color: #111a2c; border-color: transparent; }
+button.primary:hover { background: #c7d7ff; }
+button:disabled { opacity: .48; cursor: default; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+input, textarea { border: 1px solid #4a5774; background: #111725; border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0; }
+label { display: block; margin-bottom: 6px; font-weight: 600; }
+.entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+#login { max-width: 520px; margin-bottom: 18px; }
+#login p { margin: 0 0 16px; }
+#accounts { display: grid; gap: 8px; margin-bottom: 18px; }
+.account { text-align: left; width: 100%; background: #151b28; border-color: var(--line); padding: 10px 12px; overflow-wrap: anywhere; }
+.account[aria-pressed="true"] { border-color: var(--accent); background: #273755; }
+.aside-form { padding-top: 16px; border-top: 1px solid var(--line); }
+.view-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+#detail { overflow-wrap: anywhere; }
+.state { color: var(--accent); }
+#messages { padding: 0; list-style: none; margin: 12px 0 0; }
+#messages li { padding: 11px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+#messages li:last-child { border-bottom: 0; }
+.message-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--muted); font-size: .87rem; }
+.message-meta strong { color: var(--accent); }
+.message-text { margin-top: 4px; white-space: pre-wrap; }
+#feedback { margin-bottom: 14px; color: #fca9a4; }
+#feedback.good { color: #a6dfc2; }
+#log-status { min-height: 1.6em; overflow-wrap: anywhere; }
+details { margin-top: 18px; grid-column: 1 / -1; }
+summary { padding: 14px 20px; cursor: pointer; color: var(--muted); }
+details .body { padding-top: 0; }
+textarea { min-height: 180px; margin: 8px 0; font-family: Consolas, monospace; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  main { padding: 22px 14px; }
+  header { margin-bottom: 22px; align-items: start; flex-wrap: wrap; }
+  .grid { grid-template-columns: 1fr; gap: 14px; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="brand"><span class="mark" aria-hidden="true">C</span><h1>Caligo</h1></div>
+  <div id="session-controls" class="toolbar" hidden>
+    <button id="forget">锁定页面</button><button id="shutdown">关闭管理器</button>
+  </div>
+</header>
+<section id="login" class="panel" aria-labelledby="login-title">
+  <div class="subhead"><h2 id="login-title">连接本机管理器</h2></div>
+  <form id="login-form" class="body">
+    <p class="hint">从启动终端提示的 <code>management.token</code> 文件复制凭据。</p>
+    <label for="credential">管理凭据</label>
+    <div class="entry">
+      <input id="credential" type="password" autocomplete="off" spellcheck="false" required>
+      <button id="connect" class="primary">连接</button>
+    </div>
+  </form>
+</section>
+<p id="feedback" role="status"></p>
+<div id="workspace" class="grid" hidden>
+  <section class="panel" aria-labelledby="account-title">
+    <div class="subhead"><h2 id="account-title">选择 QQ 账号</h2></div>
+    <div class="body">
+      <div id="accounts" aria-label="QQ 账号列表"></div>
+      <form id="add-account" class="aside-form">
+        <label for="qq-number">添加 QQ 账号</label>
+        <div class="entry">
+          <input id="qq-number" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20" autocomplete="off" placeholder="输入 QQ 号" required>
+          <button id="register">添加</button>
+        </div>
+      </form>
+    </div>
+  </section>
+  <section class="panel" aria-labelledby="detail">
+    <div class="subhead view-head">
+      <div><h2 id="detail">消息日志</h2><p class="state" id="account-state"></p></div>
+      <div class="toolbar">
+        <button id="start" class="primary" hidden>启动托管</button>
+        <button id="verify" hidden>核验 QQ 登录</button>
+        <button id="stop" hidden>停止托管</button>
+      </div>
+    </div>
+    <div class="body">
+      <p id="log-status" class="hint" role="status">选择一个 QQ 账号以开始。</p>
+      <ol id="messages" aria-label="最近的消息"></ol>
+    </div>
+  </section>
+  <details class="panel">
+    <summary>高级配置和能力</summary>
+    <div class="body">
+      <label for="config">账号配置 JSON</label>
+      <p class="hint">停止所有账号后可以保存配置。</p>
+      <textarea id="config" spellcheck="false"></textarea>
+      <div class="toolbar">
+        <button id="load">读取配置</button><button id="save">保存并回读</button>
+        <button id="inspect">查看所选账号的能力</button>
+      </div>
+      <pre id="capabilities"></pre>
+    </div>
+  </details>
+</div>
+</main>
+<script nonce="__NONCE__">
+'use strict';
+const byId = id => document.getElementById(id);
+const messageList = byId('messages');
+let token = '';
+let accounts = [];
+let selected = '';
+let verification;
+let busy = false;
+let viewRevision = 0;
+let refreshing = false;
+let renderedAccounts = '';
+let renderedMessages = '';
+const logStatus = message => {
+  if (byId('log-status').textContent !== message) byId('log-status').textContent = message;
+};
+
+function feedback(text, ok = false) {
+  byId('feedback').textContent = text;
+  byId('feedback').className = ok ? 'good' : '';
+}
+
+async function api(path, method = 'GET', body, raw = false) {
+  const options = {method, headers: {Authorization: 'Bearer '+token},
+    cache: 'no-store', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(8000)};
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = body;
+  }
+  const response = await fetch(path, options);
+  const result = await response.text();
+  if (!response.ok) throw new Error(JSON.parse(result).error || '请求失败（' + response.status + '）');
+  return raw ? result : JSON.parse(result);
+}
+
+const selectedAccount = () => accounts.find(account => account.account === selected);
+const accountPath = (operation, account = selected) => '/v1/accounts/' + encodeURIComponent(account) + '/' + operation;
+
+function accountState(account) {
+  if (!account.running) return '已停止';
+  if (!account.session_active) return '等待 QQ 桥接';
+  if (verification?.account === account.account && verification.connection_id === account.connection_id) {
+    return '登录已核验 · ' + verification.nickname;
+  }
+  return '桥接已连接 · 待核验登录';
+}
+
+function renderAccounts() {
+  const snapshot = JSON.stringify([accounts, selected, verification]);
+  if (renderedAccounts !== snapshot) {
+    renderedAccounts = snapshot;
+    const rows = accounts.map(account => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'account';
+      button.setAttribute('aria-pressed', String(account.account === selected));
+      const number = document.createElement('strong');
+      const status = document.createElement('small');
+      number.textContent = 'QQ ' + account.account;
+      status.textContent = accountState(account);
+      button.append(number, status);
+      button.onclick = () => {
+        if (busy || selected === account.account) return;
+        select(account.account);
+        renderAccounts();
+        void refresh();
+        [...byId('accounts').children].find(row => row.getAttribute('aria-pressed') === 'true')?.focus();
+      };
+      return button;
+    });
+    if (rows.length) byId('accounts').replaceChildren(...rows);
+    else byId('accounts').textContent = '首次使用，请添加一个 QQ 号。';
+  }
+  const account = selectedAccount();
+  byId('detail').textContent = account ? 'QQ ' + selected + ' 的消息日志' : '消息日志';
+  byId('account-state').textContent = account ? accountState(account) : '';
+  byId('start').hidden = !account || account.running;
+  byId('stop').hidden = !account?.running;
+  byId('verify').hidden = !account?.session_active;
+  byId('register').disabled = busy || accounts.some(item => item.running);
+  if (!account) logStatus('选择一个 QQ 账号以开始。');
+  else if (!account.running) logStatus('点击「启动托管」以打开此账号的服务与消息日志。');
+  if (!account?.running) clearMessages();
+}
+
+function clearMessages() {
+  renderedMessages = '';
+  messageList.replaceChildren();
+}
+
+function select(account) {
+  viewRevision++;
+  selected = account;
+  byId('capabilities').textContent = '';
+  feedback('');
+  clearMessages();
+  logStatus('正在读取消息日志…');
+}
+
+const timeFormat = new Intl.DateTimeFormat('zh-CN', {dateStyle: 'short', timeStyle: 'medium'});
+function renderMessages(rows) {
+  const snapshot = JSON.stringify(rows);
+  if (snapshot !== renderedMessages) {
+    renderedMessages = snapshot;
+    messageList.replaceChildren(...rows.map(row => {
+      const item = document.createElement('li');
+      const meta = document.createElement('small');
+      meta.className = 'message-meta';
+      const kind = document.createElement('strong');
+      kind.textContent = (row.chat_type === 'group' ? '群聊' : '私聊') + ' ' + row.peer;
+      const sender = document.createElement('span');
+      sender.textContent = row.nickname || row.sender || '发送者未知';
+      const time = document.createElement('time');
+      time.textContent = row.time > 0 ? timeFormat.format(row.time * 1000) : '';
+      const text = document.createElement('p');
+      text.className = 'message-text';
+      text.textContent = row.preview;
+      meta.append(kind, sender, time);
+      item.append(meta, text);
+      return item;
+    }));
+  }
+  logStatus(rows.length ? '最近 ' + rows.length + ' 条本地记录 · 自动刷新' : '暂无本地消息记录。新消息会自动显示。');
+}
+
+async function refresh() {
+  if (!token || busy || refreshing) return;
+  refreshing = true;
+  const revision = viewRevision;
+  try {
+    const data = await api('/v1/accounts');
+    if (revision !== viewRevision) return;
+    accounts = data.accounts;
+    if (verification && !accounts.some(account => account.account === verification.account &&
+        account.connection_id === verification.connection_id)) verification = undefined;
+    if (selected && !selectedAccount()) select('');
+    renderAccounts();
+    if (!selectedAccount()?.running) return;
+    const logs = await api(accountPath('messages'));
+    if (revision === viewRevision && logs.account === selected) renderMessages(logs.messages);
+  } catch (error) {
+    if (revision === viewRevision) {
+      verification = undefined;
+      renderAccounts();
+      logStatus('无法刷新当前状态或消息。' + error.message);
+    }
+  } finally {
+    refreshing = false;
+  }
+}
+
+function showWorkspace(connected) {
+  byId('workspace').hidden = !connected;
+  byId('session-controls').hidden = !connected;
+  byId('login').hidden = connected;
+}
+
+function lockPage() {
+  token = '';
+  select('');
+  verification = undefined;
+  accounts = [];
+  byId('credential').value = '';
+  byId('config').value = '';
+  byId('qq-number').value = '';
+  renderAccounts();
+  showWorkspace(false);
+  byId('credential').focus();
+}
+
+async function run(task) {
+  if (busy) return;
+  busy = true;
+  viewRevision++;
+  const buttons = Array.from(document.querySelectorAll('button'));
+  buttons.forEach(button => button.disabled = true);
+  feedback('');
+  try { await task(); }
+  catch (error) { feedback(error.message); }
+  finally {
+    busy = false;
+    buttons.forEach(button => button.disabled = false);
+    renderAccounts();
+    void refresh();
+  }
+}
+
+byId('login-form').onsubmit = event => {
+  event.preventDefault();
+  void run(async () => {
+    token = byId('credential').value.trim();
+    byId('credential').value = '';
+    try { accounts = (await api('/v1/accounts')).accounts; }
+    catch (error) { lockPage(); throw error; }
+    showWorkspace(true);
+  });
+};
+byId('add-account').onsubmit = event => {
+  event.preventDefault();
+  void run(async () => {
+    const account = byId('qq-number').value.trim();
+    await api('/v1/accounts', 'POST', JSON.stringify({account}));
+    byId('qq-number').value = '';
+    accounts = (await api('/v1/accounts')).accounts;
+    select(account);
+    feedback('已添加 QQ ' + account + '。', true);
+  });
+};
+byId('start').onclick = () => run(async () => {
+  await api(accountPath('start'), 'POST', '{}');
+  accounts = (await api('/v1/accounts')).accounts;
+  feedback('核心已启动。请等待已准入的 QQ 桥接连接。', true);
+});
+byId('stop').onclick = () => run(async () => {
+  await api(accountPath('stop'), 'POST', '{}');
+  clearMessages();
+  if (verification?.account === selected) verification = undefined;
+  accounts = (await api('/v1/accounts')).accounts;
+  feedback('账号服务已停止。', true);
+});
+byId('verify').onclick = () => run(async () => {
+  verification = undefined;
+  verification = await api(accountPath('verify-login'), 'POST', '{}');
+});
+byId('forget').onclick = lockPage;
+byId('shutdown').onclick = () => run(async () => {
+  await api('/v1/shutdown', 'POST', '{}');
+  lockPage();
+  feedback('管理器已关闭。请从终端重新启动。', true);
+});
+byId('load').onclick = () => run(async () => {
+  byId('config').value = await api('/v1/config', 'GET', undefined, true);
+});
+byId('save').onclick = () => run(async () => {
+  const body = byId('config').value;
+  JSON.parse(body);
+  byId('config').value = await api('/v1/config', 'PUT', body, true);
+  feedback('配置已保存并回读。', true);
+});
+byId('inspect').onclick = () => run(async () => {
+  if (!selected) throw new Error('请先选择一个账号。');
+  const result = await api(accountPath('capabilities'));
+  byId('capabilities').textContent = '已声明动作（后端状态未知）\n' +
+    result.declared.map(item => item.name + ' [' + item.permission + ']').join('\n');
+});
+setInterval(() => void refresh(), 1500);
+</script>
+</body>
+</html>
