@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。发布验证及资产以 GitHub Release 和 CI 为准。
+2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。本机 Windows `init.ps1 -Mode default` 与锁定依赖的普通 release 构建通过；打包首次因 Windows Git 无法解析 WSL 工作树路径失败，显式指定工作树 Git 路径后通过。CI 和发布资产以 GitHub Release 为准；未运行现场验收。
 
 2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。
 
