@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 请求级轨迹群聊现场：用户授权后新根 `39500` 准入，登记群单次文本的 HTTP 发送/get_msg、持久账本和用户确认一条均通过；新解析器观察两批同一代次/序号，scope 与完整性仍为 unknown。manager/owner 正常停止、端口关闭，QQ 响应且保留 bridge；不重接、不热卸载或重发。证据、固定构建和解析器 hash 见 [progress](progress.md#current-state)。真实迟到、QQ native callback OS 线程和最终 owner/drain 仍待独立证据；新现场须新进程重新准入。
+
 2026-11-15 feat-004 阶段日志解析：`node scripts/analyze-text-send-trace.mjs <本机日志>` 只读解析固定白名单格式，异常、溢出或缺记录返回 unknown，成功也标范围未核验和完整性未知；新增测试纳入 Windows CI。已对上轮原始日志只读复核，测试与证据见 [progress](progress.md#current-state)。下一步继续独立研究实际 QQ callback OS 线程、最终 owner 和 drain；现场必须新代次准入，不重发旧消息、不热卸载。
 
 2026-11-15 feat-004 请求级轨迹单次现场：用户授权后新根 `50664` 准入并单次向登记 B 发送，HTTP 发送/get_msg、持久账本和用户确认一条均通过；两批轨迹同一代次/序号且完整。原 runner 因日志单引号误解析标 `trace_pass=false`，独立审计解析原日志通过，原结果保留。manager/owner 正常停止、端口关闭，QQ 响应且保留 bridge，不重接、不热卸载或重发。详见 [progress](progress.md#current-state)。下一步先改进离线日志解析与报告，并继续独立研究实际 QQ callback OS 线程及最终 owner/drain；新现场须新鲜代次准入。
