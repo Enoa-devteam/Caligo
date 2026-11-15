@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 LBR 对照准备：自建进程扩展 PID/创建时间、线程和 QPC 真值；独立 Windows API 核验代次及解析器正反测试通过。系统级隐私、独立会话所有权、全局 PMC 冲突、异常清理和时钟/丢失门已写入[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)，细节和本机产物 hash 见 [progress](progress.md#current-state)。尚无可安全启动的采集控制器，未启动 ETW；下一步先实现/离线验证会话与冲突控制，再在权限和隔离条件满足时对自建进程采集；不要使用默认内核 logger 清理，不对 QQ 使用未验证方案。
+
 2026-11-15 feat-004 观测候选离线对照：WPR/xperf 和 PMU 来源可见，但 LBR 采集未启动，本会话未提升；自建双线程同回调 workload 已确认两条独立间接调用和线程真值，首版调用点合并与正反验证均保留，详见 [progress](progress.md#current-state)。下一步先审查系统级采样隐私、会话所有权/清理、丢失和 TID 归属，再在满足权限及隔离条件的自建进程开展 LBR 校验；无法关联请求则保持 unknown，不对 QQ 使用未验证方案。未接入 QQ、未发送；PID `5384` 当次仍响应且 bridge 未映射，后续重新核验代次和准入，不重发旧样本。
 
 2026-11-15 feat-004 只读现场：用户重启后 PID `5384` 通过固定模块、backend、唯一 Environment 准入；只读进程内存核对 `sendMsg` 描述项的指针和名称，错误目标负例拒绝。未加载 bridge、未发送，结束时 QQ 响应；详细 hash、首次工具错误及证据见 [progress](progress.md#current-state)。描述项不证明类注册或实际回调；继续先建立符合[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)的原生入口、对象关联及线程采集和离线负例，后续现场重核 PID/创建时间、模块、backend、唯一 Environment 和账号；旧授权单次样本不重发，未证寿命不热卸载。

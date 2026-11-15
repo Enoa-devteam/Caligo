@@ -41,3 +41,11 @@ research 模式为每个已登记文本请求分配 JS 环境中本监听器代�
 5. 最终 owner、成功 wait 和全局 drain 需要独立的对象身份、持有/释放链与所有相关队列或生产者的闭合证据。只有进程正常退出可证明该进程代次结束，不能倒推退出前的全局静默。未闭合前 bridge 保留至 QQ 正常退出，不热卸载。
 
 停止隔离和线程观测互不替代；不追测已按用户决定排除的业务拒绝语义。feat-004 在其完成门与所需 ABI/线程/寿命证据闭合前保持 in-progress。
+
+## 2026-11-15 LBR 自建对照准备（未准入采集）
+
+本机 `xperf -help start` 的 `-Pids` 说明仅用于 heap tracing；不能把它当作 PMC/LBR 的进程过滤。系统采样可能包含其他进程的模块、地址、线程及活动信息，原始 ETL 和诊断输出应视作敏感本机证据，不放入仓库或上传。管理员权限与 CPU/计数器列表均不证明 LBR 支持、采集成功或数据已按测试进程过滤。微软资料：[系统跟踪会话](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-a-systemtraceprovider-session)、[停止跟踪](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/xperf/stopping-a-trace)、[LBR 采样](https://learn.microsoft.com/en-us/cpp/build/sample-profile-guided-optimization?view=msvc-170)。
+
+拟议对照仅针对自建 workload，现场 QQ 不在本步骤范围。采集前必须落实并验证：独立会话名称/标识和所有权；启动冲突、失败、控制器崩溃及超时的清理；既有第三方 ETW 会话不得停止或改配置；有限持续时间、缓存与文件容量；私有证据目录的访问控制；采样丢失与截断记录；时钟、进程代次及 TID 在样本中的可验证关联。`xperf -stop` 未指定名称或 `xperf -d` 未显式停止时会操作默认 kernel logger，不能用作无条件清理；具名 system logger 及 LBR/PMC 配置是否可用还须在隔离条件下验证，不能假设同名或会话句柄足以解决全局计数器冲突。尚未设计完控制器，不提供现场采集命令。
+
+自建样本输出 PID、FILETIME 创建时间、QPC 频率、两个线程的 TID/计数和 QPC 区间以及三处固定二进制 RVA；控制器在子进程存活时使用独立 `GetProcessTimes` 复核 PID/创建时间，严格解析并对错误代次、重复线程、无重叠、坏时间/计数和多余数据作负例。机器码独立核查两条间接调用。该真值仅对应自建进程：QPC 与实际 ETW 解码时间的换算、LBR 记录是否同一线程以及采样本身是否可靠均为 unknown，不能凭时间相近推断对象/请求或 QQ 行为。材料与哈希见 [progress](../../progress.md#current-state)。
