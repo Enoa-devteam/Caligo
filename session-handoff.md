@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 README 更新：基于 main `e99ea37c` 区分 v0.2.0 与当前源码入口，明确固定 QQ 构建和桥接准入；详见 [progress](progress.md)。本次不推进现场或 feature 状态。下次按用户任务及当前进度选择工作块。
+
 ## 2026-11-15 正式 bridge 统一
 
 `codex/unified-qq-bridge` 基于 PR #9 的工作分支。正式 `caligo.exe cli qq-entry` 通过当前 PID、创建时间、

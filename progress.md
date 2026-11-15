@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。
+
 2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 将 GitHub Test 收敛为单个 `Windows x64 / formal bridge` 作业。PR、main、手动调用与 Release 复用同一默认 Windows x64 流程。桥接命名管道、core 重启、文本编解码、合成原生 adapter 和版本指纹拒绝测试均纳入默认构建，Node capability tooling 在同一作业执行。研究诊断保留本地 `init.ps1 -Mode research` 入口。
 
 本机用与 CI 一致的环境执行 `.github/scripts/run-tests.ps1`，文件 owner 预检与默认全仓通过，其中 daemon client 9/9、core 重启 2/2、原生 adapter 7/7、文本编解码 4/4，版本指纹拒绝用例通过。Node tooling 16 PASS、2 个依赖外部输入的 SKIP。YAML 结构检查确认 Release 的打包依赖同一个可复用 Test 作业。[开发与验证指南](docs/guides/development.md#github-actions-test--release)
