@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-15 feat-004 固定映像发送回调静态续核（起点 `519b7ac`）：对 QQ 9.9.36-53644 `wrapper.node` SHA-256 `0D8B94448F4DAFE7337B88D6A568B004224C37FCBE2BD1142C1AF7624FBD534C`，按指令边界、RTTI、表项和 Windows x64 栈布局核对：带 `NodeIKernelMsgService::sendMsg` 断言字符串的函数 `0xFE181E`，经 `0xDAE487 → 0xDB8B3F` 构造指向 `NodeIOperateCallback` 候选对象及控制块的引用对，并将副本作为第六参数交给接收者虚槽 `+0x118`。`KernelMsgService` primary RTTI 候选该槽为 `0x329680`；**仅当**运行时接收者确为该候选、分支满足时，该实现将第六参数引用对复制到 `sendMsg` lambda 捕获 `+0x20/+0x28`。选定 lambda `0x3964BA` 调用捕获对象虚槽 `+8`；`NodeIOperateCallback` RTTI 候选该槽为 `0x22A0878`，后者进入已核对的分派函数 `0xC3F6CF`。这将原先彼此孤立的候选收窄为有条件的静态数据流，**不证明**现场 receiver 动态类型、类注册成功、该路径曾执行或实际 callback OS 线程。
+
+进一步核对同 hash 的类定义表：以 `0x41DDCF0` 为起点的 299 个 64-byte 条目中，第 34 项（从 0 计）将 `sendMsg` 与 thunk `0xFE181E` 配对；初始化函数将该表交给复制形状 helper，并把目标缓冲、299 项和 `NodeIKernelMsgService` 传至导入的 `napi_define_class`。这是条件静态类定义路径；复制、类注册是否成功以及现场 JS 对象实际选择均未观测。独立校验脚本/报告 SHA-256 `4DEB5BA156B3FD31D36376CB0728FFB0D3ECC24F71B02B78B0DFF91F23C65DA5` / `17CF4F98C22ED351CA24F5A8F4DA147DC69E97AAA761E98140AE5C91CBBB9B4B`；将 descriptor callback 改错的负例按预期失败，日志 SHA-256 `56514C9250E0209109ED2214A9B784E6B641F5B098C063DD3BBABFE9C8FE87C9`。这补充先前链路脚本中“未独立核对属性表”的历史限制，但不证明运行时行为。
+
+独立断言脚本与 JSON 摘要 SHA-256 `26D849F8E1B200A7870A4CBC8EC46953C09AC3D8A74C3A7F0E7654062D9D14AE` / `10BD806C576523EA86A2A31F395CDDE77D0C5FD28653EF2E78F81502C6D1B7D0`；故意把候选虚槽目标改错的负例按预期失败，日志 SHA-256 `E195F85586BD9FCC813F2451DB8182D0E1FBF4CD841CE2AAE230A2B2B7BB9973`。首次脚本另有一条错误的辅助算式断言，失败保留 `verify-sendmsg-callback-chain-before.log`；已删除该错误断言，保留并验证八次 push、栈分配、帧基址和独立正确的 entry-stack 算式。脚本/报告均在 ignored `local-evidence/feat004-muted-new-code-20261115/`；不对其它 hash 外推。本轮未接入 QQ、未发送；最终 owner、成功 wait、全局 drain 和历史 G3 合同仍开放，feat-004 保持 in-progress。
+
 2026-11-15 feat-004 请求级轨迹单次群聊现场（工作树 `089c613`，bridge 构建源 `491221e`）：用户正常重启测试 QQ 并明确授权向既定测试群 C 单次发送新标记；新根 PID `39500`、创建 `2026-11-15T13:31:30.1245341Z`，固定 9.9.36-53644 manifest、已加载模块 hash、PE/backend 审计与唯一 Environment（0 读失败）通过。listener 和登记账号登录核验后只发送一次；HTTP 发送和 `get_msg` 均 retcode 0，正文、发送账号、群会话及持久 ID 对应；用户确认群内收到且仅收到一条、内容相符。
 
 独立审计确认唯一请求 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、账本 native 身份和 HTTP 回读一致。使用 `089c613` 的白名单解析器（SHA-256 `8E864ABC375834285035230E6409555ED65FC76494A604DA3A7877347B58D091`）读取两批原始阶段日志，观察到同一 JS 代次 1 / 临时序号 1 的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，两批均未标 incomplete；输出仍保留 scope unverified / completeness unknown，结合本轮单请求与账本限定解释，不能泛化并发。阶段日志 TID 与 listener owner/轮询线程一致，不能认作 QQ native callback OS 线程。

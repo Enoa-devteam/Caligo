@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 固定 hash 静态续核：sendMsg 命名 thunk → NodeIOperateCallback 引用对 → 虚槽 +0x118 → 候选 KernelMsgService → lambda 捕获 → callback 虚槽 +8 → 分派器，已在限定接收者类型及分支条件下逐指令/RTTI/栈布局核对；正反断言、首次算式错误和 hash 见 [progress](progress.md#current-state)。同 hash 的 `sendMsg` 属性表与 `napi_define_class` 初始化路径亦有条件静态核对；不证明实际接收者、类注册成功、现场执行、callback 线程或最终 owner/drain。后续先验证运行时接收者与可安全观测的线程合同；新现场须新鲜代次准入，不重发、不热卸载。
+
 2026-11-15 feat-004 请求级轨迹群聊现场：用户授权后新根 `39500` 准入，登记群单次文本的 HTTP 发送/get_msg、持久账本和用户确认一条均通过；新解析器观察两批同一代次/序号，scope 与完整性仍为 unknown。manager/owner 正常停止、端口关闭，QQ 响应且保留 bridge；不重接、不热卸载或重发。证据、固定构建和解析器 hash 见 [progress](progress.md#current-state)。真实迟到、QQ native callback OS 线程和最终 owner/drain 仍待独立证据；新现场须新进程重新准入。
 
 2026-11-15 feat-004 阶段日志解析：`node scripts/analyze-text-send-trace.mjs <本机日志>` 只读解析固定白名单格式，异常、溢出或缺记录返回 unknown，成功也标范围未核验和完整性未知；新增测试纳入 Windows CI。已对上轮原始日志只读复核，测试与证据见 [progress](progress.md#current-state)。下一步继续独立研究实际 QQ callback OS 线程、最终 owner 和 drain；现场必须新代次准入，不重发旧消息、不热卸载。
