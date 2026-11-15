@@ -10,6 +10,10 @@ GitNexus 首次变更检查报告 CRITICAL、511 条受影响流程；CLI 仅显
 
 2026-11-15 后续离线定位：`NotReady` 可由多个不同层级返回，第二轮没有足够日志确定其来源。`query_login` 上游 impact 为 HIGH；在 [qq_entry](crates/caligo-bridge/src/qq_entry.rs) 添加仅 `research` 构建启用的固定白名单诊断，未知/恶意字段归为固定 other 标签，不输出原始报告、身份或昵称，不修改查询结果与清理分支。隐私定向测试通过；标签扩展前 Windows `init.ps1 -Mode all` 通过，扩展后隐私测试与研究 release 重建通过。诊断版 EXE SHA-256 `875D02AF33739BDD618A395CE2AABEE970142A724185D8BB842F61C784E8DF79`，bridge `E539112CEBA9E96B9013288C74366BD1BC8F27CEE6D4EA747B2D9424C9A3F7CF`；基于 main 加本次研究诊断源码构建。诊断可能不覆盖 resident 预检或 broker 层的失败；缺标签时仍为 unknown。新现场仍需用户重启指定 A 和当次准入。
 
+2026-11-15 第三轮只读诊断：用户指定的新 QQ 进程通过精确模块、PE/backend 和唯一 Environment 准入，研究诊断版单次接入、监听就绪且连接 Active。一次登录核验仍 HTTP 409，固定标签为 `status_current_account_mismatch`，监听器为 `listener_remove_returned`；即本轮实际登录账号不等于本机登记 A，不能推断前两轮的具体原因。本机四份既有 A 登记互相一致；用户确认本轮接入端为原登记 B，对端为原登记 A，仍使用原登记测试群。未采集或发送消息。manager 与 owner 退出码均为 0，QQ 响应、bridge 保留；私有证据在 ignored `local-evidence/feat003-acceptance-attempt3-20261115/`。不得放宽身份校验、在旧代次重接或自动重试。
+
+2026-11-15 第四轮角色调整：用户指定的新接入端通过准入，研究诊断版单次接入、监听及当前账号核验通过，SSE 已就绪。用户确认发送三条同文样本；入站采集未收到匹配事件。只读账本核对发现三条不同消息身份（私聊两条、登记群一条）的 sender 均是本轮接入端，私聊有追加修订，不能判对端入站通过。人工发起管理器关闭，owner 停止码 0、QQ 响应且保留 bridge；HTTP/SSE 不再监听，未发现该轮 manager 进程，但采集脚本未及时取得 manager 退出码。原样本不重发，私有证据在 ignored `local-evidence/feat003-acceptance-attempt4-20261115/`。下一轮先由用户确认本轮对端，再重启指定新鲜接入端、重新准入并使用新标记。
+
 2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。本机 Windows `init.ps1 -Mode default` 与锁定依赖的普通 release 构建通过；打包首次因 Windows Git 无法解析 WSL 工作树路径失败，显式指定工作树 Git 路径后通过。CI 和发布资产以 GitHub Release 为准；未运行现场验收。
 
 2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。

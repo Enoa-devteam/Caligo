@@ -1,6 +1,6 @@
 # Session handoff
 
-2026-11-15 feat-003 验收：隔离 worktree `Caligo-feat-003` 基于跟踪 PR #12 的空提交 `6ed633f9`，未带入原工作区未提交改动。离线基线与两轮现场登录核验 HTTP 409、正常停止和保留 bridge 的结果见 [progress](progress.md#current-state)。第二轮 Active 后仍返回 NotReady，来源未定；研究版固定标签诊断及构建已准备，本机入口 `local-evidence/feat003-acceptance-attempt3-20261115/`，须先由用户正常重启并指定新鲜 A，再核对 PID/创建时间、精确模块 hash、PE/backend、唯一 Environment。未取得完整证据前不勾选 PR 或提升 feature。未知结果不重发，bridge 未证寿命不卸载。
+2026-11-15 feat-003 验收：隔离 worktree `Caligo-feat-003`，跟踪 PR #12。用户将原登记 B 作为接入端，第四轮登录核验与 SSE 就绪；三条同文样本均在账本中标为接入端自发，未形成对端入站证据。服务已停止，QQ 响应且保留 bridge，详见 [progress](progress.md#current-state)。用户确认可使用本轮对端 B；下一轮本机入口 `local-evidence/feat003-acceptance-attempt5-20261115/`，需正常重启并指定新鲜接入端，核对 PID/创建时间、精确模块 hash、PE/backend、唯一 Environment；用新标记，原样本不重发。不得放宽身份校验或重接旧代次。未取得完整证据前不勾选 PR 或提升 feature。未知结果不重发，bridge 未证寿命不卸载。
 
 2026-11-15 v0.3.0 发布准备：版本与 README 同步；发布结果见 [Release](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.3.0) 和 [progress](progress.md)。现场及 feature 状态不因发布改变。
 
