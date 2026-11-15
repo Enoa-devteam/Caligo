@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 补测 QQ 9.9.36-53644 固定构建。源码为 `c0ba200`，普通 release 管理器和同源受控桥接构建分开启动，bridge SHA-256 为 `2A151396FFBA8F210E029AB332B524F00CC32B5514B8EC195274C685966F98CF`。操作者重启并指定测试账号 A，按精确模块哈希、PE/backend 审计、唯一 Environment 和进程代次准入。Edge 管理页只启动选中的 A。确认 `listener_armed` 后，页面通过 `LoginInfo` 核验当前登录账号。
+
+登记 B 向 A 发一条私聊文本，页面自动出现唯一记录，发送者、会话、消息 ID 和正文与 A 的持久账本一致。切换至未启动的 B，页面清空 A 的日志，B 未创建账号凭据。通过页面关闭管理器，manager 和 owner 退出码均为 0，管理端口关闭，QQ 仍响应并保留已映射 bridge。此前一代因验收脚本过早读取监听就绪报告而提前停止，新一代等待就绪后通过。原始现场材料留在 ignored `local-evidence/account-startup-field-20261115-*`。本次 FIELD 范围为 Web UI 的单账号接入和单条私聊入站，终端保留 LAB 证据。feat-010 保持 in-progress。
+
 2026-11-15 在 v0.2.0 的 d1df5dc 基线上新增 `caligo.exe manage` 和 `manage --terminal`。首次可添加 QQ 号，启动时只启动显式选择的账号。两端均可发起一次当前连接的 LoginInfo 核验，并查看该账号账本最近 100 条消息预览。Web UI 在切换账号或锁定时清空当前日志。普通发布构建加载门控、原生准入及本阶段既有现场结论继续适用。[操作与接入指南](docs/guides/management-ui.md)
 
 本地验证：`management_http_lab` 8/8、`manager_smoke` 3/3，研究全仓和默认全仓通过。默认全仓首轮并行的 `onebot_private_send_lab` 以 0xC0000409 异常退出，保留原日志；同一工作树串行及再次并行均通过，独立 v0.2.0 原始基线同套件 5/5，异常原因未确定。锁定依赖的 Windows x64 release 构建通过，Edge 的桌面和窄屏页面与终端均使用该 EXE 完成真实命名管道上的合成身份核验及新消息显示。UI 样本含字面 HTML，终端样本含控制字符，均按普通消息文本显示。本地预览 ZIP 的四个文件及 SHA-256 已核对。未安排本次真实 QQ 验收。

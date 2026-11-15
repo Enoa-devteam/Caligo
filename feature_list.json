@@ -111,8 +111,8 @@
       "plan_steps": ["N8a", "N8b"],
       "dependencies": ["feat-007"],
       "status": "in-progress",
-      "evidence": "2026-11-13 后续整合实现双账号私有目录/token/journal/pipe 隔离、正常 caligo-manager 协议装配、管理配置原子读写和启停。2026-11-15 新增浏览器及终端启动选择、当前连接 LoginInfo 核验和账号消息日志。管理 HTTP 8/8、进程 3/3，实际 release EXE 的浏览器和终端合成闭环通过。真实 QQ 与本次交互入口的联合验收、SDK、部署及长期隔离/恢复待验。",
-      "evidence_paths": ["docs/plans/2026-10-09-gitnexus-plan-caligo-snowluma-capability-parity.md", "docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md", "docs/execution/2026-11-13-snowcat-capability-integration.md", "docs/contracts/caligo-snowcat-capability-map.json", "docs/guides/management-ui.md", "crates/caligo-core/tests/management_http_lab.rs"],
+      "evidence": "2026-11-13 后续整合实现双账号私有目录/token/journal/pipe 隔离、正常 caligo-manager 协议装配、管理配置原子读写和启停。2026-11-15 新增浏览器及终端启动选择、当前连接 LoginInfo 核验和账号消息日志。管理 HTTP 8/8、进程 3/3，实际 release EXE 的浏览器和终端合成闭环通过。PR #9 在固定 QQ 9.9.36-53644 上完成 Web UI 选择 A、当前登录核验、B→A 单条私聊文本显示及账本核对，未选 B 保持停止。SDK、部署及长期隔离/恢复待验。",
+      "evidence_paths": ["docs/plans/2026-10-09-gitnexus-plan-caligo-snowluma-capability-parity.md", "docs/plans/2026-11-13-gitnexus-plan-snowcat-capability-integration.md", "docs/execution/2026-11-13-snowcat-capability-integration.md", "docs/contracts/caligo-snowcat-capability-map.json", "docs/guides/management-ui.md", "crates/caligo-core/tests/management_http_lab.rs", "progress.md"],
       "done_criteria": ["双账号同时工作且凭据/状态/存储独立", "一个账号退出不影响另一个", "管理与 SDK/MCP 经共享 registry，不旁路 QQ"]
     }
   ]

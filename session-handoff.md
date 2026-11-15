@@ -6,9 +6,13 @@
 `caligo.exe manage` 或 `caligo.exe manage --terminal`。代码接线在
 [manager](crates/caligo-core/src/commands/manager.rs) 和
 [管理 HTTP](crates/caligo-core/src/management_http.rs)，本地验证与首轮异常见[进度](progress.md#current-state)。
-下一步是使用受控的 research bridge 和新指定 QQ 实例，核对选中账号、真实构建准入、LoginInfo
-和私聊或登记群消息。在 QQ 官方客户端正常登录，沿用指定进程和 hash 门，结束后按原合同停止并保留 bridge。
-具体参数参见[本机管理指南](docs/guides/management-ui.md#接入-qq-与核验)。feat-010 保持 in-progress。
+PR #9 已完成 Web UI 的 QQ 9.9.36-53644 单账号启动、当前登录核验和单条私聊入站日志现场。
+管理器与桥接 owner 已正常停止，QQ 仍响应并保留 bridge。原始证据目录和范围见上方进度链接。
+终端保留 LAB 证据。feat-010 保持 in-progress。
+
+下一阶段按用户决定统一桥接层，以正式桥作为唯一运行和发布实现。后续桥接修复与改进以正式桥为基线。
+统一的接入合同仍需保留精确模块哈希、当前进程与身份核验、停止和寿命门，并用正常 release 入口完成真实 QQ 回归。
+现有现场装配参数见[本机管理指南](docs/guides/management-ui.md#接入-qq-与核验)。
 
 ## 2026-11-15 Windows 发布 0.2.0
 
