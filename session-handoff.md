@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 私有 ETW 句柄 ABA：A 停止后 B 即便使用不同名称/GUID，12/12 复用 A 句柄数值；A 旧值在 B 创建前 query 12/12 返回 4201、B 创建后 12/12 返回 0。另两组同名对照同样复用；只对本轮当前句柄 stop，未对旧值 stop。细节、hash 和范围见 [progress](progress.md#current-state)。这是本机 in-process private 会话证据，不外推 system logger；后续恢复不能凭过期句柄及 query 成功确认代次，需独立解决系统级所有权与原子性，权限、隐私和现场准入仍未闭合。
+
 2026-11-15 feat-004 私有 ETW 子进程退出对照：控制进程存活时，正常、非零退出和超时终止的自建子进程启动前及结束后，私有 ETW 会话按持有句柄 query/stop 均通过；详情及 hash 见 [progress](progress.md#current-state)。未验证控制器崩溃、具名系统会话或跨进程恢复；下一步仍须建立可核验代次与无法判定时的恢复合同，stop 的 `ERROR_MORE_DATA` 不得盲目重试，系统权限和现场准入保持约束。
 
 2026-11-15 feat-004 空 system logger 尝试：当前未提升 token 的无 provider/无文件/无 PMC/LBR `StartTraceW` 返回访问拒绝 5；未取得句柄、未 query/stop。四项模拟测试验证拒绝及身份边界，脚本 hash 和范围见 [progress](progress.md#current-state)。系统会话成功和清理仍未验证；先完成异常终止恢复与独立所有权方案，再在具备权限和隔离条件时重新准入，不凭同名停止、不开 QQ 采样。
