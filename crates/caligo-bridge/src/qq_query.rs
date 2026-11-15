@@ -910,7 +910,6 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(feature = "research")]
     #[test]
     fn voice_profile_rejects_missing_duplicate_and_wrong_modules() {
         assert!(!matches_voice_profile(&[]));

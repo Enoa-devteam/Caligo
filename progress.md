@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 将 GitHub Test 收敛为单个 `Windows x64 / formal bridge` 作业。PR、main、手动调用与 Release 复用同一默认 Windows x64 流程。桥接命名管道、core 重启、文本编解码、合成原生 adapter 和版本指纹拒绝测试均纳入默认构建，Node capability tooling 在同一作业执行。研究诊断保留本地 `init.ps1 -Mode research` 入口。
+
+本机用与 CI 一致的环境执行 `.github/scripts/run-tests.ps1`，文件 owner 预检与默认全仓通过，其中 daemon client 9/9、core 重启 2/2、原生 adapter 7/7、文本编解码 4/4，版本指纹拒绝用例通过。Node tooling 16 PASS、2 个依赖外部输入的 SKIP。YAML 结构检查确认 Release 的打包依赖同一个可复用 Test 作业。[开发与验证指南](docs/guides/development.md#github-actions-test--release)
+
 2026-11-15 正式桥统一在 `codex/unified-qq-bridge` 落地。普通发布构建包含 QQ owner pump、V8 适配、daemon 客户端和查询。正式 CLI 验证指定 PID 的创建时间、DLL 接口、QQ 9.9.36-53644 的已加载模块指纹和唯一 Environment，bridge 在宿主内复核模块指纹与基址。旧注入式诊断继续受 research 门控。[正式接入说明](docs/guides/management-ui.md#接入-qq-与核验)
 
 正式桥 FIELD 样本使用 `4f9aaf4` 的同一个普通 release `caligo.exe` 启动管理器、加载桥、随后停止 owner。EXE SHA-256 为 `5F4B90E4CB9AFC8DF461A5C74DA7EE2FDE39BABF130FD19B7392957017508AEE`，bridge SHA-256 为 `7B1CD538A4E010E287C2366E6E2DEB46C8115ED989BD78566A769E1D678258BE`。操作者重启并指定 A，PE/backend 审计及精确模块哈希通过。Edge 管理页只启动 A，监听就绪和 LoginInfo 核验通过。用户从登记 B 发一条私聊，页面出现唯一记录，消息 ID、发送方、会话和正文与 A 的持久账本一致。切到未启动的 B 后页面清空日志。manager 与 owner 退出码均为 0，管理端口关闭，QQ 保持响应并保留 bridge。本机原始证据位于 ignored `local-evidence/unified-bridge-field-20261115-*`。

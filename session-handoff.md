@@ -6,6 +6,8 @@
 模块指纹和唯一 Environment 接入发布包内的 `caligo_bridge.dll`。普通 release 同一组产物完成真实 QQ
 Web UI 登录核验和单条私聊入站，现场正常结束，已映射 bridge 保留到 QQ 正常退出。
 源码检查点、散列及默认与研究测试见[进度](progress.md#current-state)。
+GitHub CI 已统一为单个 Windows x64 正式桥作业，Release 复用同一 Test。
+本地诊断仍可用 `init.ps1 -Mode research`，统一后的验证结果见进度记录。
 后续桥接修复与验收沿正式入口推进。终端真实 QQ、重连及长期资源寿命仍按各自合同验收。
 [正式接入与停止步骤](docs/guides/management-ui.md#接入-qq-与核验)
 
