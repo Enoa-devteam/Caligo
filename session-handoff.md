@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 LBR 会话离线模型：新增纯状态模型及 7 项测试、身份检查变异负例和 Windows CI 接线，详见 [progress](progress.md#current-state)。无 ETW 后端或系统调用，不能认作真实会话控制；下一步验证独立具名 system logger 的真实所有权、冲突与崩溃清理方案并审查权限/隐私后，才考虑仅对自建 workload 采样。不要停止默认 kernel logger，不对 QQ 使用未验证方案；本轮未启动 ETW、未接入 QQ、未发送。
+
 2026-11-15 feat-004 LBR 对照准备：自建进程扩展 PID/创建时间、线程和 QPC 真值；独立 Windows API 核验代次及解析器正反测试通过。系统级隐私、独立会话所有权、全局 PMC 冲突、异常清理和时钟/丢失门已写入[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)，细节和本机产物 hash 见 [progress](progress.md#current-state)。尚无可安全启动的采集控制器，未启动 ETW；下一步先实现/离线验证会话与冲突控制，再在权限和隔离条件满足时对自建进程采集；不要使用默认内核 logger 清理，不对 QQ 使用未验证方案。
 
 2026-11-15 feat-004 观测候选离线对照：WPR/xperf 和 PMU 来源可见，但 LBR 采集未启动，本会话未提升；自建双线程同回调 workload 已确认两条独立间接调用和线程真值，首版调用点合并与正反验证均保留，详见 [progress](progress.md#current-state)。下一步先审查系统级采样隐私、会话所有权/清理、丢失和 TID 归属，再在满足权限及隔离条件的自建进程开展 LBR 校验；无法关联请求则保持 unknown，不对 QQ 使用未验证方案。未接入 QQ、未发送；PID `5384` 当次仍响应且 bridge 未映射，后续重新核验代次和准入，不重发旧样本。

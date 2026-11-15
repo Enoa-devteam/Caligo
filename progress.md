@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-15 feat-004 LBR 会话生命周期离线模型（起点 `f00dd1a`）：新增 [纯状态模型](scripts/lbr-session-model.mjs)与[测试](scripts/lbr-session-model.test.mjs)，模拟预检不满足拒绝启动、启动身份不明不停止、只对成功回执中的同身份模拟句柄发停止、停止失败及控制器丢失保留 unknown、超时后即使停止成功仍为 unknown。7 项 Node 测试通过；将两处身份检查从副本中移除的变异有两项负例按预期失败。测试已加入 Windows CI。模型无 ETW 或系统后端，不能证明真实所有权、会话冲突、崩溃清理、采样完整性或线程归属；未启动 ETW、不接入 QQ、不发送。变异日志在 ignored `target-harness/lbr-model-mutation/mutation.log`；详见[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)，feat-004 仍 in-progress。
+
 2026-11-15 feat-004 LBR 对照继续准备（起点 `b5282de`）：核对本机 `xperf -help start/stop`：`-Pids` 只说明用于 heap tracing，默认 stop/隐含 `-d` 可触及 kernel logger；[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)新增系统级数据、会话所有权/崩溃清理、时钟和采样丢失前置条件，具名系统会话与全局 PMC 冲突尚未验证。未启动 ETW，不接入 QQ、不发送。
 
 自建双线程对照扩展输出 PID、FILETIME 创建时间、QPC 频率及各线程起止区间；独立控制脚本在子进程存活时从 Windows 进程 API 复核创建时间，再校验完整输出，故意使用错误代次被拒绝。严格解析器 4 项测试覆盖代次、重复 TID、零计数、无重叠、坏时间、额外行和冲突地址；PE 独立机器码校验两处 `call rax` 仍通过。脚本及摘要在 ignored `local-evidence/feat004-lbr-control-20261115/`，源码/EXE/控制器/解析器/摘要 SHA-256 `D9FF41E4AA4C5FA87C4CD741E001CDADB82F41CEC30F211AF2FDBEA02263C441` / `43BD0921824D9B1EA238B8A8F4EA8BC39690C5FBF590364F3A499E3CDA70E012` / `4F685C0F01853449CF19E043E78441CD43878D74A9E86799D8787CAB81032972` / `3787C82A833D2D4EB21C880F2E79784DBC556B97414C38CC8F7E3EECACA12304` / `6A73E714F5784C78A10672AD9993B25FFE01C2FC2591B2932E62C7C71BC02E46`。这些是自建进程真值，未验证 ETW 时间转换、采样线程归属或 LBR 可用性；feat-004 保持 in-progress。
