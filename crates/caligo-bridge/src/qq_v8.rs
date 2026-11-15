@@ -2502,7 +2502,6 @@ pub fn build_send_js(
     js.push_str("    function unknown(reason) { result('unknown', {status:'unknown', reason:typeof reason === 'string' ? reason : 'text_submit_unknown'}); }\n");
     js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter'); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return'); Promise.resolve(pr).then(function (res) {\n");
     js.push_str("      if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
-    js.push_str("      else if (res && Number.isSafeInteger(res.result) && !pending.addId) result('rejected', {status:'rejected', error:'send result=' + String(res.result)});\n");
     js.push_str("      else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
     js.push_str("      else unknown();\n");
     js.push_str("    }, function () { unknown(); }); } catch (e) { unknown(); }\n");

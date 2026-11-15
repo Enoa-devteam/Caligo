@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-15 feat-004 结果码顺序复核（起点 `d757ac5`）：[PR #12 的 Windows CI](https://github.com/Enoa-devteam/Caligo/actions/runs/43697545380/job/132761311783) 已通过。用户指定的参考研究仓库固定提交 `7cf025fe1e7f9c609e02a8643c6e6398eeec0d64` 的 [sendMsg 封装](https://github.com/Eternal-Wanderer-Vegetable/Napcat-Snowluma-research/blob/7cf025fe1e7f9c609e02a8643c6e6398eeec0d64/packages/snowcat-core/apis/msg.ts) 检查 `result === 0` 并另等成功状态更新；它不能证明任意非零码或 120 的业务语义。旧 9.9.33 静态回调材料绑定不同 hash，不移用为现行 ABI 结论。
+
+本轮对 9.9.36-53644 的固定 `wrapper.node` SHA-256 `0D8B94448F4DAFE7337B88D6A568B004224C37FCBE2BD1142C1AF7624FBD534C` 离线核对：`sendMsg` 的 RTTI 类型表项指向 `0x3964BA`，该片段读取一个输入 DWORD 并通过捕获对象的虚槽 `+8` 转交；另一 RTTI 类型 `NodeIOperateCallback` 的 `+8` 表项指向 `0x22A0878`，将 EDX 写入回调状态 `+0x18`；既有该 hash 的独立静态记录将 resolver `0x22A0AB0` 的 `+0x18` 字段与 `result` 对应。静态表项不证明 sendMsg 捕获对象运行时类型、这两段与现场 120 是同一路径、实际 callback 线程或 drain。验证脚本/报告 SHA-256 `ECFD31D064E0DD9024A8BAD390023D9022855D8DF1B2CA6EBACAE73763FEE4C1` / `C7B274236C2379829BEC400D610E88B87148178168A2974ACE95A9963FA8F111`，保存在 ignored `local-evidence/feat004-muted-new-code-20261115/`。
+
+发现非零 Promise 在 add 尚未出现时会立即判为 rejected，而其他顺序下同一类结果保守 unknown；没有证据能保证稍后的 add 不出现或证明所有非零码都是明确拒绝。针对该顺序的回归先失败，修复后统一为 unknown 并保留安全整数 `send_result_ambiguous=<code>`，不改变已确认拒绝的独立持久化合同。Windows 定向 `wrapper_send` 4/4 与进程内串行 `init.ps1 -Mode all` 通过，原失败日志 `target-harness/feat004-promise-first-before.log`。all-scope 结构化变更图为 CRITICAL；部分流程错误归因于文档标题，图不等于实际影响面，全量结果存本机 `local-evidence/feat004-muted-new-code-20261115/gitnexus-promise-first-all.json`。本轮未接入 QQ、未发送；旧样本保持 unknown、不重发，feat-004 仍 in-progress。GitNexus 以本工作树 `d757ac5` 刷新，`build_send_js` 上游 LOW，含 `send_text` 与 `QqOwnerAdapter::native_op`；JS 内部动态关联仍须源码核对。
+
 2026-11-15 收尾检查：Windows 进程内串行 `init.ps1 -Mode all`、最终普通与 research release 构建、文档检查及 `git diff --check` 通过。GitNexus all-scope 结构化结果为 9 文件、13 个符号、522 条流程、CRITICAL；共享 V8 图映射含不匹配的文件级结果，已补源码审阅，不能把图映射视为现场安全证明。全量报告存于 ignored `local-evidence/feat004-muted-new-code-20261115/gitnexus-final-all.json`。
 
 2026-11-15 feat-004 业务拒绝续验：发现 `ConfirmedFailure` 原因仅存内存，重启后为空；回归先失败，现将原因作为可选字段与请求状态同条持久化，旧记录缺字段仍可恢复且不改写。Windows 串行 `recovery_contract` 12/12、`init.ps1 -Mode all` 和隔离 research release 通过，原失败日志在 `target-harness/feat004-rejection-recovery-before.log`。新增字段兼容旧记录，不推断旧失败原因。

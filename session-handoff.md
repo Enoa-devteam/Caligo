@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 离线续验：Promise 非零码先于 add 不能证明明确失败，现保守 unknown 并保留整数；定向回归先失败后通过。参考研究和固定 hash 的有界静态回调核对及未证边界见 [progress](progress.md#current-state)。本轮无 QQ 接入和发送；既有禁言样本不重发、未证寿命不卸载。后续仍需真实明确拒绝语义、callback 线程、最终释放与 G3 合同证据；新现场须新代次重新准入。
+
 2026-11-15 feat-004 续验：用户指定的禁言测试群经新根 42124、44580 各次独立准入及个人禁言只读核对后，各发送一次不同标记；用户均确认未见，两个请求均为 DeliveryUnknown，不重发。第二次 wrapper Promise 的整数 120 已保留在审计，停止后以实际 AccountActor 打开账本副本核实重启保留且不重派；不能推断其为明确业务拒绝。两个 manager/owner 均正常停止，QQ 响应并保留 bridge；不复用或热卸载。ConfirmedFailure 原因持久化、新旧账本兼容、异常停止隔离与 wrapper 交错均有离线回归；Windows 串行 all 与隔离 research release 通过。详见 [progress](progress.md#current-state)。feat-004 仍 in-progress：真实明确拒绝语义、QQ callback OS 线程、最终 owner/stop/drain 及历史 G3 consumer 合同未闭合。继续前先建立可验证的安全研究合同；任何新现场使用新鲜代次重新准入，原样本不重发。
 
 2026-11-15 feat-004 续验：固定 9.9.36-53644 新根 53716 的单次私聊及 HTTP 回读通过，用户确认对端一条；有界阶段显示登记、submit、匹配回调、受理、精确回读与终结的本次顺序，不能证明 QQ callback OS 线程。manager/owner 已停止，QQ 响应并保留 bridge；不复用或热卸载。wrapper 停止异常与停止态重启拒绝已补回归及修复，新修复尚未现场加载。命令、构建 hash、证据与未闭合门见 [progress](progress.md#current-state)。真实业务拒绝、callback 线程和最终释放未闭合，状态保持 in-progress；下一步先建立可安全复现的拒绝与寿命研究合同，任何新接入须新鲜代次重新准入，不重发既有样本。

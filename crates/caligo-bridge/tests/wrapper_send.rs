@@ -293,7 +293,7 @@ async function run(mode) {{
   vm.createContext(context);
   assert.equal(JSON.parse(vm.runInContext(send,context)).fired,true);
   await new Promise(resolve=>setImmediate(resolve));
-  if (mode === 'code') {{ assert.equal(R.sendResults.request.status,'rejected'); assert.equal(R.sendResults.request.error,'send result=37'); }}
+  if (mode === 'code') {{ assert.equal(R.sendResults.request.status,'unknown'); assert.equal(R.sendResults.request.reason,'send_result_ambiguous=37'); }}
   else if (mode === 'ambiguous-code' || mode === 'ambiguous-readback') {{ assert.equal(R.sendResults.request.status,'unknown'); assert.equal(R.sendResults.request.reason,'send_result_ambiguous=37'); }}
   else assert.equal(R.sendResults.request.status,mode === 'accepted' ? 'accepted' : 'unknown',mode);
 }}
