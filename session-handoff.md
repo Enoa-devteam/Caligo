@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 私有 ETW 子进程退出对照：控制进程存活时，正常、非零退出和超时终止的自建子进程启动前及结束后，私有 ETW 会话按持有句柄 query/stop 均通过；详情及 hash 见 [progress](progress.md#current-state)。未验证控制器崩溃、具名系统会话或跨进程恢复；下一步仍须建立可核验代次与无法判定时的恢复合同，stop 的 `ERROR_MORE_DATA` 不得盲目重试，系统权限和现场准入保持约束。
+
 2026-11-15 feat-004 空 system logger 尝试：当前未提升 token 的无 provider/无文件/无 PMC/LBR `StartTraceW` 返回访问拒绝 5；未取得句柄、未 query/stop。四项模拟测试验证拒绝及身份边界，脚本 hash 和范围见 [progress](progress.md#current-state)。系统会话成功和清理仍未验证；先完成异常终止恢复与独立所有权方案，再在具备权限和隔离条件时重新准入，不凭同名停止、不开 QQ 采样。
 
 2026-11-15 feat-004 ETW 进程内对照：当前 token 下自建、无 provider 的 private in-process 会话启动/按句柄查询停止通过；同名碰撞 183，两个独立私有会话中停止一个不影响另一个，两个均正常停止。脚本、结果 hash 和范围见 [progress](progress.md#current-state)。该结果不证明 system logger、PMC、LBR 或崩溃清理；下一步先在明确权限和隔离条件下验证具名系统会话及冲突清理，不在系统或 QQ 上采用未经验证的采样方案；不凭同名停止其他会话。

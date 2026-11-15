@@ -65,3 +65,9 @@ research 模式为每个已登记文本请求分配 JS 环境中本监听器代�
 ### 无事件的具名系统会话尝试
 
 自建脚本配置描述性名称、非内核默认 GUID、system logger 与有界内存缓冲；`EnableFlags=0`，不配置 provider、文件、PMC、LBR 或 QQ。当前未提升 token 调用 `StartTraceW` 返回 `ERROR_ACCESS_DENIED`（5），没有取得句柄，因此没有调用 query/stop。四个模拟后端测试覆盖权限拒绝、同名冲突、成功且持有句柄和成功但句柄为空；前两者不得停止任何会话。实际系统会话的启动成功、同名冲突、按句柄清理及崩溃残留均未验证；权限允许也不自动满足此前的会话所有权、隐私、采集及恢复门。[StartTraceW 错误与权限说明](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)及本机脚本/结果 hash 见 [progress](../../progress.md#current-state)。
+
+### 存活控制器的工作进程退出对照
+
+自建控制进程持有真实无 provider 的 in-process private ETW 会话句柄，并启动不接触 ETW 的独立子进程。正常退出、非零退出和超时后终止三个样本中，控制进程在子进程启动前及结束后均成功查询，最终按自己取得的句柄停止会话。证据和脚本 hash 见 [progress](../../progress.md#current-state)。这些样本仅验证控制器仍存活时的私有会话清理，不证明控制器自身崩溃、系统 logger 代次或外部恢复者的权限/所有权；也不验证工作进程的数据采集。
+
+若真实系统控制器发生崩溃或启动回执丢失，会话是否存活及其归属均为 unknown；恢复者不得只凭名称、GUID、PID 或过期句柄停止。可审计方案仍需定义能够核验的会话身份与代次、受保护的交接证据、冲突和句柄复用的拒绝条件以及无法判定时的人为处置；以上私有对照不能满足这些条件。[ControlTraceW](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew) 另指出 stop 返回 `ERROR_MORE_DATA` 时停止可能已经发生，不能将非零结果一律视为仍在运行并盲目重试。

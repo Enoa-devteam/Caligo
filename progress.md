@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 feat-004 私有 ETW 与子进程退出对照（起点 `36929f9`）：自建控制进程持有无 provider、无文件、无 PMC/LBR 的真实 in-process private ETW 会话，分别运行独立子进程正常退出、返回 17 和超时后终止三种样本。每个样本的 `StartTraceW`、子进程启动前和结束后按句柄 query、最终按取得句柄 stop 均返回 0；超时子进程实际终止且退出非零。控制器/源码和三个结果在 ignored `local-evidence/feat004-etw-watchdog-20261115/`，脚本/normal/failure/timeout SHA-256 `6CB5613497A7C312E2E40872006A5B8545FA0A2C7B79F3ABF99B4D53C770BDEA` / `AA0DA5B46E1D6F92EAB5ADEDC22E4C780A8DF36E07D5A3ADF6EE01C4DA523E3F` / `7DE481C18B97803CD2A01E54C015EF3BD0DE7DDFCDE8BB6A4AA2B385917750C8` / `1F604AFAC3739CDCB415A014E637B3FC0D9BD0067CFAAED3DDC52357E32F1C7B`。结束时 WPR 报未记录、logman 当次返回空列表。仅验证控制进程存活时的指定私有会话；不证明控制器崩溃、系统 logger 或 PMC/LBR 清理，不接入 QQ、不发送。
+
+后续系统会话恢复不得只凭名称、GUID、PID 或过期句柄停止；仍需可核验代次、受保护证据及无法判定时的人工处置。[ControlTraceW](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew) 说明 stop 返回 `ERROR_MORE_DATA` 时停止可能已发生，不得根据非零码盲目重试。具名 system logger 成功路径仍受访问权限和[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)约束；feat-004 保持 in-progress。
+
 2026-11-15 feat-004 空具名 system logger 尝试（起点 `95f934c`）：当前 token 未提升；自建脚本以固定描述性名称、非默认 GUID、system logger 与有界 buffering 调用 `StartTraceW`，`EnableFlags=0`，不配置 provider、文件、PMC、LBR 或 QQ。Windows 返回 `ERROR_ACCESS_DENIED`（5），未取得句柄，也没有调用 query 或 stop；这不是系统会话成功、冲突或清理证据。四个模拟后端测试覆盖拒绝/同名冲突时绝不停止、成功返回句柄后的查询和停止、成功但零句柄不停止，均通过。结束后 `wpr -status` 未记录、`logman query -ets` 返回空列表，仅代表当次查询。微软 [StartTraceW 文档](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)列出访问拒绝和权限条件；权限提升本身不满足隐私、实际所有权、全局 PMC 冲突或异常清理合同。
 
 本机 ignored `local-evidence/feat004-etw-system-20261115/` 的脚本/模拟测试/结果 SHA-256 分别为 `9E892FB1828EF644B477CC56746405D9FA02D2FF6F820F012AD0FBEE28A4EFAE` / `40A8FE4AF9BCFE9A07AEB320D4889C02668FC3BC0D84B754E1D819994DA5A90A` / `0C4A383453F198D2DDF37FA9E6E03C12DE9C7D5176443D1D8149459E8F5B74FE`；脚本复用上一轮独立 ABI 声明。下一步先为异常终止与会话所有权准备可审计的恢复方案，再在具备权限、隔离和其余门条件下验证无事件系统会话；当前不启用采样或重试。本轮不接入 QQ、不发送，feat-004 保持 in-progress。
