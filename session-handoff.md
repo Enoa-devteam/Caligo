@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 停止隔离版现场：新根 41684 准入、正式构建单次接入、监听和登记账号登录核验通过；零发送，manager/owner 停止码 0、端口关闭、QQ 响应且保留 bridge。未触发或观察停止后迟到回调，未证明 QQ 内注销/全局 drain；该进程不重接、不热卸载。证据和 hash 见 [progress](progress.md#current-state)。后续先设计可验证的线程及在途回调观测合同，需新现场时重走新鲜代次准入；不追测业务拒绝。
+
 2026-11-15 feat-004 快照与停止隔离：固定 9.9.36 静态路径显示 listener 登记节点移除后，先前拷贝的引用快照仍可能持有对象；消息 listener 入口现拒绝 stopped 后的迟到通知，媒体完成回调保留临时文件清理。定向回归及失败历史、固定 hash 与证据见 [progress](progress.md#current-state)。新实现未现场加载；继续按新鲜代次和准入合同设计正式 callback 线程/最终 owner/drain 证据，不重发、热卸载或追测业务拒绝。
 
 2026-11-15 feat-004 回调与释放：9.9.36 固定映像已静态验证 Promise callback 的同线程/异线程分派与停止分支，以及消息 listener remove 的条件路径；只读清单显示先前两进程已退出，PID 44580 同代次仍持有 bridge。详情及可复验 hash 见 [progress](progress.md#current-state)。静态机制不证明正式链路实际 callback TID、listener 注销、最终 owner 或全局 drain；须先设计可验证的动态观测和安全寿命合同，新现场才使用新鲜代次重新准入。不要热卸载、重发旧样本或重启业务拒绝核验。
