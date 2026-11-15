@@ -1,5 +1,9 @@
 # Session handoff
 
+2026-11-15 feat-004 请求级轨迹单次现场：用户授权后新根 `50664` 准入并单次向登记 B 发送，HTTP 发送/get_msg、持久账本和用户确认一条均通过；两批轨迹同一代次/序号且完整。原 runner 因日志单引号误解析标 `trace_pass=false`，独立审计解析原日志通过，原结果保留。manager/owner 正常停止、端口关闭，QQ 响应且保留 bridge，不重接、不热卸载或重发。详见 [progress](progress.md#current-state)。下一步先改进离线日志解析与报告，并继续独立研究实际 QQ callback OS 线程及最终 owner/drain；新现场须新鲜代次准入。
+
+2026-11-15 feat-004 新诊断构建零发送现场：新 QQ 根 `47144` 准入、监听、登记账号登录核验和合成停止探针通过；manager/owner 退出码 0、端口关闭、空账本、QQ 响应且保留 bridge。该进程不重接、不热卸载；真实迟到、请求级轨迹现场、callback OS 线程和最终 drain 均未验证。首次 PowerShell 模块路径失败发生在接入前，保留后另目录复验；证据与 hash 见 [progress](progress.md#current-state)。后续测试使用新鲜进程重新准入，需发送时另明确单次目标和授权，不重发 unknown。
+
 2026-11-15 feat-004 请求级诊断离线实现：research 阶段记录现携带 JS 环境内代次和临时请求序号，并标记批次溢出或无法分配；已补并发、跨 poll、旧代次、耗尽、异常与隐私负例。完整证据与日志见 [progress](progress.md#current-state)，边界见[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)。旧 Windows 磁盘索引刷新中断、完整性未知；独立 WSL 增量索引曾触及 16 GiB 上限，后续须使用新建的干净索引并核验。现场未加载，缺日志仍 unknown；实际 QQ callback 线程和最终 owner/drain 仍需独立证据。
 
 2026-11-15 feat-004 并发轨迹核查：实际生成的两个发送脚本在 Node VM 中以相反顺序完成 Promise，得到相同的 listener 级标签数组；11 请求样本另显示 32 项上限会无标记丢失阶段。现有标签不能用于并发请求的逐请求顺序或缺失事件证明。复现入口、hash 及边界见 [progress](progress.md#current-state)，后续请求级诊断约束见[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)。下一步先针对有界、代次隔离的诊断关联设计完成影响分析、隐私和并发负例，再实现与离线验收；实际 callback OS 线程及 QQ drain 仍需独立证据。
