@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 回调与释放：9.9.36 固定映像已静态验证 Promise callback 的同线程/异线程分派与停止分支，以及消息 listener remove 的条件路径；只读清单显示先前两进程已退出，PID 44580 同代次仍持有 bridge。详情及可复验 hash 见 [progress](progress.md#current-state)。静态机制不证明正式链路实际 callback TID、listener 注销、最终 owner 或全局 drain；须先设计可验证的动态观测和安全寿命合同，新现场才使用新鲜代次重新准入。不要热卸载、重发旧样本或重启业务拒绝核验。
+
 2026-11-15 feat-004 范围决策：参考 Caligo_research 后未找到现行构建的明确业务拒绝语义，按用户要求记录已知缺口，不再核验拒绝信息；账号正常连接后可提交群聊/私聊，单次未确认结果仍是 unknown、不自动重发。正式文本路径没有拒绝预查询；Active 是 core/bridge 状态，不能单独证明账号登录，登录身份查询与发送准入的接线仍需核对。本轮无代码或现场动作。其余 callback OS 线程、最终释放和历史 G3 consumer 合同仍开放；详情与证据见 [progress](progress.md#current-state)。
 
 2026-11-15 feat-004 离线续验：Promise 非零码先于 add 不能证明明确失败，现保守 unknown 并保留整数；定向回归先失败后通过。参考研究和固定 hash 的有界静态回调核对及未证边界见 [progress](progress.md#current-state)。本轮无 QQ 接入和发送；既有禁言样本不重发、未证寿命不卸载。后续仍需真实明确拒绝语义、callback 线程、最终释放与 G3 合同证据；新现场须新代次重新准入。
