@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 v0.3.0 发布准备：版本与 README 同步；发布结果见 [Release](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.3.0) 和 [progress](progress.md)。现场及 feature 状态不因发布改变。
+
 2026-11-15 README 更新：基于 main `e99ea37c` 区分 v0.2.0 与当前源码入口，明确固定 QQ 构建和桥接准入；详见 [progress](progress.md)。本次不推进现场或 feature 状态。下次按用户任务及当前进度选择工作块。
 
 ## 2026-11-15 正式 bridge 统一
