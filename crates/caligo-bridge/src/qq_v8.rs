@@ -628,9 +628,10 @@ pub const D8_START_JS: &str = r"
       for (var i = 0; i < a.length; i++) push(src, a[i]);
     };
     R.listener = {
-      onRecvMsg: function (a) { pushList('recv', a); },
-      onMsgInfoListUpdate: function (a) { pushList('update', a); },
-      onAddSendMsg: function (m) { push('add_send', m); },
+      onRecvMsg: function (a) { if (!R.stopped) pushList('recv', a); },
+      onMsgInfoListUpdate: function (a) { if (!R.stopped) pushList('update', a); },
+      onAddSendMsg: function (m) { if (!R.stopped) push('add_send', m); },
+      // A late media completion can still release an owned temporary file.
       onRichMediaDownloadComplete: function (result) {
         if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
       }
