@@ -28,7 +28,7 @@ const src = (file, symbol) => ({ path: file, symbol });
 const ONEBOT = 'crates/caligo-core/src/onebot.rs';
 const SERVER = 'crates/caligo-core/src/onebot_server.rs';
 const DAEMON = 'crates/caligo-core/src/daemon.rs';
-const CLI = 'crates/caligo-core/src/bin/caligod.rs';
+const CLI = 'crates/caligo-core/src/commands/daemon.rs';
 const EVENTS = 'crates/caligo-core/src/onebot_events.rs';
 const TRANSPORT = 'crates/caligo-core/src/onebot_transport.rs';
 const BROKER = 'crates/caligo-core/src/capability_broker.rs';
@@ -98,7 +98,7 @@ const scoped = (status, reason, implementation, normal_entry, permission, backen
 });
 
 export function initialProfiles() {
-  const sharedEntry = [src(CLI, 'fn main()'), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action(')];
+  const sharedEntry = [src(CLI, 'pub fn entry('), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action(')];
   const actionPermission = { requirement: 'Transport authentication; read/write classification is discovery metadata only.',
     enforcement: [src(ONEBOT, 'pub enum ActionPermission'), src('crates/caligo-core/src/onebot_http.rs', 'fn token_ok(')],
     limits: 'No per-action role/administrator policy is inferred. HTTP/WS token enforcement differs by configured transport.' };
@@ -114,7 +114,7 @@ export function initialProfiles() {
     acceptance: { ...noAcceptance(), limits: 'Registration and query plumbing are not end-to-end backend validation.' } };
   const directoryPending = scoped('implemented_pending_validation', 'Action registry, typed core query path, and fixed host-query implementation exist; host integration and final end-to-end validation remain pending.',
     [src(ONEBOT, 'pub fn handle_action_with_queries('), src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]')],
-    [src(CLI, 'fn main()'), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action_with_queries(')], actionPermission,
+    [src(CLI, 'pub fn entry('), src(SERVER, 'pub fn action_handler('), src(ONEBOT, 'pub fn handle_action_with_queries(')], actionPermission,
     [{ name: 'Scoped query broker and fixed wrapper query executor', state: 'implemented_pending_validation', evidence: [src(BROKER, "pub(crate) fn begin<'a>("), src(QUERY, 'pub const SUPPORTED_CAPABILITIES: &[QueryCapability]')] }],
     [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
     'Directory OneBot routes remain pending full end-to-end validation. Scoped login has a separate assessment.');
@@ -139,20 +139,20 @@ export function initialProfiles() {
     [src(LEDGER, '固定 6 项查询'), src('crates/caligo-core/tests/capability_query_lab.rs', '#[test]'), src('crates/caligo-bridge/tests/wrapper_query_contract.rs', '#[test]')],
     'The exact pilot advertises LoginInfo and a separate self-only SelfProfile for get_login_info no_cache=true. Results require active-scope identity checks; refreshed replies never fall back to LoginInfo. Normal-entry self-refresh field acceptance and other native queries remain open.');
   const accountManager = scoped('partial_offline', 'AccountManager provides ordinary multi-account configuration, isolated daemon lifecycle, and persistence paths with targeted offline evidence.',
-    [src(MANAGER, 'pub struct AccountManager'), src(MANAGER, 'pub fn start_all(&mut self)'), src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')],
-    [src('crates/caligo-core/src/bin/caligo-manager.rs', 'fn main()')], actionPermission,
+    [src(MANAGER, 'pub struct AccountManager'), src(MANAGER, 'pub fn start_all(&mut self)'), src('crates/caligo-core/src/commands/manager.rs', 'pub fn entry(')],
+    [src('crates/caligo-core/src/commands/manager.rs', 'pub fn entry(')], actionPermission,
     [{ name: 'Account-scoped directories, credentials, daemon and pipe', state: 'partial_offline', evidence: [src(MANAGER, 'pub fn start(&mut self, account: u64)'), src('crates/caligo-core/tests/account_manager_lab.rs', '#[test]')] }],
     [src(LEDGER, '账号管理：default/research 各 5/5 PASS'), src('crates/caligo-core/tests/manager_smoke.rs', '#[test]')],
     'This is a Caligo manager capability, not equivalence for every reference WebUI route or native surface. No production or QQ field acceptance.');
   const managementUi = scoped('partial_offline', 'Loopback authenticated management HTTP/UI exposes a bounded account/config/lifecycle surface through the normal manager binary.',
     [src(MANAGEMENT_HTTP, 'pub struct ManagementHttpServer'), src(MANAGEMENT_HTTP, 'fn route(')],
-    [src('crates/caligo-core/src/bin/caligo-manager.rs', 'ManagementHttpServer::start('), src('crates/caligo-core/src/bin/caligo-manager.rs', '"--management-bind"')], actionPermission,
-    [{ name: 'Loopback bearer-authenticated management server over AccountManager', state: 'partial_offline', evidence: [src(MANAGEMENT_HTTP, 'pub fn start('), src('crates/caligo-core/src/bin/caligo-manager.rs', 'ManagementHttpServer::start(')] }],
+    [src('crates/caligo-core/src/commands/manager.rs', 'ManagementHttpServer::start('), src('crates/caligo-core/src/commands/manager.rs', '"--management-bind"')], actionPermission,
+    [{ name: 'Loopback bearer-authenticated management server over AccountManager', state: 'partial_offline', evidence: [src(MANAGEMENT_HTTP, 'pub fn start('), src('crates/caligo-core/src/commands/manager.rs', 'ManagementHttpServer::start(')] }],
     [src(LEDGER, '管理 HTTP 修正后 default/research 各 7/7 PASS'), src('crates/caligo-core/tests/management_http_lab.rs', '#[test]')],
     'Only explicitly implemented management routes are mapped; this is not parity with all 129 reference WebUI routes. Host query integration and production acceptance are not claimed.');
   const mediaTool = scoped('partial_offline', 'A normal caligo-media CLI and bounded local ffmpeg/ffprobe process contract exist with fake-runner and owned-child evidence.',
     [src(MEDIA, 'pub struct MediaTool'), src(MEDIA, 'pub fn audio_to_pcm('), src(MEDIA, 'pub fn pcm_to_container('), src(MEDIA, 'pub fn thumbnail(')],
-    [src('crates/caligo-core/src/bin/caligo-media.rs', 'fn main()'), src('crates/caligo-core/src/bin/caligo-media.rs', 'fn run(cli: Cli)')], actionPermission,
+    [src('crates/caligo-core/src/commands/media.rs', 'pub fn entry('), src('crates/caligo-core/src/commands/media.rs', 'fn run(cli: Cli)')], actionPermission,
     [{ name: 'Configured local ffmpeg/ffprobe executables with hash, timeout and output bounds', state: 'partial_offline', evidence: [src(MEDIA, 'pub fn verify_tools('), src(MEDIA, 'impl MediaProcessRunner for OsProcessRunner')] }],
     [src(LEDGER, '媒体工具：default `media_tool_lab` 6 PASS'), src('crates/caligo-core/tests/media_tool_lab.rs', '#[test]')],
     'No real FFmpeg conversion, QQ upload, voice/Silk path, or native acceptance was verified; the entire FFmpeg/native surface is not implemented.');
@@ -230,7 +230,7 @@ export function initialProfiles() {
   profiles.profile_service.supported_versions = { declared: ['9.9.36-53644 pilot'], accepted: [], reason: 'Exact local module hashes required; no blanket native acceptance.' };
   profiles.component_partial = scoped('partial_offline', 'Caligo owns a narrower Rust core/store/OneBot implementation; this is functional overlap, not replacement of the full reference component.',
     [src(ONEBOT, 'pub static ACTION_REGISTRY'), src(DAEMON, 'pub struct Daemon'), src('crates/caligo-core/src/message_store.rs', 'pub struct MessageStore')],
-    [src(CLI, 'fn main()')], actionPermission, clone(query.backend_dependencies), [src(LEDGER, 'default/research 全仓 PASS')],
+    [src(CLI, 'pub fn entry(')], actionPermission, clone(query.backend_dependencies), [src(LEDGER, 'default/research 全仓 PASS')],
     'No full component API/export/feature equivalence is claimed; all unmatched reference exports remain separately missing.');
   return profiles;
 }

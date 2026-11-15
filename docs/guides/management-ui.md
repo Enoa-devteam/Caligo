@@ -7,7 +7,7 @@
 
 ## 启动与装配
 
-正常管理入口是 [caligo-manager](../../crates/caligo-core/src/bin/caligo-manager.rs)。
+Release 管理入口是 [`caligo.exe manager`](../../crates/caligo-core/src/commands/manager.rs)。
 HTTP 组件的装配接口为 `ManagementHttpServer::start(ManagementHttpConfig, Arc<Mutex<AccountManager>>)`；
 `ManagementHttpConfig` 仅包含 `bind: SocketAddr` 与 `bearer_token: String`。
 上层入口显式选择本机监听地址，并从本机私有 token 文件取得独立管理凭据后传入组件。

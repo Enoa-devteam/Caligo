@@ -1,5 +1,11 @@
 # Session handoff
 
+## 2026-11-15 K3-E 归档与 Release 入口
+
+`codex/k3e-single-release` 基于 CI 合入后的 `main`。K3-E 的 [研究归档](docs/research/k3-e-exec-retrospective.md) 汇总 31 份历史材料，原件留在本机。Release 在两种 Test 构建通过后生成一套普通 Windows x64 ZIP，入口为 `caligo.exe`。本机离线验证见 [progress](progress.md)，重跑方式见[开发指南](docs/guides/development.md#github-actions-test--release)。
+
+下一步按 PR 最新 checks 检查 Windows 两套测试与分支手动 Release 的包内容。版本发布由后续版本标签触发。现场实验继续按当前准入合同单独执行。
+
 ## 2026-11-14 CI release / test — Current Objective
 
 已创建 [PR #7](https://github.com/Enoa-devteam/Caligo/pull/7)。首次 GitHub runner default 的 bridge 并发访问冲突、research 的管理员默认文件 owner 导致失败，原始 run 与修复边界见 [progress](progress.md)。现以串行 test harness 和 runner 临时 current-user 默认 owner 复验全部用例；不能把本机通过当托管 CI 通过，也不能跳过原 ACL 断言。最终结果以 PR 最新 checks 为准。

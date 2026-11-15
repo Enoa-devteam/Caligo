@@ -42,6 +42,10 @@ caligo-cli <K1 probe>
   caligo-cli envscan --pid <n> --vtable <rva-hex[:member-off-hex]> [--include-mapped]
                      [--context <bytes>] [--out <report.json>]
   caligo-cli observe-msf --pid <n> [--out <report.json>] [--self-test]
+  caligo-cli qq-status [options]
+  caligo-cli qq-entry [options]
+  caligo-cli qq-entry-stop [options]
+  caligo-cli daemon-control --pipe <control-pipe> --auth <token> <action>
   caligo-cli inject --pid <n> --bridge <bridge.dll> --manifest <manifest.json>
                     --report <report.json> --confirm-designated-test-instance
                     [--obs-report <obs.json>] [--env-report <env.jsonl>]
@@ -77,8 +81,11 @@ caligo-cli <K1 probe>
   --async-mode 0/1/2 = 干跑 / uv_async 原子载荷 / JS 枚举 major(K2-03)。
 ";
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+pub fn usage(command: &str) -> String {
+    USAGE.replace("caligo-cli", command)
+}
+
+pub fn run(args: &[String], command: &str) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("verify-manifest") if args.len() == 2 => {
             let path = PathBuf::from(&args[1]);
@@ -98,10 +105,10 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("exports") => cmd_exports(&args[1..]),
-        Some("bytes") => cmd_bytes(&args[1..]),
-        Some("disasm") => cmd_disasm(&args[1..]),
-        Some("identifiers") => cmd_identifiers(&args[1..]),
+        Some("exports") => cmd_exports(&args[1..], command),
+        Some("bytes") => cmd_bytes(&args[1..], command),
+        Some("disasm") => cmd_disasm(&args[1..], command),
+        Some("identifiers") => cmd_identifiers(&args[1..], command),
         Some("rtti") => cmd_rtti(&args[1..]),
         Some("envscan") => cmd_envscan(&args[1..]),
         Some("inject") => cmd_inject(&args[1..]),
@@ -119,7 +126,7 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage(command));
             ExitCode::FAILURE
         }
     }
@@ -314,7 +321,7 @@ fn cmd_process() -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_exports(args: &[String]) -> ExitCode {
+fn cmd_exports(args: &[String], command: &str) -> ExitCode {
     let mut all = false;
     let mut path: Option<&str> = None;
     for a in args {
@@ -324,7 +331,7 @@ fn cmd_exports(args: &[String]) -> ExitCode {
         }
     }
     let Some(path) = path else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage(command));
         return ExitCode::FAILURE;
     };
     let bytes = match std::fs::read(path) {
@@ -394,7 +401,7 @@ fn to_absolute(path: &Path) -> Result<PathBuf, String> {
 }
 
 /// 离线静态分析:十六进制转储模块内指定 RVA 或导出函数起始的字节。只读文件。
-fn cmd_bytes(args: &[String]) -> ExitCode {
+fn cmd_bytes(args: &[String], command: &str) -> ExitCode {
     let mut module: Option<&str> = None;
     let mut target: Option<&str> = None;
     let mut len: usize = 96;
@@ -421,7 +428,7 @@ fn cmd_bytes(args: &[String]) -> ExitCode {
         i += 1;
     }
     let (Some(module), Some(target)) = (module, target) else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage(command));
         return ExitCode::FAILURE;
     };
 
@@ -496,7 +503,7 @@ fn cmd_bytes(args: &[String]) -> ExitCode {
 
 /// 离线静态挖掘:提取映像内的标识符样式 C 字符串(候选 napi 绑定名),带 RVA。
 /// 仅打印匹配 `^[A-Za-z_][A-Za-z0-9_.$-]{min-1,}$` 的串;只读文件。
-fn cmd_identifiers(args: &[String]) -> ExitCode {
+fn cmd_identifiers(args: &[String], command: &str) -> ExitCode {
     let mut module: Option<&str> = None;
     let mut min_len: usize = 6;
     let mut contains: Option<String> = None;
@@ -532,7 +539,7 @@ fn cmd_identifiers(args: &[String]) -> ExitCode {
         i += 1;
     }
     let Some(module) = module else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage(command));
         return ExitCode::FAILURE;
     };
 
@@ -648,7 +655,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// 离线静态分析:反汇编模块内指定 RVA 或导出函数的代码(iced-x86,只读文件)。
-fn cmd_disasm(args: &[String]) -> ExitCode {
+fn cmd_disasm(args: &[String], command: &str) -> ExitCode {
     let mut module: Option<&str> = None;
     let mut target: Option<&str> = None;
     let mut len: usize = 160;
@@ -675,7 +682,7 @@ fn cmd_disasm(args: &[String]) -> ExitCode {
         i += 1;
     }
     let (Some(module), Some(target)) = (module, target) else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage(command));
         return ExitCode::FAILURE;
     };
     let bytes = match std::fs::read(module) {

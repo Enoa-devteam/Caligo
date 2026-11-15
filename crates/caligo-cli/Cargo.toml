@@ -2,10 +2,7 @@
 name = "caligo-cli"
 version.workspace = true
 edition.workspace = true
-
-[[bin]]
-name = "caligo-cli"
-path = "src/main.rs"
+default-run = "caligo-cli"
 
 [features]
 default = []

@@ -8,6 +8,10 @@
 
 ## 1. 证据材料与口径
 
+2026-11-15 补充：K3-E 的设计、修订归因与原始文件索引已整理为
+[K3-E 实验归档](k3-e-exec-retrospective.md)。下表的 K3-E 原件路径以执行者
+本机为准，曾入库的原件可从该归档所列的历史提交追溯。
+
 | 材料 | 位置 | 能提供 | 不能提供 |
 |---|---|---|---|
 | crashpad JSON(帧列表) | `local-evidence/k2-03/90bb0b36*.json`、`82337034*.json`、`local-evidence/k3-e/63a82da9*.json`、`9a0d383c*.json`、`7f75e838*.json` | 帧地址/模块/RVA offset | PID、时间戳、异常码、线程 ID、寄存器(字段不存在) |
@@ -28,7 +32,7 @@ SHA-256 或 PDB 记录)。因此**各 dump 中我方 DLL 的 offset 无法映射
 | I-01 | 9000 | K2-03 r1(mode 2,上下文阶梯) | 2026-10-06 ~20:26(当日 10:53 启动) | `90bb0b36`(k2-03/) | frame0=QQNT+0x429a0c0(GetEnteredOrMicrotaskContext 域);**frame1=caligo_bridge_k203.dll+0x1467c** | sret ABI 反序:成员函数参数顺序颠倒、返回值误写 `[isolate+0]` → 静默内存腐蚀后 AV | 异常码/线程 id(dump 无字段);腐蚀范围 |
 | I-02 | 28532 | K2-03 r2(mode 3 挂起中断捕获) | 2026-10-06(第二轮) | `82337034`(k2-03/) | run-notes:AV@QQNT+0x429A081;`[栈+0x100D0]` 不可读 | 钉扎/捕获的 tagged Context 跨时间失效后按 Local 解引用 | 同上;未逐帧核对 82337034 JSON(留待现场证据若需) |
 | I-03 | 13056 | K3-E exec 首轮(ARMED 探针) | 2026-10-07 10:07 | `63a82da9`(k3-e/) | frames0-3=QQNT(+0x429a0d1 等);**frames4-5=caligo_bridge_e_100637.dll(+0x1ad19/+0x14b3c)**;**frame6=KERNEL32(远程线程跳板)**;frame7=ntdll | **故障线程 = 我方远程线程**:上下文阶梯在外来线程调 v8(v8 TLS 未初始化);叠加 env 陈旧(数小时前 envscan 值) | PDB 缺失,+0x1ad19 无法映射源码行 |
-| I-04 | 49688 | K3-E(阶梯移入 exec_cb 后复验) | 2026-10-07 10:31 | `9a0d383c`(k3-e/) | 与 I-03 同型:**caligo_bridge_k3e_f.dll(+0x1aec4)** + KERNEL32 跳板帧 | env 全新鲜仍崩 → **推翻"陈旧 env"单因**,坐实外来线程 v8 TLS 机制 | 同上 |
+| I-04 | 49688 | K3-E(新鲜 env 复验，随后修正阶梯位置) | 2026-10-07 10:31 | `9a0d383c`(k3-e/) | 与 I-03 同型:**caligo_bridge_k3e_f.dll(+0x1aec4)** + KERNEL32 跳板帧 | env 全新鲜仍崩 → **推翻"陈旧 env"单因**,坐实外来线程 v8 TLS 机制 | 同上 |
 | I-05 | 44028 | K3-E(hint 上下文执行 JS) | 2026-10-07(文字 ~02:5x,与同表 10:07/10:31 时序矛盾,存疑待核) | **未归档**(retrospective 无 id) | 文字:v8 内部崩溃 | 钉扎 arm 时上下文跨时间执行 JS,app 状态已演进 | crashpad 原件、精确时间、帧 |
 | I-06 | 22532 | K3-F 验收通过后的 drain/重试注入 | 2026-10-07(K3-F 之后) | `7f75e838`(k3-e/) | 29 帧:frames0-5=QQNT(**offset 70034075/70250027** 等);**frame6=caligo_bridge_diag2.dll+0x1A858(108632)**;frames7+ 深层 QQNT | AV 在 QQNT 会话服务内部;**我方模块在栈上(frame6)** | +0x1A858 无法映射(diag2 无 PDB);我方帧是被回调还是返回路径残留,无法判定;PID/时间未入 dump |
 

@@ -2,7 +2,7 @@
 //!
 //! This binary performs no QQ/native/OneBot work and never downloads tools.
 
-use caligo_core::media_tool::{
+use crate::media_tool::{
     ContainerFormat, MediaTool, MediaToolConfig, StopToken, ThumbnailFormat,
 };
 use serde::Serialize;
@@ -49,12 +49,12 @@ struct ArtifactOutput {
     bytes: usize,
 }
 
-fn usage() -> &'static str {
-    "caligo-media --config <absolute-json> <probe|pcm|wav|ogg|silk-wav|silk-ogg|thumbnail> --input <absolute-file> [--output-root <absolute-dir>]"
+fn usage(command: &str) -> String {
+    format!("{command} --config <absolute-json> <probe|pcm|wav|ogg|silk-wav|silk-ogg|thumbnail> --input <absolute-file> [--output-root <absolute-dir>]")
 }
 
-fn parse_args() -> Result<Cli, String> {
-    let mut args = std::env::args().skip(1);
+fn parse_args(raw: &[String], command: &str) -> Result<Cli, String> {
+    let mut args = raw.iter().cloned();
     let mut config = None;
     let mut operation = None;
     let mut input = None;
@@ -73,13 +73,13 @@ fn parse_args() -> Result<Cli, String> {
             "silk-wav" => operation = Some(Operation::SilkWav),
             "silk-ogg" => operation = Some(Operation::SilkOgg),
             "thumbnail" => operation = Some(Operation::Thumbnail),
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("unknown argument {unknown}; usage: {}", usage())),
+            "--help" | "-h" => return Err(usage(command)),
+            unknown => return Err(format!("unknown argument {unknown}; usage: {}", usage(command))),
         }
     }
     Ok(Cli {
         config: absolute_arg(config, "--config")?,
-        operation: operation.ok_or_else(|| format!("missing operation; usage: {}", usage()))?,
+        operation: operation.ok_or_else(|| format!("missing operation; usage: {}", usage(command)))?,
         input: absolute_arg(input, "--input")?,
         output_root: output_root
             .map(|value| absolute_path(value, "--output-root"))
@@ -246,8 +246,8 @@ fn run(cli: Cli) -> Result<serde_json::Value, String> {
     }
 }
 
-fn main() {
-    let result = parse_args().and_then(run);
+pub fn entry(args: &[String], command: &str) {
+    let result = parse_args(args, command).and_then(run);
     match result {
         Ok(value) => {
             println!(

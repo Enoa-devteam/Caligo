@@ -8,7 +8,7 @@
 //! 用法:caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u>
 //!            [--expect-pid <n>] [--core-build <s>] [--media-config <absolute-json>]
 
-use caligo_core::media_tool::{MediaTool, MediaToolConfig};
+use crate::media_tool::{MediaTool, MediaToolConfig};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,15 +46,14 @@ struct Args {
     onebot_ws_reverse_reconnect_ms: u64,
 }
 
-fn parse_args() -> Option<Args> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn parse_args(args: &[String], command: &str) -> Option<Args> {
     let mut a = Args {
         pipe_prefix: String::new(),
         journal: String::new(),
         baseline: "qq-9.9.33-52230".into(),
         account: String::new(),
         expect_pid: 0,
-        core_build: caligo_core::CORE_BUILD.to_string(),
+        core_build: crate::CORE_BUILD.to_string(),
         token_file: None,
         media_config: None,
         onebot_http_bind: "127.0.0.1:5700".into(),
@@ -103,7 +102,7 @@ fn parse_args() -> Option<Args> {
     }
     if a.pipe_prefix.is_empty() || a.journal.is_empty() || a.account.is_empty() {
         eprintln!(
-            "caligod --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--media-config <absolute-json>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-sse-bind 127.0.0.1:6701] [--onebot-mcp-bind 127.0.0.1:6702] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
+            "{command} --pipe-prefix <name> --journal <path> --baseline <id> --account <u> [--expect-pid <n>] [--core-build <s>] [--media-config <absolute-json>] [--onebot-http-bind 127.0.0.1:5700] [--onebot-ws-bind 127.0.0.1:6700] [--onebot-sse-bind 127.0.0.1:6701] [--onebot-mcp-bind 127.0.0.1:6702] [--onebot-http-post-url <url>] [--onebot-http-post-secret-env <name>] [--onebot-ws-reverse-url <ws-url>] [--onebot-ws-reverse-token-env <name>]"
         );
         return None;
     }
@@ -117,8 +116,8 @@ fn read_secret_env(name: Option<&str>) -> Result<Option<String>, String> {
         .map_err(|_| format!("configured credential environment variable {name} is unavailable"))
 }
 
-fn main() {
-    let Some(args) = parse_args() else {
+pub fn entry(args: &[String], command: &str) {
+    let Some(args) = parse_args(args, command) else {
         std::process::exit(2);
     };
     let reverse_self_id = if args.onebot_ws_reverse_url.is_some() {
@@ -155,7 +154,7 @@ fn main() {
                 std::process::exit(2);
             })
     });
-    let config = caligo_core::daemon::DaemonConfig {
+    let config = crate::daemon::DaemonConfig {
         pipe_prefix: args.pipe_prefix,
         journal_path: args.journal.into(),
         module_baseline: args.baseline,
@@ -168,7 +167,7 @@ fn main() {
     };
     // 凭据:token-file 优先(重启连续性;文件 user-only,不进 argv/日志)。
     // Daemon::start 自身生成随机 token —— token-file 模式下用文件内容覆盖。
-    let daemon = match caligo_core::daemon::Daemon::start_with_voice_media(config, voice_media) {
+    let daemon = match crate::daemon::Daemon::start_with_voice_media(config, voice_media) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("[caligod] journal open failed(不静默重建): {e}");
@@ -186,7 +185,7 @@ fn main() {
         };
         daemon.set_auth_token(&token);
     }
-    let listener = match caligo_core::onebot_server::bind_loopback(&args.onebot_http_bind) {
+    let listener = match crate::onebot_server::bind_loopback(&args.onebot_http_bind) {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("[caligod] OneBot HTTP bind failed: {error}");
@@ -195,7 +194,7 @@ fn main() {
     };
     let onebot_http_addr: SocketAddr = listener.local_addr().expect("bound listener address");
     let ws_listener = match args.onebot_ws_bind.as_deref() {
-        Some(address) => match caligo_core::onebot_server::bind_loopback(address) {
+        Some(address) => match crate::onebot_server::bind_loopback(address) {
             Ok(listener) => Some(listener),
             Err(error) => {
                 eprintln!("[caligod] OneBot WebSocket bind failed: {error}");
@@ -209,7 +208,7 @@ fn main() {
         .map(|listener| listener.local_addr().expect("bound websocket address"));
     let bind_optional = |address: Option<&str>, protocol: &str| {
         address.map(|address| {
-            caligo_core::onebot_server::bind_loopback(address).unwrap_or_else(|error| {
+            crate::onebot_server::bind_loopback(address).unwrap_or_else(|error| {
                 eprintln!("[caligod] {protocol} bind failed: {error}");
                 std::process::exit(6);
             })
@@ -244,34 +243,34 @@ fn main() {
         let d = daemon.clone();
         let token = daemon.auth_token();
         std::thread::spawn(move || {
-            caligo_core::onebot_server::serve_http(d, &listener, Some(&token))
+            crate::onebot_server::serve_http(d, &listener, Some(&token))
         })
     };
     let onebot_ws_server = ws_listener.map(|listener| {
         let d = daemon.clone();
         let token = daemon.auth_token();
         std::thread::spawn(move || {
-            caligo_core::onebot_transport::serve_forward_ws(d, listener, Some(token))
+            crate::onebot_transport::serve_forward_ws(d, listener, Some(token))
         })
     });
     let onebot_sse_server = sse_listener.map(|listener| {
         let d = daemon.clone();
         let token = daemon.auth_token();
-        std::thread::spawn(move || caligo_core::onebot_sse::serve_sse(d, listener, Some(token)))
+        std::thread::spawn(move || crate::onebot_sse::serve_sse(d, listener, Some(token)))
     });
     let onebot_mcp_server = mcp_listener.map(|listener| {
         let d = daemon.clone();
         let token = daemon.auth_token();
-        std::thread::spawn(move || caligo_core::onebot_mcp::serve_mcp(d, listener, Some(token)))
+        std::thread::spawn(move || crate::onebot_mcp::serve_mcp(d, listener, Some(token)))
     });
     let http_post_worker = args.onebot_http_post_url.map(|url| {
         daemon.enable_onebot_http_post_ordering();
         let d = daemon.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
         let worker = std::thread::spawn(move || {
-            caligo_core::onebot_transport::run_http_post_ready(
+            crate::onebot_transport::run_http_post_ready(
                 d,
-                caligo_core::onebot_transport::HttpPostConfig {
+                crate::onebot_transport::HttpPostConfig {
                     url,
                     secret: http_post_secret,
                     timeout: std::time::Duration::from_millis(args.onebot_http_post_timeout_ms),
@@ -296,9 +295,9 @@ fn main() {
         let reconnect_interval =
             std::time::Duration::from_millis(args.onebot_ws_reverse_reconnect_ms);
         std::thread::spawn(move || {
-            caligo_core::onebot_transport::run_reverse_ws(
+            crate::onebot_transport::run_reverse_ws(
                 d,
-                caligo_core::onebot_transport::ReverseWsConfig {
+                crate::onebot_transport::ReverseWsConfig {
                     url,
                     access_token: reverse_token,
                     self_id,

@@ -7,6 +7,7 @@
 
 pub mod account_manager;
 pub mod capability_broker;
+pub mod commands;
 pub mod daemon;
 pub mod ipc;
 pub mod journal;
