@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。发布验证及资产以 GitHub Release 和 CI 为准。
+
 2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。
 
 2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 将 GitHub Test 收敛为单个 `Windows x64 / formal bridge` 作业。PR、main、手动调用与 Release 复用同一默认 Windows x64 流程。桥接命名管道、core 重启、文本编解码、合成原生 adapter 和版本指纹拒绝测试均纳入默认构建，Node capability tooling 在同一作业执行。研究诊断保留本地 `init.ps1 -Mode research` 入口。

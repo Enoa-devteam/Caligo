@@ -17,11 +17,8 @@
 ## Windows Release 启动
 
 [GitHub Releases](https://github.com/Enoa-devteam/Caligo/releases) 提供 Windows x64 ZIP 和
-SHA-256。当前最新发布为 [v0.2.0](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)；
-该版本早于下文的 `manage` 入口和正式桥统一，使用时请查阅
-[v0.2.0 的 README](https://github.com/Enoa-devteam/Caligo/blob/v0.2.0/README.md)。
-
-以下说明适用于当前 main 的源码构建，或包含这些改动的后续发布包。Windows x64 的
+SHA-256。v0.3.0 起包含下文的 `manage` 入口和正式桥；较早版本请参阅对应版本的 README。
+下载并解压发布包，在解压目录打开 PowerShell。源码构建的 Windows x64
 锁定依赖构建与打包步骤见[开发与验证指南](docs/guides/development.md#github-actions-test--release)。
 构建后的 `caligo.exe` 和 `caligo_bridge.dll` 须来自同一构建。
 
