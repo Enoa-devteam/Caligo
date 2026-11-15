@@ -118,8 +118,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -207,8 +207,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -290,8 +290,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -365,7 +365,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-http-bind"
         },
         {
@@ -428,7 +428,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-http-post-url"
         },
         {
@@ -491,7 +491,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-ws-bind"
         },
         {
@@ -554,7 +554,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-ws-reverse-url"
         },
         {
@@ -617,7 +617,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-sse-bind"
         }
       ],
@@ -676,7 +676,7 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
+          "path": "crates/caligo-core/src/commands/daemon.rs",
           "symbol": "--onebot-mcp-bind"
         }
       ],
@@ -739,8 +739,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -960,8 +960,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         }
       ],
       "permission": {
@@ -1027,8 +1027,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -1112,8 +1112,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -1276,14 +1276,14 @@
           "symbol": "pub fn start_all(&mut self)"
         },
         {
-          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/manager.rs",
+          "symbol": "pub fn entry("
         }
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/manager.rs",
+          "symbol": "pub fn entry("
         }
       ],
       "permission": {
@@ -1353,11 +1353,11 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "path": "crates/caligo-core/src/commands/manager.rs",
           "symbol": "ManagementHttpServer::start("
         },
         {
-          "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+          "path": "crates/caligo-core/src/commands/manager.rs",
           "symbol": "\"--management-bind\""
         }
       ],
@@ -1385,7 +1385,7 @@
               "symbol": "pub fn start("
             },
             {
-              "path": "crates/caligo-core/src/bin/caligo-manager.rs",
+              "path": "crates/caligo-core/src/commands/manager.rs",
               "symbol": "ManagementHttpServer::start("
             }
           ]
@@ -1436,11 +1436,11 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligo-media.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/media.rs",
+          "symbol": "pub fn entry("
         },
         {
-          "path": "crates/caligo-core/src/bin/caligo-media.rs",
+          "path": "crates/caligo-core/src/commands/media.rs",
           "symbol": "fn run(cli: Cli)"
         }
       ],
@@ -1604,8 +1604,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -1733,8 +1733,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",
@@ -1840,8 +1840,8 @@
       ],
       "normal_entry": [
         {
-          "path": "crates/caligo-core/src/bin/caligod.rs",
-          "symbol": "fn main()"
+          "path": "crates/caligo-core/src/commands/daemon.rs",
+          "symbol": "pub fn entry("
         },
         {
           "path": "crates/caligo-core/src/onebot_server.rs",

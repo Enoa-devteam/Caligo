@@ -39,18 +39,27 @@ finally 恢复原默认 owner；不修改 DACL、不跳过账号隔离断言。�
 固定 SHA 的 capability inventory 通过 `.gitattributes` 使用 LF，防止 Windows checkout
 改变证据字节；CI 不重新生成清单或替换其预期 SHA。
 
-[Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用 Test，
-通过后构建 default/research 两套 release。标签必须为 workspace 版本的 `v<version>`
-或 `v<version>-<prerelease>`；改版本时同步 Cargo manifests/lock 后再打标签。
-手动运行仅上传保留 14 天的 Actions artifacts，不创建 GitHub Release；标签运行将两套包
-发布为 GitHub prerelease（不设为 latest）。本任务只建立流程，不创建版本标签或发布。
+[Release](../../.github/workflows/release.yml) 在 `v*` 标签推送或手动触发时先复用 Test 的
+default/research 两套测试，再构建一套普通 Windows x64 发布包。标签必须为 workspace
+版本的 `v<version>` 或 `v<version>-<prerelease>`。改版本时同步 Cargo manifests 和 lock
+后再打标签。手动运行上传保留 14 天的 Actions artifact。标签运行将同一 ZIP 和
+SHA-256 文件发布为 GitHub prerelease。
 
-[打包脚本](../../.github/scripts/package-release.ps1) 仅收集五个 EXE、bridge DLL、README、
-LICENSE 和 build-info.json；产物为 ZIP 与独立 SHA-256 文件，build-info 记录源码 commit、
-Rust 版本、target、research 开关及包内文件 SHA-256。原始证据、QQ 文件与凭据不进入包。
-从仓库根目录、完成相应构建后可单独运行 `.github/scripts/package-release.ps1 -Mode default`
-或 `-Mode research`；必须与刚构建的 feature 集匹配。CI 构建不提升产品 feature 状态，
-research 包的现场使用仍遵守当前原生准入合同。
+`caligo-<版本>-windows-x64.zip` 内的唯一 EXE 为 `caligo.exe`。包还包含
+`caligo_bridge.dll`、README、LICENSE 和 build-info.json。build-info 记录源码 commit、
+工具链、target、research 开关和包内文件 SHA-256。启动方式见 [README](../../README.md#windows-release-启动)。
+
+在干净的目标目录中复现同一发布包：
+
+```powershell
+$env:CARGO_BUILD_TARGET = 'x86_64-pc-windows-msvc'
+cargo build --release --locked --offline --target-dir target-harness -p caligo-cli --bin caligo -p caligo-bridge --lib
+./.github/scripts/package-release.ps1
+```
+
+源码构建仍可生成 `caligod`、`caligo-manager`、`caligo-media`、`caligo-cli` 和
+历史研究入口 `onebotd`。需要 research 的开发者可从源码启用对应 feature，
+现场操作仍由[当前原生准入合同](native-research.md)约束。
 
 ## 单项命令
 

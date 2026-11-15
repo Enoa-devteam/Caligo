@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-15 Release 改为一套普通 Windows x64 ZIP 和 SHA-256。包内唯一 EXE 为 `caligo.exe`，子命令复用现有 daemon、账号管理、媒体和 CLI 实现，旧源码构建入口与 default/research 测试矩阵继续可用。启动入口见 [README](README.md#windows-release-启动)，打包见[开发指南](docs/guides/development.md#github-actions-test--release)。本机 `init.ps1 -Mode all`、actionlint、PowerShell 语法和 Node tooling（16 PASS、2 依赖外部输入的 SKIP）通过。独立核对 ZIP 根目录、两份 x64 PE、包内与 ZIP 的 SHA-256。从解压包实测 CLI 帮助、bridge 导出、默认门控、媒体帮助、manager 配置检查，以及合成账号 daemon 的 HTTP 鉴权、管道 Health 和正常 Stop。实际标签发布与 QQ 现场验收独立跟踪。
+
 2026-11-15 K3-E 历史材料已整理为[研究归档](docs/research/k3-e-exec-retrospective.md)，覆盖 31 份本机材料，记录 I-03 至 I-06 的证据与未知项。曾跟踪的事故笔记和两份帧摘录可由 Git 历史追溯，现场原件留在本机。
 
 2026-11-14 第二次托管 [Test run 43605980993](https://github.com/Enoa-devteam/Caligo/actions/runs/43605980993)：default 的 runner owner 预检及全部 Rust 测试通过，随后 Node 固定清单 SHA 断言失败。定位为 Windows checkout 将 inventory 的 LF 改为 CRLF：预期 SHA-256 `89de4711…45bc25`，CRLF 的 `02b399cb…5ceed7` 与托管 actual 完全一致。`.gitattributes` 为 `snowcat-capability-inventory.json` 固定 LF，保留原文件字节与原 SHA 断言，不重新生成证据或跳过核验。最新托管结果仍以 PR checks 为准。

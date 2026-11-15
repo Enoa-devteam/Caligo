@@ -11,7 +11,7 @@
 | caligo-model | 共享身份/事件模型、IPC v2/v3、帧与文本 wire；[lib.rs](../../crates/caligo-model/src/lib.rs)、[qq_wire/send.rs](../../crates/caligo-model/src/qq_wire/send.rs) |
 | caligo-bridge | QQ 进程内 ABI、句柄、研究入口与 resident；[lib.rs](../../crates/caligo-bridge/src/lib.rs)、[native_resident.rs](../../crates/caligo-bridge/src/native_resident.rs) |
 | caligo-core | 进程外 actor、journal、IPC、消息索引与 OneBot；[runtime.rs](../../crates/caligo-core/src/runtime.rs)、[daemon.rs](../../crates/caligo-core/src/daemon.rs) |
-| caligo-cli | 只读 PE/进程工具及受门控研究 loader；[main.rs](../../crates/caligo-cli/src/main.rs)、[winutil.rs](../../crates/caligo-cli/src/winutil.rs) |
+| caligo-cli | 只读 PE/进程工具及受门控研究 loader；[lib.rs](../../crates/caligo-cli/src/lib.rs)、[winutil.rs](../../crates/caligo-cli/src/winutil.rs) |
 
 [Cargo.toml](../../Cargo.toml) 是依赖权威；bridge 同时生成 rlib/cdylib。
 `caligo-core/research` 转发 `caligo-bridge/research`，默认门控由
@@ -20,7 +20,7 @@
 
 ## 常驻发送路径
 
-1. [caligod](../../crates/caligo-core/src/bin/caligod.rs) 启动 core；
+1. [caligod](../../crates/caligo-core/src/commands/daemon.rs) 启动 core；
    [daemon](../../crates/caligo-core/src/daemon.rs) 管理 control/bridge 管道。
 2. [runtime](../../crates/caligo-core/src/runtime.rs) 维护账号 actor、请求代次及持久状态。
 3. [resident](../../crates/caligo-bridge/src/resident.rs) 接收 IPC，驱动 adapter。

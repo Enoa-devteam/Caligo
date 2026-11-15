@@ -8,7 +8,7 @@
 
 ## 2. 当前实现
 
-- [verified] `caligod` 通过同一 OneBot 动作层接入 HTTP、HTTP POST、正向和反向 WS。动作表覆盖文本发送、消息查询、登录、状态和版本。私聊发送仍受身份解析限制，正式 CPB 接收路径的 `onebot_projection` 为 `None`。[启动入口](../../crates/caligo-core/src/bin/caligod.rs) · [动作](../../crates/caligo-core/src/onebot.rs#L200) · [发送适配](../../crates/caligo-core/src/onebot_server.rs) · [接收投影](../../crates/caligo-bridge/src/daemon_client.rs#L920)
+- [verified] `caligod` 通过同一 OneBot 动作层接入 HTTP、HTTP POST、正向和反向 WS。动作表覆盖文本发送、消息查询、登录、状态和版本。私聊发送仍受身份解析限制，正式 CPB 接收路径的 `onebot_projection` 为 `None`。[启动入口](https://github.com/Enoa-devteam/Caligo/blob/bcba478afabeaee4d440bd7ada7a54d4d922d5e0/crates/caligo-core/src/bin/caligod.rs) · [动作](../../crates/caligo-core/src/onebot.rs#L200) · [发送适配](../../crates/caligo-core/src/onebot_server.rs) · [接收投影](../../crates/caligo-bridge/src/daemon_client.rs#L920)
 - [verified] `NativeSession` 先登记 cookie 后提交，core 对当前代次事件落 journal 并写 MessageStore，已有失败重放和持久 ID 查询结构。ProfileService 当前为未提交的 research 入口，须作为可复用基线纳入第一阶段，完整整合不得卡在该单项的现场结果。[会话](../../crates/caligo-bridge/src/native_session.rs#L293) · [事件入账](../../crates/caligo-core/src/runtime.rs#L824) · [身份探针](../../crates/caligo-bridge/src/uid_map_probe.rs#L135)
 
 ## 3. 证据和目标架构

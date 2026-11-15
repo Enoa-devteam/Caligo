@@ -1,14 +1,14 @@
 # OneBot 与 MCP 应用入口
 
 适用：修改 `caligod` 的协议装配、动作发现或事件传输。
-依据：[启动入口](../../crates/caligo-core/src/bin/caligod.rs)、
+依据：[启动入口](../../crates/caligo-core/src/commands/daemon.rs)、
 [真实动作注册表](../../crates/caligo-core/src/onebot.rs)、
 [SSE](../../crates/caligo-core/src/onebot_sse.rs)、
 [MCP](../../crates/caligo-core/src/onebot_mcp.rs)。
 
 ## 启动与共享语义
 
-`caligod` 保持单账号 daemon。HTTP 默认绑定 `127.0.0.1:5700`；
+Release 使用 `caligo.exe daemon` 启动单账号 daemon。HTTP 默认绑定 `127.0.0.1:5700`；
 可选 `--onebot-sse-bind 127.0.0.1:6701` 与
 `--onebot-mcp-bind 127.0.0.1:6702` 分别启用两个独立 loopback listener。
 端口 `0` 可由系统分配，实际地址以启动首行 JSON 的 `onebot_sse` / `onebot_mcp` 为准。

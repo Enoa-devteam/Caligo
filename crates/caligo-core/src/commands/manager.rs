@@ -3,9 +3,9 @@
 //! This binary owns only core daemons and loopback OneBot listeners. It never
 //! attaches QQ and never writes authentication material to stdout.
 
-use caligo_core::account_manager::{AccountManager, ManagerConfig, PortConfig};
-use caligo_core::daemon::Daemon;
-use caligo_core::management_http::{ManagementHttpConfig, ManagementHttpServer};
+use crate::account_manager::{AccountManager, ManagerConfig, PortConfig};
+use crate::daemon::Daemon;
+use crate::management_http::{ManagementHttpConfig, ManagementHttpServer};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -30,8 +30,7 @@ struct Args {
     management_bind: Option<SocketAddr>,
 }
 
-fn parse_args() -> Result<Args, String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut check = false;
     let mut set_config = None;
@@ -96,7 +95,7 @@ fn read_config_file(path: &Path) -> Result<ManagerConfig, String> {
 
 fn endpoint(port: Option<u16>) -> Result<Option<(TcpListener, String)>, String> {
     let Some(port) = port else { return Ok(None) };
-    let listener = caligo_core::onebot_server::bind_loopback(&format!("127.0.0.1:{port}"))
+    let listener = crate::onebot_server::bind_loopback(&format!("127.0.0.1:{port}"))
         .map_err(|_| "loopback listener bind failed".to_string())?;
     let address = listener
         .local_addr()
@@ -199,7 +198,7 @@ fn spawn_listener_threads(bound: Vec<BoundAccount>) -> Vec<ListenerThread> {
                 account: account_id,
                 kind: "http",
                 handle: thread::spawn(move || {
-                    caligo_core::onebot_server::serve_http(daemon, &listener, Some(&token));
+                    crate::onebot_server::serve_http(daemon, &listener, Some(&token));
                     Ok(())
                 }),
             });
@@ -211,7 +210,7 @@ fn spawn_listener_threads(bound: Vec<BoundAccount>) -> Vec<ListenerThread> {
                 account: account_id,
                 kind: "websocket",
                 handle: thread::spawn(move || {
-                    caligo_core::onebot_transport::serve_forward_ws(daemon, listener, Some(token));
+                    crate::onebot_transport::serve_forward_ws(daemon, listener, Some(token));
                     Ok(())
                 }),
             });
@@ -223,7 +222,7 @@ fn spawn_listener_threads(bound: Vec<BoundAccount>) -> Vec<ListenerThread> {
                 account: account_id,
                 kind: "sse",
                 handle: thread::spawn(move || {
-                    caligo_core::onebot_sse::serve_sse(daemon, listener, Some(token))
+                    crate::onebot_sse::serve_sse(daemon, listener, Some(token))
                         .map(|_| ())
                         .map_err(|_| "listener stopped with an error".to_string())
                 }),
@@ -236,7 +235,7 @@ fn spawn_listener_threads(bound: Vec<BoundAccount>) -> Vec<ListenerThread> {
                 account: account_id,
                 kind: "mcp",
                 handle: thread::spawn(move || {
-                    caligo_core::onebot_mcp::serve_mcp(daemon, listener, Some(token))
+                    crate::onebot_mcp::serve_mcp(daemon, listener, Some(token))
                         .map(|_| ())
                         .map_err(|_| "listener stopped with an error".to_string())
                 }),
@@ -312,9 +311,9 @@ fn install_ctrl_handler() {
     }
 }
 
-fn main() {
+pub fn entry(args: &[String]) {
     install_ctrl_handler();
-    let args = match parse_args() {
+    let args = match parse_args(args) {
         Ok(args) => args,
         Err(error) => {
             eprintln!("[caligo-manager] {error}");
@@ -402,7 +401,7 @@ fn main() {
         Some(bind) => {
             let token_result = {
                 let manager_guard = manager.lock().expect("manager mutex poisoned");
-                caligo_core::account_manager::management_token(manager_guard.root())
+                crate::account_manager::management_token(manager_guard.root())
             };
             let token = match token_result {
                 Ok(token) => token,

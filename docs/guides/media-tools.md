@@ -35,19 +35,19 @@ stdout/stderr 由独立读取线程并发消费，共用总字节上限，避免
 
 ## 正常入口
 
-正常 CLI 入口为：
+Release 中使用以下 CLI 命令。
 
 ```text
-caligo-media --config <absolute-json> probe --input <absolute-file>
-caligo-media --config <absolute-json> pcm --input <absolute-file> --output-root <absolute-dir>
-caligo-media --config <absolute-json> thumbnail --input <absolute-file> --output-root <absolute-dir>
-caligo-media --config <absolute-json> silk-wav --input <absolute-silk> --output-root <absolute-dir>
-caligo-media --config <absolute-json> silk-ogg --input <absolute-silk> --output-root <absolute-dir>
+caligo.exe media --config <absolute-json> probe --input <absolute-file>
+caligo.exe media --config <absolute-json> pcm --input <absolute-file> --output-root <absolute-dir>
+caligo.exe media --config <absolute-json> thumbnail --input <absolute-file> --output-root <absolute-dir>
+caligo.exe media --config <absolute-json> silk-wav --input <absolute-silk> --output-root <absolute-dir>
+caligo.exe media --config <absolute-json> silk-ogg --input <absolute-silk> --output-root <absolute-dir>
 ```
 
 配置文件本身不执行下载或安装。CLI 转码使用显式配置的解码器，QQ 下载和上传的验收另见执行记录。
 
-单账号 `caligod --media-config <absolute-json>` 可加载同一配置。`work_root` 必须是当前用户专用目录，其父目录须已存在。多账号 `caligo-manager` 从各账号私有目录读取可选的 `voice-media.json`，把工作目录固定到该账号的 `media-jobs`。工具配置由本机文件提供。
+单账号 `caligo.exe daemon --media-config <absolute-json>` 可加载同一配置。`work_root` 必须是当前用户专用目录，其父目录须已存在。多账号 `caligo.exe manager` 从各账号私有目录读取可选的 `voice-media.json`，把工作目录固定到该账号的 `media-jobs`。工具配置由本机文件提供。
 
 OneBot `get_record` 接受私聊及群聊收发语音的账号限定文件标识。`out_format` 省略时返回原始 Silk，配置 `silk_decoder` 后可选 `wav` 或 `ogg`。下载上限 128 KiB，转码的中间 PCM 与输出各最多 4 MiB，并受更低的本机配置限制。响应给出 Base64、实际字节数和固定文件名。缺配置或不支持的格式返回 1404，工具失败返回 1502，转码超时或停止返回 1501。
 
