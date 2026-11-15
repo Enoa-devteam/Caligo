@@ -1884,6 +1884,7 @@ fn cmd_inject(args: &[String]) -> ExitCode {
             ),
             g3_session.clone(),
             native_resident.as_ref(),
+            None,
         )
     };
     match outcome {

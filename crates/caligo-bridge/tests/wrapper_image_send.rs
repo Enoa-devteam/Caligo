@@ -1,4 +1,3 @@
-#![cfg(feature = "research")]
 use caligo_bridge::qq_v8::{build_image_send_js, D8_POLL_JS, D8_START_JS, D8_STOP_JS};
 
 #[test]

@@ -48,6 +48,8 @@ SHA-256 文件发布为 GitHub prerelease。
 `caligo-<版本>-windows-x64.zip` 内的唯一 EXE 为 `caligo.exe`。包还包含
 `caligo_bridge.dll`、README、LICENSE 和 build-info.json。build-info 记录源码 commit、
 工具链、target、research 开关和包内文件 SHA-256。启动方式见 [README](../../README.md#windows-release-启动)。
+正式 bridge 编译 owner、V8 适配、daemon 客户端及作用域查询。research feature 用于历史
+探针和其测试，已验证的托管链路在默认构建中运行。
 
 在干净的目标目录中复现同一发布包：
 

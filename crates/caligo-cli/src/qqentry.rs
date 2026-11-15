@@ -1,4 +1,4 @@
-//! K4-D7 候选 B 首入的 CLI 入口(research 运行时门控;普通构建拒绝)。
+//! QQ owner entry, status and shutdown. The managed path uses the exact supported profile.
 //!
 //! 新路线专用命令:加载 bridge(仅 LoadLibrary+probe)→ 远程调用
 //! `caligo_qq_entry_bootstrap`。状态/关闭只访问已映射且匹配的 bridge。
@@ -13,6 +13,7 @@ use super::{verify_manifest, winutil};
 #[derive(Debug, Default, Clone)]
 struct QqEntryArgs {
     pid: Option<u32>,
+    created_filetime: Option<u64>,
     bridge: Option<PathBuf>,
     manifest: Option<PathBuf>,
     report: Option<PathBuf>,
@@ -23,6 +24,7 @@ struct QqEntryArgs {
     /// D7b:daemon 客户端接线(可选;bootstrap 成功后启动)。
     daemon_pipe: Option<String>,
     daemon_auth: Option<String>,
+    daemon_auth_file: Option<PathBuf>,
     daemon_generation: Option<u64>,
     daemon_account: Option<String>,
     /// One-shot read-only QQNT identity-map round-trip; paired with uid_map_result.
@@ -54,6 +56,12 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
         };
         match args[i].as_str() {
             "--pid" => a.pid = next(&mut i).and_then(|s| s.parse().ok()),
+            "--created-filetime" => {
+                a.created_filetime = next(&mut i).and_then(|s| s.parse().ok()).filter(|n| *n > 0);
+                if a.created_filetime.is_none() {
+                    return Err("--created-filetime requires a positive Windows FILETIME".into());
+                }
+            }
             "--bridge" => a.bridge = next(&mut i).map(PathBuf::from),
             "--manifest" => a.manifest = next(&mut i).map(PathBuf::from),
             "--report" => a.report = next(&mut i).map(PathBuf::from),
@@ -67,6 +75,10 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
             "--confirm-designated-test-instance" => a.confirmed = true,
             "--daemon-pipe" => a.daemon_pipe = next(&mut i),
             "--daemon-auth" => a.daemon_auth = next(&mut i),
+            "--daemon-auth-file" => {
+                a.daemon_auth_file = Some(next(&mut i).map(PathBuf::from)
+                    .ok_or("--daemon-auth-file requires a path")?);
+            }
             "--daemon-generation" => {
                 a.daemon_generation = next(&mut i).and_then(|s| s.parse().ok());
             }
@@ -137,7 +149,7 @@ fn map_code(code: u32) -> QqEntryExit {
 
 fn usage() {
     eprintln!(
-        "用法:qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] (--current-login | --refresh-current-profile) --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "正式托管：qq-entry --pid <n> --created-filetime <n> --bridge <dll> --manifest <json> --report <jsonl> --daemon-pipe <name> --daemon-auth-file <path> --daemon-account <uin> --confirm-designated-test-instance\n      全部正式查询/停止也需提供 --created-filetime。\n研究探针：qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] (--current-login | --refresh-current-profile) --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
     );
 }
 
@@ -154,18 +166,57 @@ enum UidMapRequest {
 fn gates(
     args: &[String],
     need_env: bool,
-) -> Result<(u32, PathBuf, PathBuf, usize, u32, u32, QqEntryArgs), ExitCode> {
-    if !caligo_bridge::gate::research_enabled() {
+) -> Result<(u32, PathBuf, PathBuf, usize, u32, u32, QqEntryArgs, Option<winutil::ManagedProcessLock>), ExitCode> {
+    let managed = args.iter().any(|arg| arg == "--created-filetime");
+    if !managed && !caligo_bridge::gate::research_enabled() {
         eprintln!("{}", caligo_bridge::gate::DISABLED_NOTICE);
         return Err(ExitCode::from(3));
     }
-    let a = match parse_args(args) {
+    let mut a = match parse_args(args) {
         Ok(v) => v,
-        Err(_) => {
+        Err(error) => {
+            eprintln!("{error}");
             usage();
             return Err(ExitCode::FAILURE);
         }
     };
+    let diagnostic = a.uid_map_uin.is_some() || a.uid_map_surface_only || a.uid_map_profile_service
+        || a.current_login || a.refresh_current_profile || a.uid_map_result.is_some();
+    let daemon_options = a.daemon_pipe.is_some() || a.daemon_auth.is_some()
+        || a.daemon_auth_file.is_some() || a.daemon_account.is_some() || a.daemon_generation.is_some();
+    if (managed && (diagnostic || a.env.is_some()))
+        || (need_env && daemon_options && !managed && !diagnostic)
+        || (!need_env && daemon_options)
+    {
+        eprintln!("[qq-entry] 托管入口与诊断探针参数不兼容；托管时需要 --created-filetime");
+        return Err(ExitCode::FAILURE);
+    }
+    if managed && need_env {
+        if a.daemon_pipe.as_deref().is_none_or(str::is_empty)
+            || !a.daemon_account.as_deref().is_some_and(|id| {
+                id.parse::<u64>().is_ok_and(|n| n > 0 && n.to_string() == id)
+            })
+            || a.daemon_generation == Some(0)
+            || a.daemon_auth.is_some()
+        {
+            eprintln!("[qq-entry] 需要有效的账号、管道和私有 --daemon-auth-file");
+            return Err(ExitCode::FAILURE);
+        }
+        use std::io::Read;
+        let token = a.daemon_auth_file.as_ref().and_then(|path| {
+            let mut bytes = Vec::new();
+            std::fs::File::open(path).ok()?.take(65).read_to_end(&mut bytes).ok()?;
+            if bytes.len() != 64 || !bytes.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            String::from_utf8(bytes).ok()
+        });
+        if token.is_none() {
+            eprintln!("[qq-entry] 无法读取有效的私有桥接凭据文件");
+            return Err(ExitCode::FAILURE);
+        }
+        a.daemon_auth = token;
+    }
     if !need_env && (a.uid_map_surface_only || a.uid_map_profile_service || a.current_login || a.refresh_current_profile) {
         eprintln!("[uid-map] surface-only, current-login, profile-refresh and ProfileService modes require qq-entry");
         return Err(ExitCode::FAILURE);
@@ -197,7 +248,7 @@ fn gates(
     }
     if (a.uid_map_uin.is_some() || a.uid_map_surface_only || a.current_login || a.refresh_current_profile)
         && (a.daemon_pipe.is_some() || a.daemon_auth.is_some()
-            || a.daemon_generation.is_some() || a.daemon_account.is_some())
+            || a.daemon_auth_file.is_some() || a.daemon_generation.is_some() || a.daemon_account.is_some())
     {
         eprintln!("[uid-map] 一次性 UID-map 探针不能与 daemon hook 共用 owner pump");
         return Err(ExitCode::FAILURE);
@@ -221,7 +272,7 @@ fn gates(
         usage();
         return Err(ExitCode::FAILURE);
     };
-    if need_env && env.is_none() {
+    if need_env && !managed && env.is_none() {
         eprintln!("--env <hex> 必填(envscan 的只读扫描结果;不猜测地址)");
         return Err(ExitCode::FAILURE);
     }
@@ -241,8 +292,23 @@ fn gates(
         eprintln!("[gate 2] REJECT — 缺少 --confirm-designated-test-instance(test-scope §4)");
         return Err(ExitCode::from(2));
     }
+    let mut entry_lock = None;
+    if let Some(created) = a.created_filetime {
+        if !bridge.is_absolute() {
+            eprintln!("[qq-entry] 正式入口需要 bridge 的绝对路径");
+            return Err(ExitCode::FAILURE);
+        }
+        if let Err(error) = winutil::check_process_creation(pid, created) {
+            eprintln!("[qq-entry] {error}");
+            return Err(ExitCode::from(2));
+        }
+        entry_lock = Some(winutil::ManagedProcessLock::acquire(pid).map_err(|error| {
+            eprintln!("[qq-entry] {error}");
+            ExitCode::from(2)
+        })?);
+    }
     println!("[gate 2] PASS — 执行者已确认 PID {pid} 为指定测试实例");
-    Ok((pid, bridge, report, env.unwrap_or(0), wait_s, wait_ms, a))
+    Ok((pid, bridge, report, env.unwrap_or(0), wait_s, wait_ms, a, entry_lock))
 }
 
 #[cfg(feature = "research")]
@@ -462,8 +528,55 @@ fn print_current_login_summary(path: &Path, expected_pid: u32, refresh: bool) ->
             && result.get("listener_registration").and_then(|v| v.as_str()) == Some("remove_returned")))
 }
 
+fn verify_managed_bridge(bridge: &Path) -> Result<(), String> {
+    if !bridge.file_name().is_some_and(|name| name.eq_ignore_ascii_case("caligo_bridge.dll")) {
+        return Err("正式接入需要发布包中的 caligo_bridge.dll".into());
+    }
+    let bytes = std::fs::read(bridge).map_err(|error| format!("read bridge: {error}"))?;
+    let table = crate::pe::parse_export_table(&bytes)?;
+    const EXPORTS: [&str; 5] = [
+        "caligo_qq_managed_entry_abi",
+        "caligo_qq_entry_bootstrap",
+        "caligo_qq_daemon_client_start",
+        "caligo_qq_daemon_status",
+        "caligo_qq_entry_shutdown",
+    ];
+    if table.machine != "x64" || !EXPORTS.iter().all(|required| {
+        table.exports.iter().any(|entry| entry.name == *required && !entry.forwarded && entry.function_rva != 0)
+    }) {
+        return Err("bridge DLL does not support the managed entry ABI".into());
+    }
+    Ok(())
+}
+
+fn checked_managed_environment(pid: u32, created: u64, qqnt_base: usize) -> Result<usize, String> {
+    let processes = winutil::list_processes("QQ.exe")?;
+    let target = processes.iter().find(|process| process.pid == pid)
+        .ok_or("designated target is not a QQ.exe process")?;
+    if target.modules.iter().any(|path| {
+        Path::new(path).file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("caligo_bridge.dll"))
+    }) {
+        return Err("QQ process already has a bridge; use a fresh host generation".into());
+    }
+    if !caligo_bridge::qq_query::matches_voice_profile(&target.modules) {
+        return Err("loaded QQ modules do not match supported profile 9.9.36-53644".into());
+    }
+    let targets = [crate::envscan::ScanTarget {
+        vtable_rva: caligo_bridge::exec::EXPECTED_VTABLE_RVA,
+        member_offset: 0,
+    }];
+    // SAFETY: an operator has designated this process; the scan holds read-only access.
+    let scan = unsafe { crate::envscan::scan_process(pid, &targets, 0, false) }?;
+    winutil::check_process_creation(pid, created)?;
+    if scan.qqnt_base != qqnt_base as u64 || scan.regions_read_failed != 0 || scan.hits.len() != 1 {
+        return Err("Environment scan is incomplete, ambiguous, or from a different image".into());
+    }
+    usize::try_from(scan.hits[0].candidate_env).map_err(|_| "invalid Environment address".into())
+}
+
 pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
-    let (pid, bridge, report, env, wait_s, _wait_ms, extra) = match gates(args, true) {
+    let (pid, bridge, report, mut env, wait_s, _wait_ms, extra, _entry_lock) = match gates(args, true) {
         Ok(v) => v,
         Err(c) => return c,
     };
@@ -525,9 +638,23 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         eprintln!("QQNT.dll 基址未解析(主进程判据复核:test-scope §4)");
         return ExitCode::FAILURE;
     }
+    if let Some(created) = extra.created_filetime {
+        if let Err(error) = verify_managed_bridge(&bridge) {
+            eprintln!("[qq-entry] {error}");
+            return ExitCode::from(2);
+        }
+        env = match checked_managed_environment(pid, created, qqnt_base) {
+            Ok(value) if value != 0 => value,
+            Ok(_) => return ExitCode::from(2),
+            Err(error) => {
+                eprintln!("[qq-entry] {error}");
+                return ExitCode::from(2);
+            }
+        };
+    }
     println!("[qq-entry] qqnt_base={qqnt_base:#x} env={env:#x}");
 
-    // 加载 bridge(LoadLibrary + probe;research 构建下 probe 可用)。
+    // Managed attach loads the same bridge without invoking a diagnostic probe.
     println!("[qq-entry] 加载 bridge …");
     let probe_report = report.with_file_name("qq-entry-probe.json");
     let remote_base = match unsafe {
@@ -552,6 +679,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             None,
             None,
             None,
+            extra.created_filetime,
         )
     } {
         Ok(o) => o.remote_base,
@@ -563,7 +691,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     println!("[qq-entry] remote_base={remote_base:#x}");
 
     // 远程调用 caligo_qq_entry_bootstrap(ctx)。
-    let code = unsafe { remote_bootstrap(pid, remote_base, qqnt_base, env, &report, wait_s) };
+    let code = unsafe { remote_bootstrap(pid, remote_base, qqnt_base, env, &report, wait_s, extra.created_filetime) };
     let code = match code {
         Ok(c) => c,
         Err(e) => {
@@ -653,15 +781,14 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     print_report(&report);
     // D7b:bootstrap 成功后启动 daemon 客户端(可选)。
     if verdict == QqEntryExit::Ok {
-        let (Some(pipe), Some(auth)) = (extra.daemon_pipe.clone(), extra.daemon_auth.clone())
-        else {
+        let (Some(pipe), Some(auth), Some(account)) = (
+            extra.daemon_pipe.as_deref(),
+            extra.daemon_auth.as_deref(),
+            extra.daemon_account.as_deref(),
+        ) else {
             return ExitCode::SUCCESS;
         };
         let generation = extra.daemon_generation.unwrap_or(1);
-        let account = extra
-            .daemon_account
-            .clone()
-            .unwrap_or_else(|| "10001".to_string());
         let cfg_json = serde_json::json!({
             "pipe_name": pipe,
             "auth_token": auth,
@@ -671,7 +798,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
             "report_path": absolute_report_path(&report).to_string_lossy(),
             "qqnt_base": format!("{qqnt_base:#x}"),
         });
-        let code = unsafe { remote_daemon_start(pid, remote_base, &cfg_json.to_string()) };
+        let code = unsafe { remote_daemon_start(pid, remote_base, &cfg_json.to_string(), extra.created_filetime) };
         match code {
             Ok(0) => println!("[qq-entry] daemon 客户端已启动(管道 {pipe})"),
             Ok(c) => {
@@ -686,7 +813,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
     }
     match verdict {
         QqEntryExit::Ok => ExitCode::SUCCESS,
-        QqEntryExit::Already => {
+        QqEntryExit::Already if extra.created_filetime.is_none() => {
             println!("[qq-entry] 已初始化(每宿主代次一次)—— 单实例判据成立");
             ExitCode::SUCCESS
         }
@@ -700,7 +827,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
 
 /// SAFETY: 前置:bridge 已加载。
 /// daemon 启动导出为单指针签名(NUL 结尾 UTF-8 JSON)。
-unsafe fn remote_daemon_start(pid: u32, remote_base: usize, cfg_json: &str) -> Result<u32, String> {
+unsafe fn remote_daemon_start(pid: u32, remote_base: usize, cfg_json: &str, expected_created: Option<u64>) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
     use windows_sys::Win32::System::Memory::{
@@ -726,9 +853,10 @@ unsafe fn remote_daemon_start(pid: u32, remote_base: usize, cfg_json: &str) -> R
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
         let result = (|| -> Result<u32, String> {
+            winutil::verify_process_creation(proc_h, expected_created)?;
             let addr =
                 winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_client_start")?
-                    .ok_or("caligo_qq_daemon_client_start not found(bridge 是否 research 构建?)")?;
+                    .ok_or("caligo_qq_daemon_client_start not found in mapped bridge")?;
             let mut bytes = cfg_json.as_bytes().to_vec();
             bytes.push(0); // NUL 结尾
             let remote_cfg = VirtualAllocEx(
@@ -818,7 +946,7 @@ fn select_mapped_bridge(bridge: &Path, modules: &[winutil::ModuleInfo]) -> Resul
 
 /// QQ 内 worker 计数取证:远程调用 caligo_qq_daemon_status → 打印报告尾部。
 pub fn cmd_qq_status(args: &[String]) -> ExitCode {
-    let (pid, bridge, report, _env, _ws, _wm, _extra) = match gates(args, false) {
+    let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
         Ok(v) => v,
         Err(c) => return c,
     };
@@ -829,7 +957,7 @@ pub fn cmd_qq_status(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let code = unsafe { remote_status(pid, remote_base) };
+    let code = unsafe { remote_status(pid, remote_base, extra.created_filetime) };
     let code = match code {
         Ok(c) => c,
         Err(e) => {
@@ -839,11 +967,11 @@ pub fn cmd_qq_status(args: &[String]) -> ExitCode {
     };
     println!("[qq-status] exit={code:#x}");
     print_report(&report);
-    ExitCode::SUCCESS
+    if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) }
 }
 
 /// SAFETY: 前置:bridge 已加载。
-unsafe fn remote_status(pid: u32, remote_base: usize) -> Result<u32, String> {
+unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u64>) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
         CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
@@ -863,6 +991,10 @@ unsafe fn remote_status(pid: u32, remote_base: usize) -> Result<u32, String> {
         );
         if proc_h.is_null() || proc_h == INVALID_HANDLE_VALUE {
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
+        }
+        if let Err(error) = winutil::verify_process_creation(proc_h, expected_created) {
+            CloseHandle(proc_h);
+            return Err(error);
         }
         let addr = match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_status")
         {
@@ -914,6 +1046,7 @@ unsafe fn remote_bootstrap(
     env: usize,
     report: &Path,
     wait_s: u32,
+    expected_created: Option<u64>,
 ) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
@@ -940,9 +1073,10 @@ unsafe fn remote_bootstrap(
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
         }
         let result = (|| -> Result<u32, String> {
+            winutil::verify_process_creation(proc_h, expected_created)?;
             let addr =
                 winutil::read_remote_export(proc_h, remote_base, "caligo_qq_entry_bootstrap")?
-                    .ok_or("caligo_qq_entry_bootstrap not found(bridge 是否 research 构建?)")?;
+                    .ok_or("caligo_qq_entry_bootstrap not found in mapped bridge")?;
             // D7 缺陷修复:相对路径会按 QQ 进程的工作目录解析(首入阶段日志
             // 即因此丢失)。传给 DLL 的报告路径必须绝对化。
             let report_abs = absolute_report_path(report);
@@ -980,7 +1114,8 @@ unsafe fn remote_bootstrap(
             ctx.extend_from_slice(&env.to_le_bytes());
             ctx.extend_from_slice(&(remote_path as usize).to_le_bytes());
             ctx.extend_from_slice(&wait_s.to_le_bytes());
-            ctx.extend_from_slice(&0u32.to_le_bytes());
+            let mode = if expected_created.is_some() { caligo_bridge::QQ_MANAGED_ENTRY } else { 0 };
+            ctx.extend_from_slice(&mode.to_le_bytes());
             let remote_ctx = VirtualAllocEx(
                 proc_h,
                 std::ptr::null(),
@@ -1237,7 +1372,7 @@ unsafe fn remote_uid_map_probe(
 }
 
 pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
-    let (pid, bridge, report, _env, _wait_s, wait_ms, _extra) = match gates(args, false) {
+    let (pid, bridge, report, _env, _wait_s, wait_ms, extra, _entry_lock) = match gates(args, false) {
         Ok(v) => v,
         Err(c) => return c,
     };
@@ -1250,7 +1385,7 @@ pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
     };
     // SAFETY: shutdown 导出签名为 extern "system" fn(u32);远程线程首参
     // 经 rcx 到达,u32 读低 32 位即 wait_ms(值语义,不解引用)。
-    let code = unsafe { remote_shutdown(pid, remote_base, wait_ms) };
+    let code = unsafe { remote_shutdown(pid, remote_base, wait_ms, extra.created_filetime) };
     let code = match code {
         Ok(c) => c,
         Err(e) => {
@@ -1272,7 +1407,7 @@ pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
 }
 
 /// SAFETY: 前置:bridge 已加载。
-unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32) -> Result<u32, String> {
+unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_created: Option<u64>) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
         CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
@@ -1292,6 +1427,10 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32) -> Result<
         );
         if proc_h.is_null() || proc_h == INVALID_HANDLE_VALUE {
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
+        }
+        if let Err(error) = winutil::verify_process_creation(proc_h, expected_created) {
+            CloseHandle(proc_h);
+            return Err(error);
         }
         let addr =
             match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_entry_shutdown") {

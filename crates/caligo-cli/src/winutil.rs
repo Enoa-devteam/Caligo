@@ -251,6 +251,75 @@ pub fn modules_in(pid: u32) -> Result<Vec<ModuleInfo>, String> {
     Ok(out)
 }
 
+/// Serializes Caligo's managed attach, status and stop for the selected PID.
+pub struct ManagedProcessLock(HANDLE);
+
+impl ManagedProcessLock {
+    pub fn acquire(pid: u32) -> Result<Self, String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
+        let name = to_wide(&format!(r"Local\Caligo.QQ.{pid}"));
+        // SAFETY: the name is NUL-terminated; the handle stays on this thread.
+        unsafe {
+            let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            if handle.is_null() {
+                return Err("cannot lock the designated QQ process".into());
+            }
+            match WaitForSingleObject(handle, 0) {
+                WAIT_OBJECT_0 => Ok(Self(handle)),
+                result => {
+                    if result == WAIT_ABANDONED {
+                        ReleaseMutex(handle);
+                    }
+                    CloseHandle(handle);
+                    Err("another Caligo QQ operation is in progress or was interrupted".into())
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ManagedProcessLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+        // SAFETY: the handle and ownership came from acquire on this thread.
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+/// Check creation time on the same OS handle used for a subsequent mutation.
+pub fn verify_process_creation(handle: HANDLE, expected: Option<u64>) -> Result<(), String> {
+    let Some(expected) = expected else { return Ok(()) };
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+    let empty = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (empty, empty, empty, empty);
+    // SAFETY: the caller owns a process handle and all output pointers are valid.
+    let ok = unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    let time = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    if ok == 0 || time != expected {
+        return Err("QQ process creation time changed or unavailable".into());
+    }
+    Ok(())
+}
+
+pub fn check_process_creation(pid: u32, expected: u64) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is read-only and closed before returning.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return Err("designated QQ process is unavailable".into());
+    }
+    let result = verify_process_creation(handle, Some(expected));
+    unsafe { CloseHandle(handle) };
+    result
+}
+
+#[derive(Default)]
 pub struct InjectOutcome {
     /// bridge 在目标进程内的基址。
     pub remote_base: usize,
@@ -391,6 +460,7 @@ pub unsafe fn inject_and_probe(
     g3_send: Option<(&Path, u64, &str, Option<&str>, u64, u32, u32, Option<std::path::PathBuf>, Option<(String, u32)>, u32, u32, u32)>, // previous fields + exact wrapper profile id
     g3_session: Option<(&Path, u64, &str, u32)>, // (report, group_code, text, observe_ms)
     native_resident: Option<&NativeResidentRequest>,
+    managed_created: Option<u64>,
 ) -> Result<InjectOutcome, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
@@ -427,6 +497,10 @@ pub unsafe fn inject_and_probe(
         );
         if proc_h.is_null() {
             return Err(format!("OpenProcess: Win32 error {}", GetLastError()));
+        }
+        if let Err(error) = verify_process_creation(proc_h, managed_created) {
+            CloseHandle(proc_h);
+            return Err(error);
         }
         let mut buf_bridge: Option<*mut core::ffi::c_void> = None;
         let mut buf_report: Option<*mut core::ffi::c_void> = None;
@@ -565,6 +639,11 @@ pub unsafe fn inject_and_probe(
                     "bridge module not found in target snapshot after load".to_string()
                 })?
             };
+
+            // Managed attach uses the checked owner export, with no legacy probe call.
+            if managed_created.is_some() {
+                return Ok(InjectOutcome { remote_base, ..Default::default() });
+            }
 
             // 可选:注册自有 linked binding(caligo_register_entry,无参调用)。
             let mut register_exit: Option<u32> = None;

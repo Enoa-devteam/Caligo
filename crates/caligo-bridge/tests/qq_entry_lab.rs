@@ -1,12 +1,11 @@
-//! K4-D7 候选 B 首入机器 LAB 测试(research 构建)。
+//! K4-D7 候选 B 首入机器 LAB 测试。
 //!
 //! 用**假 QQNT 符号**(Rust 函数,ABI 与真实导出一致)驱动同一台首入状态机:
 //! 机器逻辑(阶段顺序、零 current 拒绝、owner 线程断言、关闭协议)在此验证;
 //! 真实 QQNT 地址/ABI 属 D7 现场证据(B0-FIELD),不由本文件替代。
 //!
 //! 机器是进程单实例(§6.1),用例间经 `test_reset_state` + 全局锁隔离;
-//! 运行:`cargo test -p caligo-bridge --features research`。
-#![cfg(feature = "research")]
+//! 运行:`cargo test -p caligo-bridge --test qq_entry_lab`。
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

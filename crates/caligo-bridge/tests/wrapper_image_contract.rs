@@ -150,7 +150,6 @@ async function read(m) {
     }
 }
 
-#[cfg(feature = "research")]
 #[test]
 fn image_download_binds_callback_file_scope_integrity_and_lifetime() {
     use caligo_bridge::qq_v8::{D8_START_JS, D8_STOP_JS};

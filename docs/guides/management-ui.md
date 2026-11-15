@@ -37,12 +37,26 @@ HTTP 组件的装配接口为 `ManagementHttpServer::start(ManagementHttpConfig,
 
 「等待 QQ 桥接」表示选中的 Caligo 服务已启动。真实 QQ 仍由官方客户端登录，
 并由操作者按[原生研究边界](native-research.md)指定新鲜进程、核对模块 SHA-256 与接入合同。
-普通 Release 的桥接加载命令受研究构建门控。管理页和终端只启动核心服务。
+正式 Windows 发布包内的 `caligo.exe` 和 `caligo_bridge.dll` 共用此接入链路。
+当前准入对象为精确固定的 QQ 9.9.36-53644。CLI 核验加载模块和进程创建时间，
+从唯一 Environment 扫描结果启动 bridge。管理页和终端负责启动所选核心服务。
 
-在已有受控加载流程中，使用所选账号对应的 `accounts.json` 条目作为 daemon 配置。
-需要 PID 约束时，在启动前将当次已准入 PID 写入 `expect_client_pid`。
-账号服务启动后，bridge 连接 `\\.\pipe\<pipe_prefix>-bridge`，由既有私有启动通道读取该账号
-`<data_dir>/auth.token`，并提交匹配的账号和 `module_baseline`。管理凭据与桥接凭据分别使用。
+先完成当次 PE/backend 审计和实例核对。在启动账号前，将已准入 PID 写入 `expect_client_pid`。
+使用对应 `accounts.json` 条目的账号、管道前缀和私有 `<data_dir>/auth.token`。
+现场基线的 IPC 标识沿用 `qq-9.9.33-52230`，QQ 版本识别使用加载模块的精确哈希。
+
+```powershell
+.\caligo.exe cli qq-entry --pid $qqTargetPid --created-filetime $qqCreatedFiletime `
+  --bridge $bridgePath --manifest $manifestPath --report $reportPath `
+  --daemon-pipe $bridgePipe --daemon-auth-file $accountTokenPath --daemon-account $qqAccount `
+  --confirm-designated-test-instance
+```
+
+`$qqCreatedFiletime` 取已准入进程快照中的 `StartTime.ToFileTimeUtc()`，bridge 路径使用绝对路径。
+`$bridgePipe` 为 `\\.\pipe\<pipe_prefix>-bridge`，管理凭据和账号桥接凭据各自独立。
+通过管理入口停止核心服务后，用同一 PID、创建时间、bridge、manifest、report 及确认标志
+执行 `cli qq-entry-stop` 停止 QQ 内 owner。关闭超时须保留已映射 bridge。
+
 连接后点击「核验 QQ 登录」，一次只读 `LoginInfo` 成功并返回所选 QQ 号，才显示「登录已核验」。
 核验结果随连接变化失效。核验按钮可在桥接就绪后由操作者再次使用。
 
