@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 进行中：独立工作树 `Caligo-feat-004` 基于 PR #12 `54b6a5a`；正式文本提交异常保守 unknown 的修复、定向及全仓结果和单次现场证据见 [progress](progress.md#current-state)。现场已停止，7204 与 42768 均不复用或热卸载；原发送成功、对端确认一条，新代次现场 HTTP 只读回查通过，原 10053 根因未知。后续补全正式链路回调、拒绝与寿命完成门；任何新接入需用户指定新鲜代次并重走准入，不热卸载。feature 仍 in-progress。
+
 2026-11-15 feat-003 验收完成：固定 9.9.36-53644 的私聊、登记群和自发文本指定样本及离线未知类型合同满足三项完成门，跨代次范围、10053 未知及自发修订核对保留在 [progress](progress.md#current-state)。第七轮 manager/owner 正常停止，QQ 响应且保留 bridge。后续按用户任务选择清单中的下一个工作块；不自动推进 feat-004，不放宽身份准入、不重发旧样本，未证寿命不卸载。
 
 2026-11-15 v0.3.0 发布准备：版本与 README 同步；发布结果见 [Release](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.3.0) 和 [progress](progress.md)。现场及 feature 状态不因发布改变。

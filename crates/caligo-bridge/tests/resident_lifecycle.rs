@@ -559,6 +559,10 @@ fn unknown_holds_bounded_slot_for_late_strong_identity_then_releases_it() {
             if request_id == "R-late"
     )));
     assert!(resident.ack_result_notice("R-late", true));
+    resident.complete_sends(&[], &[("R-late".into(), "late rejection".into())], &[]);
+    resident.complete_sends(&[("R-late".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-late".into(), "duplicate unknown".into())]);
+    assert!(resident.take_results().is_empty(), "unknown may only be corrected by a strong identity");
     assert_eq!(
         resident.submit(OwnedRequest::SendText {
             request_id: "blocked-by-correction-slot".into(),

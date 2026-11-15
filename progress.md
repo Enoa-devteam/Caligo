@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-15 feat-004 进行中：基于 PR #12 的 `54b6a5a`，正式文本发送预登记后若 `sendMsg` 抛异常、Promise 拒绝或结果格式不明，改为保留 unknown；整数拒绝码保留，受理仍不等于稳定 ID 成功。Windows 定向 `wrapper_send` 3/3（含异常、拒绝码、受理、超时/停止/替换后的迟到结果），`recovery_contract` 10/10，`init.ps1 -Mode all` 与隔离普通 release 构建通过。首次 PowerShell 内部重定向把 Cargo stderr 当错误，外部重定向复验通过，原日志保留本机。GitNexus 索引绑定本工作树 `54b6a5a`，`build_send_js` 上游 LOW（`send_text`、`native_op`）；嵌入 JS 与跨语言调用需结合源码审查。
+
+同日 resident 回调路径补充：回归先复现 unknown 后迟到拒绝被再次输出，修复后该路径只允许有界窗口内非空稳定 ID 更正，空 ID、重复 unknown 和迟到拒绝不再终结。`complete_sends` 图上游为 UNKNOWN；源码确认 owner 泵调用，比较 `drain_send_responses` 的强身份限定后修复。最终 Windows `init.ps1 -Mode all` 和新的隔离普通 release 构建通过；上述复现失败保留。新构建未用于前一发送样本。
+
+同日固定 QQ 9.9.36-53644 新根 7204 经精确模块、PE/backend 和唯一 Environment 只读准入，首次预检因创建时间低位精度不一致拒绝、未接入，使用进程 API 完整时间复核通过。正式修复版单次主动私聊返回 OneBot retcode 0 和持久 ID；随后的 `get_msg` 客户端连接 WinError 10053，无 HTTP 响应。停止后账本同 ID 的两次修订均匹配账号、目标、native ID 与标记；用户确认对端收到一条；停止后使用账本副本在隔离 manager 经本地 HTTP 回放 get_msg 通过，不能替代现场 HTTP 或解释 10053。manager/owner 停止码 0，QQ 响应且 bridge 保留；不重发。原始材料仅在 ignored `local-evidence/feat004-acceptance-20261115/`。本次现场构建不包含随后 resident 迟到结果修复。现场回程各阶段、拒绝码与 ABI/线程/寿命尚未闭合；`feat-004` 保持 in-progress。
+
+随后新根 42768 通过固定模块、PE/backend、唯一 Environment 及登录核验，使用包含两处修复的新普通构建，以停止账本副本对原发送执行一次现场 HTTP `get_msg`，返回 200 / retcode 0，持久 ID、私聊、发送者与正文匹配；本轮零发送。manager/owner 退出码 0，QQ 响应并保留 bridge。本样本为跨代次只读证据，不能解释旧 10053，也不能替代回调时序、拒绝码及 native ABI/寿命门。原始材料在 ignored `local-evidence/feat004-readback-20261115/`。
+
 2026-11-15 feat-003 验收启动：基于 main `db188c45` 的跟踪 PR 分支，在隔离 worktree 核对 N1/T04/T05。新增 [wrapper 接收测试](crates/caligo-core/tests/wrapper_message_chain.rs)，验证同私聊同文不同 native ID 均保留、未知会话类型拒绝且不影响随后群消息。Windows x64 锁定依赖离线测试：`qq_wire_golden` 6/6、`qq_text_codec` 4/4、`runtime_contract` 11/11、原 wrapper 链路及新增用例各通过；`init.ps1 -Mode default` 与正式 release EXE/bridge 构建通过。首次用 PowerShell 5 内部重定向运行 default 时将 Cargo stderr 误判为错误，改进程外重定向后通过，原日志保留本机。上述是 LAB，不替代真实记录字段与同文不同 native ID 的现场证据；feat-003 仍 in-progress。现场须指定新鲜 A 进程、逐项准入后才能接入，见 [handoff](session-handoff.md)。
 
 同日现场两轮：指定 A 的两次新进程分别通过固定模块、PE/backend 与唯一 Environment 只读准入，各以正式 release 单次接入并报告 `listener_armed`。两次管理端登录核验均 HTTP 409；首轮未保存正文，第二轮等待 Active 后返回“桥接尚未就绪”，具体来源未确定。两轮均未采集或发送消息；manager 与 owner 退出码均为 0，QQ 响应并保留 bridge。私有记录分别在 ignored `local-evidence/feat003-acceptance-20261115/` 和 `local-evidence/feat003-acceptance-attempt2-20261115/`。先离线定位 NotReady，再按当次准入合同决定下一步；不在旧进程重接。

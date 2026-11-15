@@ -265,3 +265,57 @@ assert.deepEqual(fired,{{fired:true,mid:'core-request-7'}});
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn wrapper_text_send_uncertain_submission_stays_unknown() {
+    let send = build_send_js(1, "20002", "hello", "10001", "request", 42, 5_000);
+    let fixture = format!(r#"
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const send = {send};
+async function run(mode) {{
+  const sends = {{}};
+  const service = {{generateMsgUniqueId:()=> 'cookie', sendMsg() {{
+    assert.ok(sends.request, 'registration must precede submission');
+    if (mode === 'throw') throw Error('submit uncertain');
+    if (mode === 'reject') return Promise.reject(Error('submit uncertain'));
+    if (mode === 'code') return Promise.resolve({{result: 37}});
+    if (mode === 'accepted') return Promise.resolve({{result: 0}});
+    return Promise.resolve({{result: undefined}});
+  }}}};
+  const session = {{getMSFService:()=>({{getServerTime:()=> 'time'}}),
+    getProfileService:()=>({{getUidByUin:()=>new Map([['20002','u_peer']])}})}};
+  const R = {{sends, sendResults:{{}}, ms:service, session}};
+  const context = {{__caligo_res:R, Promise, Date, Map, JSON, String, Object, Array, Number}};
+  vm.createContext(context);
+  assert.equal(JSON.parse(vm.runInContext(send,context)).fired,true);
+  await new Promise(resolve=>setImmediate(resolve));
+  if (mode === 'code') {{ assert.equal(R.sendResults.request.status,'rejected'); assert.equal(R.sendResults.request.error,'send result=37'); }}
+  else assert.equal(R.sendResults.request.status,mode === 'accepted' ? 'accepted' : 'unknown',mode);
+}}
+async function late(mode) {{
+  let finish;
+  const service={{generateMsgUniqueId:()=> 'cookie',sendMsg:()=>new Promise(resolve=>{{finish=resolve;}})}};
+  const session={{getMSFService:()=>({{getServerTime:()=> 'time'}}),
+    getProfileService:()=>({{getUidByUin:()=>new Map([['20002','u_peer']])}})}};
+  const R={{sends:{{}},sendResults:{{}},ms:service,session}};
+  const context={{__caligo_res:R,Promise,Date,Map,JSON,String,Object,Array,Number}};
+  vm.createContext(context);
+  assert.equal(JSON.parse(vm.runInContext(send,context)).fired,true);
+  if (mode === 'timeout') {{ R.sends.request.timedOut=true; R.sendResults.request={{status:'unknown',reason:'timeout'}}; }}
+  else if (mode === 'stopped') R.stopped=true;
+  else {{ R.sends.request={{replacement:true}}; R.sendResults.request={{status:'pending'}}; }}
+  finish({{result:37}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(R.sendResults.request.status, mode === 'timeout' ? 'unknown' : 'pending', mode);
+}}
+(async()=>{{ for (const mode of ['throw','reject','malformed','code','accepted']) await run(mode);
+  for (const mode of ['timeout','stopped','replaced']) await late(mode); }})()
+  .catch(error=>{{console.error(error);process.exitCode=1;}});
+"#, send = serde_json::to_string(&send).unwrap());
+    let output = std::process::Command::new("node")
+        .args(["--unhandled-rejections=strict", "-e", &fixture])
+        .output()
+        .expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
