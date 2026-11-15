@@ -1,5 +1,9 @@
 # Session handoff
 
+## 2026-11-15 Windows 发布 0.2.0
+
+`main` 已合并 [PR #8](https://github.com/Enoa-devteam/Caligo/pull/8) 的单 EXE 打包。版本由 workspace manifest 与锁文件统一，下载入口及托管验证见 [v0.2.0 发布页](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)。本地验证见 [progress](progress.md)，下次发布见[开发指南](docs/guides/development.md#github-actions-test--release)。现场实验继续按当前准入合同单独执行。
+
 ## 2026-11-15 K3-E 归档与 Release 入口
 
 `codex/k3e-single-release` 基于 CI 合入后的 `main`。K3-E 的 [研究归档](docs/research/k3-e-exec-retrospective.md) 汇总 31 份历史材料，原件留在本机。Release 在两种 Test 构建通过后生成一套普通 Windows x64 ZIP，入口为 `caligo.exe`。本机离线验证见 [progress](progress.md)，重跑方式见[开发指南](docs/guides/development.md#github-actions-test--release)。

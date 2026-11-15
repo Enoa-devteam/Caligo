@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-15 `main` 的 Caligo 发布版本更新为 `0.2.0`。`cargo update --workspace --offline` 同步了四个工作区包，Windows x64 锁定依赖 release 构建、打包、`caligo.exe --help`、五文件清单和 SHA-256 核对通过。下载资产及托管验证见 [v0.2.0 发布页](https://github.com/Enoa-devteam/Caligo/releases/tag/v0.2.0)。QQ 现场能力范围见[第一阶段验收清单](docs/execution/2026-11-13-snowcat-capability-integration-continued.md#2026-11-14-第一阶段现场验收收口)。
+
 2026-11-15 Release 改为一套普通 Windows x64 ZIP 和 SHA-256。包内唯一 EXE 为 `caligo.exe`，子命令复用现有 daemon、账号管理、媒体和 CLI 实现，旧源码构建入口与 default/research 测试矩阵继续可用。启动入口见 [README](README.md#windows-release-启动)，打包见[开发指南](docs/guides/development.md#github-actions-test--release)。本机 `init.ps1 -Mode all`、actionlint、PowerShell 语法和 Node tooling（16 PASS、2 依赖外部输入的 SKIP）通过。独立核对 ZIP 根目录、两份 x64 PE、包内与 ZIP 的 SHA-256。从解压包实测 CLI 帮助、bridge 导出、默认门控、媒体帮助、manager 配置检查，以及合成账号 daemon 的 HTTP 鉴权、管道 Health 和正常 Stop。实际标签发布与 QQ 现场验收独立跟踪。
 
 2026-11-15 K3-E 历史材料已整理为[研究归档](docs/research/k3-e-exec-retrospective.md)，覆盖 31 份本机材料，记录 I-03 至 I-06 的证据与未知项。曾跟踪的事故笔记和两份帧摘录可由 Git 历史追溯，现场原件留在本机。
