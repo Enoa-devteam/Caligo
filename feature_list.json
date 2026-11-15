@@ -33,9 +33,9 @@
       "description": "已有共享 codec 与接收实现/研究证据；完整身份/时间/方向及正式矩阵仍须逐条验收。",
       "plan_steps": ["N1"],
       "dependencies": ["feat-002"],
-      "status": "in-progress",
-      "evidence": "N1 shared codec/golden 已归档，后续 CPB 与事件上行有现场记录；raw hits、seq 命名与事件计数不能独自替代 T04/T05。2026-11-13 A1 D8 typed wrapper 普通文本经生产 decoder/resident/IPC 入 journal 并恢复，保留大整数 ID、原始元数据与秒时间，完整链和绑定/容量定向测试通过；OneBot projection 仍 None，没有新增 QQ 现场验收。参见 SnowCat 整合执行记录。",
-      "evidence_paths": ["crates/caligo-model/src/qq_wire/send.rs", "crates/caligo-model/tests/qq_wire_golden.rs", "crates/caligo-bridge/src/native_resident.rs", "docs/execution/2026-10-09-snowluma-parity/ledger.md"],
+      "status": "done",
+      "evidence": "N1 私聊/群 wire golden 通过；2026-11-15 固定 QQ 9.9.36-53644 的私聊、登记群与自发文本样本，原始 wrapper、journal 与账本逐条核对，群样本另有 SSE 和现场 HTTP get_msg，私聊在原现场 HTTP 中断后由新代次载入账本副本只读 HTTP 回验。私聊/群各两条同文不同 native ID 均保留；未知会话类型拒绝及后续消息不串会话由 wrapper LAB 覆盖。样本跨代次并使用 research 诊断，不代表其他构建、全部通知类型或长期运行通过；首次 10053 根因未定。详见 progress。",
+      "evidence_paths": ["crates/caligo-model/src/qq_wire/send.rs", "crates/caligo-model/tests/qq_wire_golden.rs", "crates/caligo-bridge/src/native_resident.rs", "docs/execution/2026-10-09-snowluma-parity/ledger.md", "progress.md"],
       "done_criteria": ["两种普通文本 wire 与黄金样本一致", "sender/peer/平台时间/native ID/正文可独立对应同条记录", "重复正文不误去重，未知类型不串会话"]
     },
     {

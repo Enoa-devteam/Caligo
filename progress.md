@@ -14,6 +14,18 @@ GitNexus 首次变更检查报告 CRITICAL、511 条受影响流程；CLI 仅显
 
 2026-11-15 第四轮角色调整：用户指定的新接入端通过准入，研究诊断版单次接入、监听及当前账号核验通过，SSE 已就绪。用户确认发送三条同文样本；入站采集未收到匹配事件。只读账本核对发现三条不同消息身份（私聊两条、登记群一条）的 sender 均是本轮接入端，私聊有追加修订，不能判对端入站通过。人工发起管理器关闭，owner 停止码 0、QQ 响应且保留 bridge；HTTP/SSE 不再监听，未发现该轮 manager 进程，但采集脚本未及时取得 manager 退出码。原样本不重发，私有证据在 ignored `local-evidence/feat003-acceptance-attempt4-20261115/`。下一轮先由用户确认本轮对端，再重启指定新鲜接入端、重新准入并使用新标记。
 
+2026-11-15 第五轮：新接入端通过准入、登录核验及 SSE 就绪；至少一条对端私聊事件经采集器的会话/发送者/ID 校验，但首次现场 HTTP `get_msg` 请求以 WinError 10053 中断，未保存该 SSE 原文，也无 HTTP 响应。用户确认三条从对端发送；关闭后账本仅有两条匹配的私聊消息，发送者、对端、账号、平台时间和正文可核对，OneBot ID 与 native 身份各不相同，群样本未入账，不能推断其是否在停止前到达。对账本副本用同源码的 research 构建只读调用生产 `get_msg` handler，两条均通过；这不是现场 HTTP 通过。manager/owner 退出码 0，QQ 响应并保留 bridge。首次回读工具构建复用被映射 DLL 的目录而遇 LNK1104；改独立目录构建、只读回放成功，原失败保留，未卸载 DLL。原始现场和回放材料在 ignored `local-evidence/feat003-acceptance-attempt5-20261115/`。不重发旧样本；现场 HTTP、登记群同文及完整 T04/T05 仍待验，feat-003 不提升。
+
+回放工具准备时直接 `rustc` 链接两次报 E0463；独立 Cargo 项目首轮因嵌套工作区配置失败，补 `[workspace]` 后仍因复用已映射 DLL 目录遇上述 LNK1104，最终使用独立 target 通过。另在隔离 manager 中载入账本副本，两条消息经正常本地 HTTP `get_msg` 均返回 0 且字段匹配，无 QQ 接入或发送，manager 退出码 0。针对 HTTP 的 `onebot_http_lab` 锁定依赖离线测试 1/1 通过；这些回放不能解释或排除本次现场 10053，也不能当作现场 HTTP 通过。该类客户端写入中断在 2026-11-14 语音下载记录中也出现过，原因未证。
+
+2026-11-15 第六轮只读复验：新接入端通过精确模块、PE/backend、唯一 Environment 准入及当前登录核验；隔离 manager 载入第五轮账本副本，正式桥接就绪后使用 curl 对两条原私聊各执行一次 HTTP `get_msg`，两次均 HTTP 200 / retcode 0，持久 ID、私聊类型、对端发送者与正文匹配。两条原消息不重发，本轮零发送；manager/owner 退出码 0，QQ 响应并保留 bridge。此为跨代次、研究诊断版的只读 HTTP 证据，不能解释第五轮 10053 或补齐群样本；feat-003 保持 in-progress。私有材料在 ignored `local-evidence/feat003-acceptance-attempt6-20261115/`。
+
+2026-11-15 第七轮登记群：固定 QQ 9.9.36-53644 精确模块和研究诊断版通过当次准入、登录核验及 SSE 就绪。对端在登记群单次各发送两条同文样本，两条 SSE、现场 HTTP `get_msg`（各 HTTP 200 / retcode 0）与持久消息核对通过，OneBot ID 和 native ID 各不相同。关闭后只读复核 journal 副本，两条原始 wrapper、journal、消息账本、SSE 与 HTTP 的对应身份、正文及平台秒时间一致；第五轮两条私聊的原始 wrapper、journal 与消息账本也一致，HTTP 则为第六轮跨代次只读证据。第四轮三条自发私聊/群记录的原始 wrapper、journal 和账本最新修订核对通过；首次将早期自发事件与最新账本修订时间直接比较失败，修正为按同身份最新修订核对，保留原失败。manager/owner 退出码均为 0，QQ 响应并保留 bridge；本轮工具零发送。原始材料分别在 ignored `local-evidence/feat003-acceptance-attempt4-20261115/`、`feat003-acceptance-attempt5-20261115/`、`feat003-acceptance-attempt7-20261115/`。
+
+feat-003 三项完成门按以上固定构建及样本收口：私聊/群 wire golden 6/6；私聊、群与自发消息记录级字段已有对应证据；私聊/群同文不同 native ID 均保留，未知会话类型拒绝及后续消息不串会话由 wrapper LAB 覆盖。状态提升为 done；这是跨代次、部分使用 research 诊断的指定样本验收，不代表其他 QQ 构建、全部通知类型、完整 OneBot 互通、重连或长期运行通过，第五轮 10053 根因仍 unknown。
+
+收口检查：Windows `init.ps1 -Mode docs` 通过（15 份维护文档、408 条本地链接、37 条历史入口、10 个 feature），`git diff --check` 通过。GitNexus 对 3 个状态文件的完整结构化变更检查返回 LOW、3 个符号、0 流程，未报告 partial/truncated；索引的跨语言/流程覆盖有限，0 不证明无影响，已逐文件审阅状态及完成条件。结构化结果保存在本机 `local-evidence/feat003-acceptance-attempt7-20261115/gitnexus-changes.private.json`。
+
 2026-11-15 准备 v0.3.0：workspace 版本与 lock 同步，README 指向包含管理入口和正式桥的发布包；现场能力与 feature 状态不变。本机 Windows `init.ps1 -Mode default` 与锁定依赖的普通 release 构建通过；打包首次因 Windows Git 无法解析 WSL 工作树路径失败，显式指定工作树 Git 路径后通过。CI 和发布资产以 GitHub Release 为准；未运行现场验收。
 
 2026-11-15 README 按 main 更新：区分 v0.2.0 发布包与后续源码的管理入口及正式桥，补充 QQ 接入前提和文档导航；未改变产品能力状态。Windows PowerShell `init.ps1 -Mode docs` 通过（15 个维护文档、403 个本地链接、37 条历史条目、10 个 feature）；未运行 Rust 测试或现场验收。交接见 [session-handoff](session-handoff.md)。
