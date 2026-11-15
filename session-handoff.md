@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 ETW 进程内对照：当前 token 下自建、无 provider 的 private in-process 会话启动/按句柄查询停止通过；同名碰撞 183，两个独立私有会话中停止一个不影响另一个，两个均正常停止。脚本、结果 hash 和范围见 [progress](progress.md#current-state)。该结果不证明 system logger、PMC、LBR 或崩溃清理；下一步先在明确权限和隔离条件下验证具名系统会话及冲突清理，不在系统或 QQ 上采用未经验证的采样方案；不凭同名停止其他会话。
+
 2026-11-15 feat-004 LBR 会话离线模型：新增纯状态模型及 7 项测试、身份检查变异负例和 Windows CI 接线，详见 [progress](progress.md#current-state)。无 ETW 后端或系统调用，不能认作真实会话控制；下一步验证独立具名 system logger 的真实所有权、冲突与崩溃清理方案并审查权限/隐私后，才考虑仅对自建 workload 采样。不要停止默认 kernel logger，不对 QQ 使用未验证方案；本轮未启动 ETW、未接入 QQ、未发送。
 
 2026-11-15 feat-004 LBR 对照准备：自建进程扩展 PID/创建时间、线程和 QPC 真值；独立 Windows API 核验代次及解析器正反测试通过。系统级隐私、独立会话所有权、全局 PMC 冲突、异常清理和时钟/丢失门已写入[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)，细节和本机产物 hash 见 [progress](progress.md#current-state)。尚无可安全启动的采集控制器，未启动 ETW；下一步先实现/离线验证会话与冲突控制，再在权限和隔离条件满足时对自建进程采集；不要使用默认内核 logger 清理，不对 QQ 使用未验证方案。

@@ -55,3 +55,9 @@ research 模式为每个已登记文本请求分配 JS 环境中本监听器代�
 [纯状态模型](../../scripts/lbr-session-model.mjs)及其[测试](../../scripts/lbr-session-model.test.mjs)没有 ETW 后端、系统调用或命令执行能力，只在合成输入下约束预检、启动、停止和控制器丢失的状态转换。未知预检拒绝启动；启动结果不确定或身份不匹配时所有权与清理均为 unknown，不生成停止动作；运行后停止动作只携带成功回执中同身份的模拟句柄。停止回执不匹配、失败或控制器丢失不自动重试；超时即使模拟停止成功仍保留 workload unknown。成功状态仅表示模拟后端确认停止及 workload 结束，不代表 ETW、采样、隐私或资源清理已验证。
 
 该模型不能建立真实 ETW 句柄身份、证明会话清理、抵御进程崩溃后资源残留，或检测 PMC 的全局冲突；未来任何真实适配必须先独立验证这些条件，不能将调用模拟模型当成现场准入。测试中刻意移除身份比较后，启动和停止负例均失败；结果见 [progress](../../progress.md#current-state)。
+
+### 进程内私有 ETW 对照（非系统采样）
+
+自建 Python 进程使用 Windows `StartTraceW` 和 `ControlTraceW`，仅创建无 provider、无文件、无系统标志的 in-process private buffering 会话，按成功返回的句柄查询和停止；另一个实验中同名第二次启动返回 183，两个不同私有会话均可查询，停止第一个后第二个仍能查询，最后只按各自取得的句柄停止。实际 API 结果和本机脚本 hash 见 [progress](../../progress.md#current-state)。这验证当前 Windows/当前 token 下指定私有会话的正常及冲突样本，不证明系统 logger、PMC、LBR、跨进程数据、崩溃清理或其他身份隔离。后续系统级实现仍受上面的前置条件约束。
+
+微软 [StartTraceW 文档](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-starttracew)建议使用能说明组件用途的稳定会话名，避免以随机名堆积跟踪会话；该建议与识别本次实际所有权是不同问题。会话名、GUID 或运行前的无冲突检查本身均不能证明所有权；遇到已存在会话不得仅凭同名停止，需独立核实后按合同处理。不得将进程内私有会话的观察外推为系统会话可以用相同方式安全恢复。
