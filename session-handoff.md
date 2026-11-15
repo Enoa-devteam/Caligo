@@ -1,5 +1,14 @@
 # Session handoff
 
+## 2026-11-15 正式 bridge 统一
+
+`codex/unified-qq-bridge` 基于 PR #9 的工作分支。正式 `caligo.exe cli qq-entry` 通过当前 PID、创建时间、
+模块指纹和唯一 Environment 接入发布包内的 `caligo_bridge.dll`。普通 release 同一组产物完成真实 QQ
+Web UI 登录核验和单条私聊入站，现场正常结束，已映射 bridge 保留到 QQ 正常退出。
+源码检查点、散列及默认与研究测试见[进度](progress.md#current-state)。
+后续桥接修复与验收沿正式入口推进。终端真实 QQ、重连及长期资源寿命仍按各自合同验收。
+[正式接入与停止步骤](docs/guides/management-ui.md#接入-qq-与核验)
+
 ## 2026-11-15 启动账号选择与消息日志
 
 工作分支 `codex/account-startup-message-log` 基于 v0.2.0。正常入口为
@@ -10,9 +19,7 @@ PR #9 已完成 Web UI 的 QQ 9.9.36-53644 单账号启动、当前登录核验�
 管理器与桥接 owner 已正常停止，QQ 仍响应并保留 bridge。原始证据目录和范围见上方进度链接。
 终端保留 LAB 证据。feat-010 保持 in-progress。
 
-下一阶段按用户决定统一桥接层，以正式桥作为唯一运行和发布实现。后续桥接修复与改进以正式桥为基线。
-统一的接入合同仍需保留精确模块哈希、当前进程与身份核验、停止和寿命门，并用正常 release 入口完成真实 QQ 回归。
-现有现场装配参数见[本机管理指南](docs/guides/management-ui.md#接入-qq-与核验)。
+此阶段确定以正式桥作为唯一运行和发布实现，后续推进与现场证据见上方正式 bridge 统一记录。
 
 ## 2026-11-15 Windows 发布 0.2.0
 

@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-15 正式桥统一在 `codex/unified-qq-bridge` 落地。普通发布构建包含 QQ owner pump、V8 适配、daemon 客户端和查询。正式 CLI 验证指定 PID 的创建时间、DLL 接口、QQ 9.9.36-53644 的已加载模块指纹和唯一 Environment，bridge 在宿主内复核模块指纹与基址。旧注入式诊断继续受 research 门控。[正式接入说明](docs/guides/management-ui.md#接入-qq-与核验)
+
+正式桥 FIELD 样本使用 `4f9aaf4` 的同一个普通 release `caligo.exe` 启动管理器、加载桥、随后停止 owner。EXE SHA-256 为 `5F4B90E4CB9AFC8DF461A5C74DA7EE2FDE39BABF130FD19B7392957017508AEE`，bridge SHA-256 为 `7B1CD538A4E010E287C2366E6E2DEB46C8115ED989BD78566A769E1D678258BE`。操作者重启并指定 A，PE/backend 审计及精确模块哈希通过。Edge 管理页只启动 A，监听就绪和 LoginInfo 核验通过。用户从登记 B 发一条私聊，页面出现唯一记录，消息 ID、发送方、会话和正文与 A 的持久账本一致。切到未启动的 B 后页面清空日志。manager 与 owner 退出码均为 0，管理端口关闭，QQ 保持响应并保留 bridge。本机原始证据位于 ignored `local-evidence/unified-bridge-field-20261115-*`。
+
+普通和研究全仓测试均使用 `--locked --offline` 串行通过。首次研究编译发现旧 UID-map 探针关闭调用缺少新参数，修复后全仓复验通过。默认构建覆盖无确认、过期进程及未识别宿主的拒绝路径。普通 Windows x64 release 构建与 PE 导出核对通过，历史 `inject` 仍返回门控码 3。本次现场范围为 Web UI 的登录和一条私聊入站，正式终端路径保留离线验证，feat-010 保持 in-progress。
+
 2026-11-15 [PR #9](https://github.com/Enoa-devteam/Caligo/pull/9) 补测 QQ 9.9.36-53644 固定构建。源码为 `c0ba200`，普通 release 管理器和同源受控桥接构建分开启动，bridge SHA-256 为 `2A151396FFBA8F210E029AB332B524F00CC32B5514B8EC195274C685966F98CF`。操作者重启并指定测试账号 A，按精确模块哈希、PE/backend 审计、唯一 Environment 和进程代次准入。Edge 管理页只启动选中的 A。确认 `listener_armed` 后，页面通过 `LoginInfo` 核验当前登录账号。
 
 登记 B 向 A 发一条私聊文本，页面自动出现唯一记录，发送者、会话、消息 ID 和正文与 A 的持久账本一致。切换至未启动的 B，页面清空 A 的日志，B 未创建账号凭据。通过页面关闭管理器，manager 和 owner 退出码均为 0，管理端口关闭，QQ 仍响应并保留已映射 bridge。此前一代因验收脚本过早读取监听就绪报告而提前停止，新一代等待就绪后通过。原始现场材料留在 ignored `local-evidence/account-startup-field-20261115-*`。本次 FIELD 范围为 Web UI 的单账号接入和单条私聊入站，终端保留 LAB 证据。feat-010 保持 in-progress。

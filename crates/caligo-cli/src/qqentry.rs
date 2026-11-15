@@ -747,7 +747,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         } else {
             false
         };
-        let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000) };
+        let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000, extra.created_filetime) };
         let shutdown_ok = match shutdown {
             Ok(code) if map_code(code) == QqEntryExit::Ok => {
                 println!(
