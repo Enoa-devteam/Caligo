@@ -53,6 +53,7 @@
 - 线程与异步持有：[thread-contract](research/qq-native-thread-contract.md)、[lifetime-contract](research/qq-native-lifetime-contract.md)。
 - 固定 build 重建：[QQ 合同/版本适配研究](research/2026-10-08-qq-native-contract-and-version-adaptation.md)，
   [SnowLuma 工作流重建](research/2026-10-08-snowluma-native-workflow-reconstruction.md)。
+- K3-E 通用 exec 判负与现场材料索引：[K3-E 实验归档](research/k3-e-exec-retrospective.md)。
 - 阶段历史报告：[k4-stage-report-01](research/k4-stage-report-01.md)。
 
 ## 收发与响应研究
