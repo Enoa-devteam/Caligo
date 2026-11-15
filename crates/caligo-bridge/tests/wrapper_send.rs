@@ -240,6 +240,7 @@ assert.deepEqual(fired,{{fired:true,mid:'core-request-7'}});
     await new Promise(resolve=>setImmediate(resolve));
   const batch=JSON.parse(vm.runInContext(poll,context));
   assert.equal(batch.sid,'nt_0');
+  assert.deepEqual(batch.textSendTrace,[]);
   assert.equal(calls.filter(c=>c[0]==='query').length,1, JSON.stringify({{calls,batch}}));
   assert.equal(batch.sendResults['core-request-7'].status,'done');
   assert.equal(batch.sendResults['core-request-7'].msgId,'native-99');
@@ -280,6 +281,8 @@ async function run(mode) {{
     if (mode === 'throw') throw Error('submit uncertain');
     if (mode === 'reject') return Promise.reject(Error('submit uncertain'));
     if (mode === 'code') return Promise.resolve({{result: 37}});
+    if (mode === 'ambiguous-code') {{ sends.request.addId='native-candidate'; return Promise.resolve({{result:37}}); }}
+    if (mode === 'ambiguous-readback') {{ sends.request.addId='native-candidate'; sends.request.readback={{status:'readback',msgId:'native-candidate'}}; return Promise.resolve({{result:37}}); }}
     if (mode === 'accepted') return Promise.resolve({{result: 0}});
     return Promise.resolve({{result: undefined}});
   }}}};
@@ -291,6 +294,7 @@ async function run(mode) {{
   assert.equal(JSON.parse(vm.runInContext(send,context)).fired,true);
   await new Promise(resolve=>setImmediate(resolve));
   if (mode === 'code') {{ assert.equal(R.sendResults.request.status,'rejected'); assert.equal(R.sendResults.request.error,'send result=37'); }}
+  else if (mode === 'ambiguous-code' || mode === 'ambiguous-readback') {{ assert.equal(R.sendResults.request.status,'unknown'); assert.equal(R.sendResults.request.reason,'send_result_ambiguous=37'); }}
   else assert.equal(R.sendResults.request.status,mode === 'accepted' ? 'accepted' : 'unknown',mode);
 }}
 async function late(mode) {{
@@ -309,7 +313,7 @@ async function late(mode) {{
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(R.sendResults.request.status, mode === 'timeout' ? 'unknown' : 'pending', mode);
 }}
-(async()=>{{ for (const mode of ['throw','reject','malformed','code','accepted']) await run(mode);
+(async()=>{{ for (const mode of ['throw','reject','malformed','code','ambiguous-code','ambiguous-readback','accepted']) await run(mode);
   for (const mode of ['timeout','stopped','replaced']) await late(mode); }})()
   .catch(error=>{{console.error(error);process.exitCode=1;}});
 "#, send = serde_json::to_string(&send).unwrap());
@@ -318,4 +322,54 @@ async function late(mode) {{
         .output()
         .expect("Node.js is required for the wrapper send fixture");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn wrapper_text_inline_duplicate_and_old_generation_callbacks_are_scoped() {
+    let send = build_send_js(1, "20002", "hello", "10001", "request", 42, 5_000);
+    let fixture = format!(r#"
+const assert=require('node:assert/strict'), vm=require('node:vm');
+const start={start}, stop={stop}, poll={poll}, send={send};
+let listener, count=0, queries=0, mode='inline', complete;
+const record=(id,status,guild='cookie')=>({{msgId:id,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId:guild,
+  chatType:1,msgType:2,subMsgType:0,peerUid:'u_peer',peerUin:'20002',senderUid:'u_self',senderUin:'10001',sendStatus:status,
+  elements:[{{elementType:1,textElement:{{content:'hello',atType:0}}}}]}});
+const service={{generateMsgUniqueId:()=> 'cookie',addKernelMsgListener(l){{listener=l;return 7;}},removeKernelMsgListener(){{return true;}},
+  sendMsg(){{count++; assert.ok(context.__caligo_res.sends.request);
+    if(mode==='inline') {{ listener.onAddSendMsg(record('native-1',1)); listener.onAddSendMsg(record('native-1',1));
+      listener.onMsgInfoListUpdate([record('native-1',2),record('native-1',2)]); return Promise.resolve({{result:0}}); }}
+    return new Promise(resolve=>{{complete=resolve;}});
+  }},getMsgsByMsgId(){{queries++;return Promise.resolve({{result:0,msgList:[record('native-1',2,'other')]}});}}}};
+const session={{getSessionId:()=> 'nt_0',getMsgService:()=>service,getMSFService:()=>({{getServerTime:()=> 'time'}}),
+  getProfileService:()=>({{getUidByUin:()=>new Map([['20002','u_peer']])}})}};
+const context={{Buffer,Promise,Date,Map,JSON,String,Object,Array,Number,caligoSendTrace:true,process:{{_linkedBinding:()=>({{NodeIQQNTWrapperSession:{{getNTWrapperSession:()=>session}}}})}}}};
+vm.createContext(context);
+const run=s=>vm.runInContext(s,context);
+(async()=>{{
+  assert.match(run(start),/^ARMED/); assert.equal(JSON.parse(run(send)).fired,true);
+  for(let i=0;i<5;i++) await new Promise(resolve=>setImmediate(resolve));
+  let batch=JSON.parse(run(poll)); assert.equal(batch.sendResults.request.status,'done');
+  assert.equal(batch.sendResults.request.msgId,'native-1'); assert.equal(queries,1);
+  assert.ok(batch.textSendTrace.indexOf('registered') < batch.textSendTrace.indexOf('submit_enter'));
+  assert.ok(batch.textSendTrace.indexOf('matched_add') < batch.textSendTrace.indexOf('submit_return'));
+  assert.ok(batch.textSendTrace.includes('promise_accepted') && batch.textSendTrace.includes('readback_matched') && batch.textSendTrace.includes('settled'));
+  listener.onAddSendMsg(record('native-1',1)); listener.onMsgInfoListUpdate([record('native-1',2)]);
+  assert.equal(JSON.parse(run(poll)).sendResults.request,undefined);
+  mode='pending'; assert.equal(JSON.parse(run(send)).fired,true); let old=listener, oldComplete=complete;
+  assert.match(run(stop),/^STOPPED/); assert.match(run(start),/^ARMED/);
+  assert.equal(JSON.parse(run(send)).fired,true); const current=context.__caligo_res;
+  old.onAddSendMsg(record('old-native',1)); old.onMsgInfoListUpdate([record('old-native',2)]);
+  oldComplete({{result:37}}); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(current.sendResults.request.status,'pending'); assert.equal(current.sends.request.addId,null);
+  assert.equal(count,3); assert.equal(queries,1);
+  service.removeKernelMsgListener=()=>{{throw Error('not removed');}};
+  assert.equal(run(stop),'ERR:listener_remove_failed');
+  assert.equal(context.__caligo_res,current); assert.equal(current.stopped,true);
+  assert.equal(run(start),'ERR:stopped_listener_retained');
+}})().catch(e=>{{console.error(e);process.exitCode=1;}});
+"#,start=serde_json::to_string(D8_START_JS).unwrap(),stop=serde_json::to_string(D8_STOP_JS).unwrap(),
+        poll=serde_json::to_string(D8_POLL_JS).unwrap(),send=serde_json::to_string(&send).unwrap());
+    let output=std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
 }

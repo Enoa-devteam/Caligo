@@ -2,6 +2,24 @@
 
 ## Current State
 
+2026-11-15 收尾检查：Windows 进程内串行 `init.ps1 -Mode all`、最终普通与 research release 构建、文档检查及 `git diff --check` 通过。GitNexus all-scope 结构化结果为 9 文件、13 个符号、522 条流程、CRITICAL；共享 V8 图映射含不匹配的文件级结果，已补源码审阅，不能把图映射视为现场安全证明。全量报告存于 ignored `local-evidence/feat004-muted-new-code-20261115/gitnexus-final-all.json`。
+
+2026-11-15 feat-004 业务拒绝续验：发现 `ConfirmedFailure` 原因仅存内存，重启后为空；回归先失败，现将原因作为可选字段与请求状态同条持久化，旧记录缺字段仍可恢复且不改写。Windows 串行 `recovery_contract` 12/12、`init.ps1 -Mode all` 和隔离 research release 通过，原失败日志在 `target-harness/feat004-rejection-recovery-before.log`。新增字段兼容旧记录，不推断旧失败原因。
+
+用户确认登记群可作禁言负例。新根 7040 完成准入和登录后，首次禁言状态 HTTP 查询因 WinError 10053 中断，未取得结果、零发送，正常停止且 bridge 保留。再换新根 39012，curl 查询成功且账号与登记群匹配，但个人禁言时间为 `2026-09-01T13:06:03Z`，早于本次时间，故前置门拒绝、零发送；manager/owner 均退出码 0。用户随后明确给出另一禁言测试群，与旧登记群不同；已作为当次独立范围仅登记本机，待新进程和个人禁言核对。原始私有材料在 ignored `local-evidence/feat004-group-reject-20261115/` 和 `feat004-group-reject-curl-20261115/`；不得把这两轮当作业务拒绝样本，不复用或热卸载旧进程。
+
+新根 42124 在用户指定的另一测试群通过精确模块、PE/backend、唯一 Environment、登录及当前账号个人禁言查询。单次新标记 HTTP 200 / OneBot 1501 unknown，阶段为 registered→submit_enter→submit_return→matched_add→promise_unknown；journal 是同一请求的 Queued→DispatchIntent→NativeStarted→DeliveryUnknown，审计仅有 `text_submit_unknown`。用户确认群内未见；交付仍为 unknown，不是已证业务拒绝，原样本不重发。manager/owner 均退出码 0，QQ 响应并保留 bridge。材料在 ignored `local-evidence/feat004-designated-muted-group-20261115/`。
+
+后续源码核对发现 add 已到而 Promise 返回非零整数时，旧代码保守 unknown 却丢弃整数；合成回归先失败，修复为继续 unknown 并把安全整数写入审计，包括精确回读先于 Promise 的交错；拒绝的 Promise 不写异常原文。`wrapper_send` 4/4 与 `recovery_contract` 13/13 通过，后者验证 unknown 的码在重启后仍可审计且不重派。本次 42124 的实际 Promise 返回类型/码没有被采集，不能从阶段推定，也不能回填。用户另行授权的一条不同新标记的执行结果见下段。
+
+新根 44580 通过精确模块、PE/backend、唯一 Environment、登录及同一账号有效个人禁言检查。另行授权的一次不同标记返回 HTTP 200 / OneBot 1501 unknown，用户确认群内未见；阶段为 registered→submit_enter→submit_return→matched_add→promise_unknown，同请求 journal 为 Queued→DispatchIntent→NativeStarted→DeliveryUnknown，审计保留 `send_result_ambiguous=120`。停止后的 journal 副本用实际 `AccountActor::open` 恢复，unknown 和整数 120 保留、不在待重派队列。此整数的来源是本次 wrapper Promise，不能仅凭禁言相关性或另一合成 fixture 将 120 解释为业务拒绝；两个样本均不重发。manager/owner 退出码 0，QQ 响应并保留 bridge。原始材料和隔离恢复工具在 ignored `local-evidence/feat004-muted-new-code-20261115/`，定向和 Windows 进程内串行 `init.ps1 -Mode all`、隔离 research release 通过。
+
+2026-11-15 feat-004 续验：正式 `caligo_qq_daemon_client_start` 使用 `QqOwnerAdapter`/V8 wrapper；历史 `native_resident`/G3 consumer 是 research 门控的另一入口，不把两者的 ABI、回调线程或寿命证据互换。新增正式 wrapper 合成测试覆盖发送前登记、`sendMsg` 内 inline add/update、重复回调仅一次精确回读与终结、停止后的旧监听器/旧 Promise 不影响新代次。固定 QQNT.dll `75B19E58A123B0513E99DF4DF3EBC6524478535BA44651024D6A20821F5086E5` 离线导出核对 17/17；具名导出存在不证明签名或释放合同。GitNexus 在 `e21aaf9` 的增量索引对共享 V8 文件返回 CRITICAL 文件级结果，`D8_STOP_JS` 符号 UNKNOWN；源码补查 owner pump、媒体和测试引用，不以空图当无影响。
+
+固定 9.9.36-53644 的新根 53716 通过模块、PE/backend、唯一 Environment 和登录核验。research 诊断版单次主动私聊和同轮 HTTP `get_msg` 成功，用户确认对端一条；单请求 journal 顺序为 Queued→DispatchIntent→NativeStarted→ConfirmedSuccess，稳定 ID 与持久记录一致。无敏感值的有界阶段依次为 registered→submit_enter→submit_return→matched_add→matched_update→promise_accepted→readback_matched→settled；两次阶段报告由监听器注册的同一 owner 轮询 TID 写出，不能将轮询 TID 认作 QQ callback OS TID。manager/owner 退出码 0，QQ 响应并保留 bridge，不重发或热卸载。诊断版 EXE/bridge SHA-256 `45F99D7A959E0CDC5651140680E9921370BDAA0590E9CA717D6E5ABDDDA84E73` / `BB194C443C75C5953E2D87381264CC56C7BD231B92F187E30307B874EDC04BBF`；精确 profile、原始数据、脱敏阶段、校验脚本及导出审计在 ignored `local-evidence/feat004-send-trace-20261115/`。该指定样本不证明业务拒绝、未知结果的现场行为或全局 callback drain。
+
+续审停止路径发现 `removeKernelMsgListener` 抛异常时曾返回 `STOPPED` 并误报移除：合成回归先失败，修复为保留 stopped 对象、返回固定错误供 resident quarantine；保留对象的再次启动亦明确拒绝，回归先失败后修复。基线复现脚本第一次从 Windows Git 读取 WSL 创建的 worktree 失败，改由 Linux Git/Node 执行后成功复现，日志留在上述本机目录。该停止修复未加载到本次 QQ，正常返回也不证明 QQ 内部已全局 drain。最终全仓首次复验的 `native_adapter_contract` 为 6 PASS / 1 FAIL，inline 用例的全局 native_ops 计数为 2 而非 1，其恰一次 outcome 断言已通过；核实 WSL 环境设置未传入 Windows，实际未串行。测试共享累计计数且以绝对值 1 断言，失败日志中另一个发送测试先执行，故测试顺序可解释该计数。Windows 进程内指定串行后该用例单独通过；原日志留在 `target-harness/feat004-complete-all.log`。最终串行全仓、独立普通 release、定向测试和文档检查结果见本轮交接；`feat-004` 保持 in-progress，真实业务拒绝、QQ callback OS 线程与 native 最终释放仍缺证据。
+
 2026-11-15 feat-004 进行中：基于 PR #12 的 `54b6a5a`，正式文本发送预登记后若 `sendMsg` 抛异常、Promise 拒绝或结果格式不明，改为保留 unknown；整数拒绝码保留，受理仍不等于稳定 ID 成功。Windows 定向 `wrapper_send` 3/3（含异常、拒绝码、受理、超时/停止/替换后的迟到结果），`recovery_contract` 10/10，`init.ps1 -Mode all` 与隔离普通 release 构建通过。首次 PowerShell 内部重定向把 Cargo stderr 当错误，外部重定向复验通过，原日志保留本机。GitNexus 索引绑定本工作树 `54b6a5a`，`build_send_js` 上游 LOW（`send_text`、`native_op`）；嵌入 JS 与跨语言调用需结合源码审查。
 
 同日 resident 回调路径补充：回归先复现 unknown 后迟到拒绝被再次输出，修复后该路径只允许有界窗口内非空稳定 ID 更正，空 ID、重复 unknown 和迟到拒绝不再终结。`complete_sends` 图上游为 UNKNOWN；源码确认 owner 泵调用，比较 `drain_send_responses` 的强身份限定后修复。最终 Windows `init.ps1 -Mode all` 和新的隔离普通 release 构建通过；上述复现失败保留。新构建未用于前一发送样本。

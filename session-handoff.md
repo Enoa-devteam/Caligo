@@ -1,5 +1,9 @@
 # Session handoff
 
+2026-11-15 feat-004 续验：用户指定的禁言测试群经新根 42124、44580 各次独立准入及个人禁言只读核对后，各发送一次不同标记；用户均确认未见，两个请求均为 DeliveryUnknown，不重发。第二次 wrapper Promise 的整数 120 已保留在审计，停止后以实际 AccountActor 打开账本副本核实重启保留且不重派；不能推断其为明确业务拒绝。两个 manager/owner 均正常停止，QQ 响应并保留 bridge；不复用或热卸载。ConfirmedFailure 原因持久化、新旧账本兼容、异常停止隔离与 wrapper 交错均有离线回归；Windows 串行 all 与隔离 research release 通过。详见 [progress](progress.md#current-state)。feat-004 仍 in-progress：真实明确拒绝语义、QQ callback OS 线程、最终 owner/stop/drain 及历史 G3 consumer 合同未闭合。继续前先建立可验证的安全研究合同；任何新现场使用新鲜代次重新准入，原样本不重发。
+
+2026-11-15 feat-004 续验：固定 9.9.36-53644 新根 53716 的单次私聊及 HTTP 回读通过，用户确认对端一条；有界阶段显示登记、submit、匹配回调、受理、精确回读与终结的本次顺序，不能证明 QQ callback OS 线程。manager/owner 已停止，QQ 响应并保留 bridge；不复用或热卸载。wrapper 停止异常与停止态重启拒绝已补回归及修复，新修复尚未现场加载。命令、构建 hash、证据与未闭合门见 [progress](progress.md#current-state)。真实业务拒绝、callback 线程和最终释放未闭合，状态保持 in-progress；下一步先建立可安全复现的拒绝与寿命研究合同，任何新接入须新鲜代次重新准入，不重发既有样本。
+
 2026-11-15 feat-004 进行中：独立工作树 `Caligo-feat-004` 基于 PR #12 `54b6a5a`；正式文本提交异常保守 unknown 的修复、定向及全仓结果和单次现场证据见 [progress](progress.md#current-state)。现场已停止，7204 与 42768 均不复用或热卸载；原发送成功、对端确认一条，新代次现场 HTTP 只读回查通过，原 10053 根因未知。后续补全正式链路回调、拒绝与寿命完成门；任何新接入需用户指定新鲜代次并重走准入，不热卸载。feature 仍 in-progress。
 
 2026-11-15 feat-003 验收完成：固定 9.9.36-53644 的私聊、登记群和自发文本指定样本及离线未知类型合同满足三项完成门，跨代次范围、10053 未知及自发修订核对保留在 [progress](progress.md#current-state)。第七轮 manager/owner 正常停止，QQ 响应且保留 bridge。后续按用户任务选择清单中的下一个工作块；不自动推进 feat-004，不放宽身份准入、不重发旧样本，未证寿命不卸载。

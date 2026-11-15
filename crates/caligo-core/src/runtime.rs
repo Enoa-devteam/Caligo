@@ -1201,6 +1201,10 @@ impl AccountActor {
             at_unix_ms: now_ms(),
             session_generation: gen,
             wire_seq,
+            failure_reason: match state {
+                ActionState::ConfirmedFailure { reason } => Some(reason.clone()),
+                _ => None,
+            },
         }))
     }
 
@@ -1355,7 +1359,7 @@ fn state_from_record(record: &RequestRecord) -> Option<ActionState> {
         },
         "AcceptedUnconfirmed" => Some(ActionState::AcceptedUnconfirmed),
         "ConfirmedFailure" => Some(ActionState::ConfirmedFailure {
-            reason: String::new(),
+            reason: record.failure_reason.clone().unwrap_or_default(),
         }),
         "CancelledUnsent" => Some(ActionState::CancelledUnsent),
         "DeliveryUnknown" => Some(ActionState::DeliveryUnknown),

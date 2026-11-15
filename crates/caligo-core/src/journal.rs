@@ -66,6 +66,9 @@ pub struct RequestRecord {
     /// core 分配并在派发前持久化的 QQ client_seq；旧记录没有此字段。
     #[serde(default)]
     pub wire_seq: Option<u32>,
+    /// 仅明确失败携带；旧 journal 缺失时保留未知原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -397,6 +400,7 @@ mod tests {
             at_unix_ms: 1_000,
             session_generation: 7,
             wire_seq: None,
+            failure_reason: None,
         })
     }
 

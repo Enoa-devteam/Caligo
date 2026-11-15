@@ -368,7 +368,10 @@ pub const D8_START_JS: &str = r"
 (function () {
   try {
     var G = globalThis;
-    if (G.__caligo_res) { G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid; }
+    if (G.__caligo_res) {
+      if (G.__caligo_res.stopped) return 'ERR:stopped_listener_retained';
+      G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid;
+    }
     var q = process._linkedBinding('QQNT');
     var S = q.NodeIQQNTWrapperSession;
     var live = null, sidName = null;
@@ -388,6 +391,11 @@ pub const D8_START_JS: &str = r"
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
       rejected: 0, overflow: 0, imageShapes: [], listenerId: null, sendResults: {}, sends: {} };
+    var traceText = typeof caligoSendTrace !== 'undefined' && caligoSendTrace === true;
+    R.textSendTrace = [];
+    R.noteTextSend = function(stage) {
+      try { if (traceText && R.textSendTrace.length < 32) R.textSendTrace.push(stage); } catch (_) {}
+    };
     var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
     R.voiceAccount = voiceAccount;
     // The pinned wrapper serializes absent numeric mention IDs as '0' and the optional NT UID as null.
@@ -400,9 +408,10 @@ pub const D8_START_JS: &str = r"
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
       if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (!pending.voice && !pending.image) R.noteTextSend('settled');
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
-          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+          (pending.promiseStatus !== 'accepted' ? (pending.unknownReason || 'promise_event_conflict') : pending.readback.reason)};
       } else if ((pending.voice || pending.image) && !push('add_send', pending.readback.record, true)) {
         R.sendResults[key] = {status:'unknown', reason:'verified_voice_projection_rejected'};
       } else {
@@ -549,6 +558,7 @@ pub const D8_START_JS: &str = r"
             ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
               !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
+          if (!send.voice && !send.image) R.noteTextSend('matched_add');
           if (send.addId && (send.addId !== m.msgId ||
               ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
@@ -562,6 +572,7 @@ pub const D8_START_JS: &str = r"
         }
         if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
             (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
+          if (!send.voice && !send.image) R.noteTextSend('matched_update');
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
             Promise.resolve().then(function () {
@@ -599,6 +610,7 @@ pub const D8_START_JS: &str = r"
                 pending.readback = matched
                     ? {status:'readback', msgId:record.msgId, record:owned}
                     : {status:'unknown', reason:'exact_query_identity_mismatch'};
+                if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch');
               }
               settleSendResult(R, key, pending);
             }, function () {
@@ -648,7 +660,8 @@ pub const D8_POLL_JS: &str = r"
       if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
     }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
-      sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || []};
+      sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
+      textSendTrace:R.textSendTrace || []};
     var json = JSON.stringify(out);
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
@@ -662,7 +675,7 @@ pub const D8_POLL_JS: &str = r"
       }
       json = JSON.stringify(out);
     }
-    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = [];
+    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = [];
     var resultKeys = Object.keys(R.sendResults || {});
     for (var i = 0; i < resultKeys.length; i++) {
       if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
@@ -681,7 +694,8 @@ pub const D8_STOP_JS: &str = r"
     var R = G.__caligo_res;
     var r = 'no-listener';
     R.stopped = true;
-    try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); } catch (e) { r = 'ERR:' + String(e).slice(0, 100); }
+    try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); }
+    catch (_) { return 'ERR:listener_remove_failed'; }
     var sid = R.sid;
     delete G.__caligo_res;
     return 'STOPPED sid=' + sid + ' remove=' + r;
@@ -744,6 +758,14 @@ pub fn poll_listener_json() -> Result<String, V8Error> {
             crate::qq_entry::append_stage_simple("media_download_stage", true, &detail);
         }
     }
+    #[cfg(feature = "research")]
+    if let Some(detail) = crate::receive_diagnostics::sanitize_text_send_trace(&output) {
+        static TEXT_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if TEXT_REPORTS.fetch_update(std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed, |n| (n < 32).then_some(n + 1)).is_ok() {
+            crate::qq_entry::append_stage_simple("text_send_trace", true, &detail);
+        }
+    }
     Ok(output)
 }
 
@@ -764,10 +786,10 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 同上。
-    let source = account.map(listener_script_with_account);
-    let result = unsafe {
-        exec_script(&syms, isolate_addr(), source.as_deref().unwrap_or(D8_START_JS))
-    }?;
+    let source = account.map(listener_script_with_account).unwrap_or_else(|| {
+        format!("(function(caligoSendTrace) {{ return ({}); }})(false)", D8_START_JS)
+    });
+    let result = unsafe { exec_script(&syms, isolate_addr(), &source) }?;
     if let Some(session) = result
         .strip_prefix("ARMED sid=")
         .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))
@@ -781,9 +803,10 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
 
 fn listener_script_with_account(account: &str) -> String {
     format!(
-        "(function(caligoVoiceAccount) {{ return ({}); }})({})",
+        "(function(caligoVoiceAccount, caligoSendTrace) {{ return ({}); }})({}, {})",
         D8_START_JS,
-        serde_json::to_string(account).expect("serializable account")
+        serde_json::to_string(account).expect("serializable account"),
+        cfg!(feature = "research")
     )
 }
 
@@ -1753,6 +1776,16 @@ mod uid_map_script_tests {
     };
 
     #[test]
+    fn send_trace_is_enabled_only_in_research_listener_wrapper() {
+        let js = listener_script_with_account("10001");
+        assert!(js.ends_with(if cfg!(feature = "research") {
+            ", true)"
+        } else {
+            ", false)"
+        }));
+    }
+
+    #[test]
     fn profile_refresh_requires_request_reply_and_notification_and_retains_unknown_cleanup() {
         let scripts = serde_json::json!({
             "start": CURRENT_LOGIN_START_JS,
@@ -2398,7 +2431,7 @@ pub fn build_send_js(
       if (!pending || !pending.promiseDone || !pending.readback) return;
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
-          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+          (pending.promiseStatus !== 'accepted' ? (pending.unknownReason || 'promise_event_conflict') : pending.readback.reason)};
       } else {
         R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
       }
@@ -2456,19 +2489,23 @@ pub fn build_send_js(
     js.push_str(&timeout_ms.to_string());
     js.push_str(", addId:null, updateId:null, done:false};\n");
     js.push_str("    R.sends[key] = pending; R.sendResults[key] = {status:'pending'};\n");
+    js.push_str("    if (R.noteTextSend) R.noteTextSend('registered');\n");
     js.push_str("    function result(status, detail) {\n");
     js.push_str("      if (R.stopped || R.sends[key] !== pending) return;\n");
+    js.push_str("      if (R.noteTextSend) R.noteTextSend(status === 'accepted' ? 'promise_accepted' : (status === 'rejected' ? 'promise_rejected' : 'promise_unknown'));\n");
     js.push_str("      pending.promiseDone=true; pending.promiseStatus=status;\n");
+    js.push_str("      if (status === 'unknown') pending.unknownReason=detail.reason;\n");
     js.push_str("      if (pending.readback) settleSendResult(R,key,pending);\n");
     js.push_str("      else if (!pending.ambiguous && !pending.timedOut) R.sendResults[key]=detail;\n");
     js.push_str("      if (status !== 'accepted') pending.failed=true;\n");
     js.push_str("    }\n");
-    js.push_str("    function unknown() { result('unknown', {status:'unknown', reason:'text_submit_unknown'}); }\n");
-    js.push_str("    try { Promise.resolve(R.ms.sendMsg('0', peer, elems, new Map())).then(function (res) {\n");
+    js.push_str("    function unknown(reason) { result('unknown', {status:'unknown', reason:typeof reason === 'string' ? reason : 'text_submit_unknown'}); }\n");
+    js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter'); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return'); Promise.resolve(pr).then(function (res) {\n");
     js.push_str("      if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
-    js.push_str("      else if (res && Number.isInteger(res.result) && !pending.addId) result('rejected', {status:'rejected', error:'send result=' + String(res.result)});\n");
+    js.push_str("      else if (res && Number.isSafeInteger(res.result) && !pending.addId) result('rejected', {status:'rejected', error:'send result=' + String(res.result)});\n");
+    js.push_str("      else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
     js.push_str("      else unknown();\n");
-    js.push_str("    }, unknown); } catch (e) { unknown(); }\n");
+    js.push_str("    }, function () { unknown(); }); } catch (e) { unknown(); }\n");
     js.push_str("    return JSON.stringify({fired:true, mid:key});\n");
     js.push_str("  } catch (e) { return JSON.stringify({ err: String(e).slice(0, 300) }); }\n");
     js.push_str("})()\n");

@@ -3,6 +3,21 @@
 
 use serde_json::{json, Map, Value};
 
+#[cfg(feature = "research")]
+pub(crate) fn sanitize_text_send_trace(input: &str) -> Option<String> {
+    if input.len() > 524_288 {
+        return None;
+    }
+    let batch: Value = serde_json::from_str(input).ok()?;
+    let stages = batch.get("textSendTrace")?.as_array()?;
+    let allowed = ["registered", "submit_enter", "submit_return", "promise_accepted",
+        "promise_rejected", "promise_unknown", "matched_add", "matched_update",
+        "readback_matched", "readback_mismatch", "settled"];
+    let trace: Vec<&str> = stages.iter().take(32).filter_map(Value::as_str)
+        .filter(|stage| allowed.contains(stage)).collect();
+    (!trace.is_empty()).then(|| json!({"stages":trace}).to_string())
+}
+
 pub(crate) fn sanitize_media_download(input: &str) -> Option<String> {
     if input.len() > 524_288 {
         return None;
@@ -139,6 +154,20 @@ pub(crate) fn sanitize_image_shapes(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn text_send_trace_accepts_only_bounded_fixed_labels() {
+        let input = json!({"textSendTrace":["registered","sensitive-id",{"stage":"matched_add"},
+            "promise_accepted","readback_matched","settled"],"message":"secret"}).to_string();
+        let output = sanitize_text_send_trace(&input).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&output).unwrap(),
+            json!({"stages":["registered","promise_accepted","readback_matched","settled"]}));
+        let many = json!({"textSendTrace":vec!["matched_add";40]}).to_string();
+        let value: Value = serde_json::from_str(&sanitize_text_send_trace(&many).unwrap()).unwrap();
+        assert_eq!(value["stages"].as_array().unwrap().len(),32);
+        assert_eq!(sanitize_text_send_trace(&" ".repeat(524_289)),None);
+    }
 
     #[test]
     fn media_diagnostics_have_only_bounded_labels_and_comparison_flags() {
