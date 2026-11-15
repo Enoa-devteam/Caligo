@@ -1,5 +1,15 @@
 # Session handoff
 
+2026-11-15 feat-004 请求级诊断离线实现：research 阶段记录现携带 JS 环境内代次和临时请求序号，并标记批次溢出或无法分配；已补并发、跨 poll、旧代次、耗尽、异常与隐私负例。完整证据与日志见 [progress](progress.md#current-state)，边界见[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)。旧 Windows 磁盘索引刷新中断、完整性未知；独立 WSL 增量索引曾触及 16 GiB 上限，后续须使用新建的干净索引并核验。现场未加载，缺日志仍 unknown；实际 QQ callback 线程和最终 owner/drain 仍需独立证据。
+
+2026-11-15 feat-004 并发轨迹核查：实际生成的两个发送脚本在 Node VM 中以相反顺序完成 Promise，得到相同的 listener 级标签数组；11 请求样本另显示 32 项上限会无标记丢失阶段。现有标签不能用于并发请求的逐请求顺序或缺失事件证明。复现入口、hash 及边界见 [progress](progress.md#current-state)，后续请求级诊断约束见[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)。下一步先针对有界、代次隔离的诊断关联设计完成影响分析、隐私和并发负例，再实现与离线验收；实际 callback OS 线程及 QQ drain 仍需独立证据。
+
+2026-11-15 feat-004 合成探针补查：独立 VM 6/6；内存移除 onRecvMsg stopped 守卫的变异按预期失败，脚本/日志 hash 和范围见 [progress](progress.md#current-state)。测试符号 GitNexus 精确 UID 为 UNKNOWN，经源码核对隔离的 Node VM 测试后已纳入三个负例，research 定向 5/5。下一步补证测试符号映射，并在[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)下准备真实事件与线程观测；不能把合成结果升级为现场证据。
+
+2026-11-15 feat-004 离线续验：已通过 WSL 原分析器恢复当前 GitNexus 索引；普通/research 全仓、research 定向 17 项与隔离 research release 通过。原有未提交探针保留，限于合成停止态调用，不是实际 QQ callback 证据。详细图限制、构建 hash 与日志见 [progress](progress.md#current-state)。下一步在现有[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)下设计可关联的实际事件和线程观测；新现场须新代次准入，unknown 不重发，未证寿命不热卸载。
+
+2026-11-15 feat-004 离线续查：原有未提交停止合成探针未改动，wrapper_send Windows 定向 5/5；新增[线程与停止观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)，将合成、真实迟到、JS 与 native 线程和最终 drain 分开判定。下一步先解决 Windows 与 WSL worktree 的 Git/索引路径不一致（GitNexus 状态分别报 not-git-repository 与 foreign），保留现有索引和未提交代码；再审查原有探针并完成可关联的安全观测实现及正反测试；现场须新代次、重新准入，未获证不得热卸载，unknown 不重发。详见 [progress](progress.md#current-state)。
+
 2026-11-15 feat-004 停止隔离版现场：新根 41684 准入、正式构建单次接入、监听和登记账号登录核验通过；零发送，manager/owner 停止码 0、端口关闭、QQ 响应且保留 bridge。未触发或观察停止后迟到回调，未证明 QQ 内注销/全局 drain；该进程不重接、不热卸载。证据和 hash 见 [progress](progress.md#current-state)。后续先设计可验证的线程及在途回调观测合同，需新现场时重走新鲜代次准入；不追测业务拒绝。
 
 2026-11-15 feat-004 快照与停止隔离：固定 9.9.36 静态路径显示 listener 登记节点移除后，先前拷贝的引用快照仍可能持有对象；消息 listener 入口现拒绝 stopped 后的迟到通知，媒体完成回调保留临时文件清理。定向回归及失败历史、固定 hash 与证据见 [progress](progress.md#current-state)。新实现未现场加载；继续按新鲜代次和准入合同设计正式 callback 线程/最终 owner/drain 证据，不重发、热卸载或追测业务拒绝。

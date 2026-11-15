@@ -61,6 +61,7 @@
 - 9.9.33 本地链路研究：[2026-11-11 收发验证](research/2026-11-11-9.9.33-local-verification.md)。研究报告含明确标注的伪身份字段，不构成生产实现或现场验收。
 - 接收：[receive-design](research/qq-native-receive-design.md)。
 - 发送实验合同：[send-probe-design](research/qq-native-send-probe-design.md)。
+- feat-004 后续观测判定：[回调线程与停止观测合同](acceptance/2026-11-15-feat-004-observation.md)。
 - 响应消费者历史起点：[response-consumer-scope](research/response-consumer-scope.md)。
   “实现未开始”等旧结论以 N 台账后续接线记录补充；scope 原文保留。
 - 详细样本与负结果：从 P/N 执行台账进入对应 `evidence/`，按样本定位，

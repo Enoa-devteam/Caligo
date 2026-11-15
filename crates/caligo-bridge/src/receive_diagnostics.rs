@@ -10,12 +10,27 @@ pub(crate) fn sanitize_text_send_trace(input: &str) -> Option<String> {
     }
     let batch: Value = serde_json::from_str(input).ok()?;
     let stages = batch.get("textSendTrace")?.as_array()?;
+    let generation = batch.get("textSendTraceGeneration")?.as_u64()?;
+    if generation > 2_147_483_647 { return None; }
+    let overflow = batch.get("textSendTraceOverflow")?.as_bool()?;
     let allowed = ["registered", "submit_enter", "submit_return", "promise_accepted",
         "promise_rejected", "promise_unknown", "matched_add", "matched_update",
         "readback_matched", "readback_mismatch", "settled"];
-    let trace: Vec<&str> = stages.iter().take(32).filter_map(Value::as_str)
-        .filter(|stage| allowed.contains(stage)).collect();
-    (!trace.is_empty()).then(|| json!({"stages":trace}).to_string())
+    let mut incomplete = overflow || (generation == 0 && !stages.is_empty()) || stages.len() > 32;
+    let mut events = Vec::new();
+    for event in stages.iter().take(32) {
+        let seq = event.get("seq").and_then(Value::as_u64);
+        let stage = event.get("stage").and_then(Value::as_str);
+        match (seq, stage) {
+            (Some(seq @ 1..=2_147_483_647), Some(stage)) if allowed.contains(&stage) => {
+                events.push(json!({"seq":seq,"stage":stage}));
+            }
+            _ => incomplete = true,
+        }
+    }
+    (!events.is_empty() || incomplete).then(|| json!({
+        "generation":generation,"events":events,"incomplete":incomplete
+    }).to_string())
 }
 
 pub(crate) fn sanitize_media_download(input: &str) -> Option<String> {
@@ -158,14 +173,33 @@ mod tests {
     #[cfg(feature = "research")]
     #[test]
     fn text_send_trace_accepts_only_bounded_fixed_labels() {
-        let input = json!({"textSendTrace":["registered","sensitive-id",{"stage":"matched_add"},
-            "promise_accepted","readback_matched","settled"],"message":"secret"}).to_string();
+        let input = json!({"textSendTraceGeneration":3,"textSendTraceOverflow":false,
+            "textSendTrace":[{"seq":1,"stage":"registered","secret":"private"},
+                {"seq":2,"stage":"promise_accepted"},{"seq":0,"stage":"matched_add"},
+                {"seq":1,"stage":"private"}],"message":"secret"}).to_string();
         let output = sanitize_text_send_trace(&input).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap(),
-            json!({"stages":["registered","promise_accepted","readback_matched","settled"]}));
-        let many = json!({"textSendTrace":vec!["matched_add";40]}).to_string();
+        assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), json!({"generation":3,
+            "events":[{"seq":1,"stage":"registered"},{"seq":2,"stage":"promise_accepted"}],
+            "incomplete":true}));
+        assert!(!output.contains("private") && !output.contains("secret"));
+        let many = json!({"textSendTraceGeneration":3,"textSendTraceOverflow":false,
+            "textSendTrace":vec![json!({"seq":1,"stage":"matched_add"});40]}).to_string();
         let value: Value = serde_json::from_str(&sanitize_text_send_trace(&many).unwrap()).unwrap();
-        assert_eq!(value["stages"].as_array().unwrap().len(),32);
+        assert_eq!(value["events"].as_array().unwrap().len(),32);
+        assert_eq!(value["incomplete"],true);
+        let overflow = json!({"textSendTraceGeneration":3,"textSendTraceOverflow":true,
+            "textSendTrace":[]}).to_string();
+        assert_eq!(serde_json::from_str::<Value>(&sanitize_text_send_trace(&overflow).unwrap()).unwrap(),
+            json!({"generation":3,"events":[],"incomplete":true}));
+        let disabled = json!({"textSendTraceGeneration":0,"textSendTraceOverflow":false,
+            "textSendTrace":[]}).to_string();
+        assert_eq!(sanitize_text_send_trace(&disabled),None);
+        let unavailable = json!({"textSendTraceGeneration":0,"textSendTraceOverflow":true,
+            "textSendTrace":[]}).to_string();
+        assert_eq!(serde_json::from_str::<Value>(&sanitize_text_send_trace(&unavailable).unwrap()).unwrap(),
+            json!({"generation":0,"events":[],"incomplete":true}));
+        let missing_generation = json!({"textSendTrace":[],"textSendTraceOverflow":false}).to_string();
+        assert_eq!(sanitize_text_send_trace(&missing_generation),None);
         assert_eq!(sanitize_text_send_trace(&" ".repeat(524_289)),None);
     }
 

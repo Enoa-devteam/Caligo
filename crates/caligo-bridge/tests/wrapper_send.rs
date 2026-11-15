@@ -350,9 +350,12 @@ const run=s=>vm.runInContext(s,context);
   for(let i=0;i<5;i++) await new Promise(resolve=>setImmediate(resolve));
   let batch=JSON.parse(run(poll)); assert.equal(batch.sendResults.request.status,'done');
   assert.equal(batch.sendResults.request.msgId,'native-1'); assert.equal(queries,1);
-  assert.ok(batch.textSendTrace.indexOf('registered') < batch.textSendTrace.indexOf('submit_enter'));
-  assert.ok(batch.textSendTrace.indexOf('matched_add') < batch.textSendTrace.indexOf('submit_return'));
-  assert.ok(batch.textSendTrace.includes('promise_accepted') && batch.textSendTrace.includes('readback_matched') && batch.textSendTrace.includes('settled'));
+  const stages=batch.textSendTrace.map(e=>e.stage);
+  assert.ok(stages.indexOf('registered') < stages.indexOf('submit_enter'));
+  assert.ok(stages.indexOf('matched_add') < stages.indexOf('submit_return'));
+  assert.ok(stages.includes('promise_accepted') && stages.includes('readback_matched') && stages.includes('settled'));
+  assert.equal(new Set(batch.textSendTrace.map(e=>e.seq)).size,1);
+  assert.equal(batch.textSendTraceOverflow,false);
   listener.onAddSendMsg(record('native-1',1)); listener.onMsgInfoListUpdate([record('native-1',2)]);
   assert.equal(JSON.parse(run(poll)).sendResults.request,undefined);
   mode='pending'; assert.equal(JSON.parse(run(send)).fired,true); let old=listener, oldComplete=complete, oldState=context.__caligo_res;
@@ -386,4 +389,92 @@ const run=s=>vm.runInContext(s,context);
     let output=std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
         .output().expect("Node.js is required for the wrapper send fixture");
     assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn stopped_listener_probe_is_scoped_and_does_not_change_stop_outcome() {
+    let fixture = format!(r#"
+const assert = require('node:assert/strict'), vm = require('node:vm');
+const start = {start}, stop = {stop};
+let removals=0, removalThrows=false;
+const service={{sendMsg(){{}},addKernelMsgListener(){{return 7;}}, removeKernelMsgListener(){{removals++; if(removalThrows) throw Error('private');}}}};
+const session={{getSessionId:()=>1,getMsgService:()=>service}};
+const c={{Buffer,Promise,Date,Map,JSON,String,Object,Array,Number,process:{{_linkedBinding:()=>({{NodeIQQNTWrapperSession:{{getNTWrapperSession:()=>session}}}})}}}};
+vm.createContext(c); const run=s=>vm.runInContext(s,c);
+const probe=enabled=>`(function(caligoStopProbe) {{ return (${{stop}}); }})(${{enabled}})`;
+assert.equal(run(probe(true)),'NOT_ARMED');
+c.caligoStopProbe=true;
+assert.match(run(start),/^ARMED/);
+const regular=run(probe(false)); assert.match(regular,/^STOPPED /); assert.ok(!regular.includes('stop_probe='));
+assert.match(run(start),/^ARMED/);
+const checked=run(probe(true)); assert.match(checked,/^STOPPED /); assert.ok(checked.endsWith(' stop_probe=pass'));
+assert.match(run(start),/^ARMED/); c.__caligo_res.listener.onRecvMsg=()=>{{c.__caligo_res.rejected++;}};
+const failedCheck=run(probe(true)); assert.match(failedCheck,/^STOPPED /); assert.ok(failedCheck.endsWith(' stop_probe=fail'));
+assert.match(run(start),/^ARMED/); c.__caligo_res.listener.onRecvMsg=()=>{{throw Error('private callback detail');}};
+const errored=run(probe(true)); assert.match(errored,/^STOPPED /); assert.ok(errored.endsWith(' stop_probe=error')); assert.ok(!errored.includes('private'));
+assert.match(run(start),/^ARMED/); removalThrows=true;
+assert.equal(run(probe(true)),'ERR:listener_remove_failed stop_probe=pass');
+assert.equal(c.__caligo_res.stopped,true); assert.equal(removals,5);
+"#,start=serde_json::to_string(D8_START_JS).unwrap(),stop=serde_json::to_string(D8_STOP_JS).unwrap());
+    let output = std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn research_text_trace_scopes_requests_polls_and_overflow() {
+    let one = build_send_js(1, "20002", "one", "10001", "request-one", 1, 5_000);
+    let two = build_send_js(1, "20002", "two", "10001", "request-two", 2, 5_000);
+    let fixture = r#"
+const assert=require('node:assert/strict'),vm=require('node:vm');
+const start=__START__,poll=__POLL__,stop=__STOP__,one=__ONE__,two=__TWO__;
+let index=0,resolvers=[];
+const service={generateMsgUniqueId:()=>`cookie${++index}`,addKernelMsgListener:()=>7,
+  removeKernelMsgListener:()=>true,sendMsg(){return new Promise(r=>resolvers.push(r));}};
+const session={getSessionId:()=>1,getMsgService:()=>service,getMSFService:()=>({getServerTime:()=> 'time'}),
+  getProfileService:()=>({getUidByUin:()=>new Map([['20002','u_peer']])})};
+const c={Buffer,Promise,Date,Map,JSON,String,Object,Array,Number,caligoSendTrace:true,
+  process:{_linkedBinding:()=>({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}})}};
+vm.createContext(c);const run=x=>vm.runInContext(x,c),tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+  assert.match(run(start),/^ARMED/);
+  assert.equal(JSON.parse(run(one)).fired,true);assert.equal(JSON.parse(run(two)).fired,true);
+  let batch=JSON.parse(run(poll));assert.equal(batch.textSendTraceGeneration,1);
+  assert.equal(batch.textSendTraceOverflow,false);
+  const registrations=batch.textSendTrace.filter(e=>e.stage==='registered');
+  assert.equal(registrations.length,2);assert.notEqual(registrations[0].seq,registrations[1].seq);
+  resolvers[1]({result:0});await tick();batch=JSON.parse(run(poll));
+  assert.deepEqual(batch.textSendTrace,[{seq:registrations[1].seq,stage:'promise_accepted'}]);
+  resolvers[0]({result:0});await tick();batch=JSON.parse(run(poll));
+  assert.deepEqual(batch.textSendTrace,[{seq:registrations[0].seq,stage:'promise_accepted'}]);
+  for(let i=0;i<11;i++)assert.equal(JSON.parse(run(one.replace('request-one',`many-${i}`))).fired,true);
+  batch=JSON.parse(run(poll));assert.equal(batch.textSendTrace.length,32);assert.equal(batch.textSendTraceOverflow,true);
+  batch=JSON.parse(run(poll));assert.equal(batch.textSendTraceOverflow,false);
+  const oldResolve=resolvers[2];assert.match(run(stop),/^STOPPED/);assert.match(run(start),/^ARMED/);
+  oldResolve({result:0});await tick();batch=JSON.parse(run(poll));
+  assert.equal(batch.textSendTraceGeneration,2);assert.deepEqual(batch.textSendTrace,[]);
+  c.__caligo_res.textTraceSequence=2147483647;
+  assert.equal(JSON.parse(run(one.replace('request-one','exhausted'))).fired,true);
+  batch=JSON.parse(run(poll));assert.equal(batch.textSendTraceOverflow,true);
+  assert.deepEqual(batch.textSendTrace,[]);
+  assert.match(run(stop),/^STOPPED/);
+  Object.defineProperty(c,'__caligo_text_trace_generation',{
+    get(){return 0},set(){throw Error('private')},configurable:true});
+  assert.match(run(start),/^ARMED/);
+  assert.equal(JSON.parse(run(one.replace('request-one','generation-failed'))).fired,true);
+  batch=JSON.parse(run(poll));assert.equal(batch.textSendTraceGeneration,0);
+  assert.equal(batch.textSendTraceOverflow,true);assert.deepEqual(batch.textSendTrace,[]);
+})().catch(e=>{console.error(e);process.exitCode=1});
+"#.replace("__START__", &serde_json::to_string(D8_START_JS).unwrap())
+        .replace("__POLL__", &serde_json::to_string(D8_POLL_JS).unwrap())
+        .replace("__STOP__", &serde_json::to_string(D8_STOP_JS).unwrap())
+        .replace("__ONE__", &serde_json::to_string(&one).unwrap())
+        .replace("__TWO__", &serde_json::to_string(&two).unwrap());
+    use std::io::Write;
+    let mut child = std::process::Command::new("node").arg("--unhandled-rejections=strict")
+        .stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn().expect("Node.js is required for the wrapper send fixture");
+    child.stdin.take().unwrap().write_all(fixture.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }

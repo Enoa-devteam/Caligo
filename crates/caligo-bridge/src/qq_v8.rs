@@ -393,8 +393,36 @@ pub const D8_START_JS: &str = r"
       rejected: 0, overflow: 0, imageShapes: [], listenerId: null, sendResults: {}, sends: {} };
     var traceText = typeof caligoSendTrace !== 'undefined' && caligoSendTrace === true;
     R.textSendTrace = [];
-    R.noteTextSend = function(stage) {
-      try { if (traceText && R.textSendTrace.length < 32) R.textSendTrace.push(stage); } catch (_) {}
+    var traceGeneration = 0;
+    if (traceText) {
+      try {
+        var lastGeneration = G.__caligo_text_trace_generation;
+        if (lastGeneration === undefined) lastGeneration = 0;
+        if (Number.isSafeInteger(lastGeneration) && lastGeneration >= 0 && lastGeneration < 2147483647) {
+          traceGeneration = lastGeneration + 1;
+          G.__caligo_text_trace_generation = traceGeneration;
+          if (G.__caligo_text_trace_generation !== traceGeneration) traceGeneration = 0;
+        }
+      } catch (_) { traceGeneration = 0; }
+    }
+    R.textTraceGeneration = traceGeneration;
+    R.textTraceSequence = 0;
+    R.textTraceOverflow = traceText && traceGeneration === 0;
+    R.allocateTextTrace = function() {
+      try {
+        if (!traceText) return 0;
+        if (!traceGeneration || R.textTraceSequence >= 2147483647) { R.textTraceOverflow = true; return 0; }
+        return ++R.textTraceSequence;
+      } catch (_) { try { R.textTraceOverflow = true; } catch (_) {} return 0; }
+    };
+    R.noteTextSend = function(stage, seq) {
+      try {
+        if (!traceText) return;
+        if (!traceGeneration || !Number.isSafeInteger(seq) || seq <= 0 || R.textSendTrace.length >= 32) {
+          R.textTraceOverflow = true; return;
+        }
+        R.textSendTrace.push({seq:seq, stage:stage});
+      } catch (_) { try { R.textTraceOverflow = true; } catch (_) {} }
     };
     var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
     R.voiceAccount = voiceAccount;
@@ -408,7 +436,7 @@ pub const D8_START_JS: &str = r"
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
       if (!pending || !pending.promiseDone || !pending.readback) return;
-      if (!pending.voice && !pending.image) R.noteTextSend('settled');
+      if (!pending.voice && !pending.image) R.noteTextSend('settled', pending.traceSeq);
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
           (pending.promiseStatus !== 'accepted' ? (pending.unknownReason || 'promise_event_conflict') : pending.readback.reason)};
@@ -558,7 +586,7 @@ pub const D8_START_JS: &str = r"
             ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
               !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
-          if (!send.voice && !send.image) R.noteTextSend('matched_add');
+          if (!send.voice && !send.image) R.noteTextSend('matched_add', send.traceSeq);
           if (send.addId && (send.addId !== m.msgId ||
               ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
@@ -572,7 +600,7 @@ pub const D8_START_JS: &str = r"
         }
         if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
             (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
-          if (!send.voice && !send.image) R.noteTextSend('matched_update');
+          if (!send.voice && !send.image) R.noteTextSend('matched_update', send.traceSeq);
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
             Promise.resolve().then(function () {
@@ -610,7 +638,7 @@ pub const D8_START_JS: &str = r"
                 pending.readback = matched
                     ? {status:'readback', msgId:record.msgId, record:owned}
                     : {status:'unknown', reason:'exact_query_identity_mismatch'};
-                if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch');
+                if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch', pending.traceSeq);
               }
               settleSendResult(R, key, pending);
             }, function () {
@@ -662,7 +690,8 @@ pub const D8_POLL_JS: &str = r"
     }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
       sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
-      textSendTrace:R.textSendTrace || []};
+      textSendTrace:R.textSendTrace || [], textSendTraceGeneration:R.textTraceGeneration || 0,
+      textSendTraceOverflow:R.textTraceOverflow === true};
     var json = JSON.stringify(out);
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
@@ -676,7 +705,7 @@ pub const D8_POLL_JS: &str = r"
       }
       json = JSON.stringify(out);
     }
-    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = [];
+    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = []; R.textTraceOverflow = false;
     var resultKeys = Object.keys(R.sendResults || {});
     for (var i = 0; i < resultKeys.length; i++) {
       if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
@@ -695,11 +724,26 @@ pub const D8_STOP_JS: &str = r"
     var R = G.__caligo_res;
     var r = 'no-listener';
     R.stopped = true;
+    // Research-only, synchronous synthetic callbacks. No QQ API or message data.
+    var probe = '';
+    if (typeof caligoStopProbe !== 'undefined' && caligoStopProbe === true) {
+      try {
+        var before = [R.recv, R.recv.length, R.recvBytes, R.rejected, R.overflow,
+          R.imageShapes, R.imageShapes.length];
+        R.listener.onRecvMsg(null);
+        R.listener.onMsgInfoListUpdate(null);
+        R.listener.onAddSendMsg(null);
+        var unchanged = R.recv === before[0] && R.recv.length === before[1] &&
+          R.recvBytes === before[2] && R.rejected === before[3] && R.overflow === before[4] &&
+          R.imageShapes === before[5] && R.imageShapes.length === before[6];
+        probe = unchanged ? ' stop_probe=pass' : ' stop_probe=fail';
+      } catch (_) { probe = ' stop_probe=error'; }
+    }
     try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); }
-    catch (_) { return 'ERR:listener_remove_failed'; }
+    catch (_) { return 'ERR:listener_remove_failed' + probe; }
     var sid = R.sid;
     delete G.__caligo_res;
-    return 'STOPPED sid=' + sid + ' remove=' + r;
+    return 'STOPPED sid=' + sid + ' remove=' + r + probe;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 ";
@@ -816,8 +860,21 @@ pub fn stop_listener() -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
+    #[cfg(feature = "research")]
+    let source = format!("(function(caligoStopProbe) {{ return ({}); }})(true)", D8_STOP_JS);
+    #[cfg(not(feature = "research"))]
+    let source = format!("(function(caligoStopProbe) {{ return ({}); }})(false)", D8_STOP_JS);
     // SAFETY: 同上。
-    unsafe { exec_script(&syms, isolate_addr(), D8_STOP_JS) }
+    let output = unsafe { exec_script(&syms, isolate_addr(), &source) }?;
+    #[cfg(feature = "research")]
+    if output.starts_with("STOPPED ") || output.starts_with("ERR:listener_remove_failed ") {
+        if let Some(label) = output.rsplit_once(" stop_probe=").map(|(_, label)| label) {
+            let ok = label == "pass";
+            let detail = match label { "pass" => "pass", "fail" => "fail", _ => "error" };
+            crate::qq_entry::append_stage_simple("synthetic_stopped_callbacks", ok, detail);
+        }
+    }
+    Ok(output)
 }
 
 /// 固定语义 UID/UIN 双向查询：直接复用 QQNT wrapper session 的服务。
@@ -2486,14 +2543,14 @@ pub fn build_send_js(
     js.push_str(&text_json);
     js.push_str(", selfUin:selfUin, wireSeq:");
     js.push_str(&wire_seq.to_string());
-    js.push_str(", deadline:Date.now()+");
+    js.push_str(", traceSeq:typeof R.allocateTextTrace === 'function' ? R.allocateTextTrace() : 0, deadline:Date.now()+");
     js.push_str(&timeout_ms.to_string());
     js.push_str(", addId:null, updateId:null, done:false};\n");
     js.push_str("    R.sends[key] = pending; R.sendResults[key] = {status:'pending'};\n");
-    js.push_str("    if (R.noteTextSend) R.noteTextSend('registered');\n");
+    js.push_str("    if (R.noteTextSend) R.noteTextSend('registered', pending.traceSeq);\n");
     js.push_str("    function result(status, detail) {\n");
     js.push_str("      if (R.stopped || R.sends[key] !== pending) return;\n");
-    js.push_str("      if (R.noteTextSend) R.noteTextSend(status === 'accepted' ? 'promise_accepted' : (status === 'rejected' ? 'promise_rejected' : 'promise_unknown'));\n");
+    js.push_str("      if (R.noteTextSend) R.noteTextSend(status === 'accepted' ? 'promise_accepted' : (status === 'rejected' ? 'promise_rejected' : 'promise_unknown'), pending.traceSeq);\n");
     js.push_str("      pending.promiseDone=true; pending.promiseStatus=status;\n");
     js.push_str("      if (status === 'unknown') pending.unknownReason=detail.reason;\n");
     js.push_str("      if (pending.readback) settleSendResult(R,key,pending);\n");
@@ -2501,7 +2558,7 @@ pub fn build_send_js(
     js.push_str("      if (status !== 'accepted') pending.failed=true;\n");
     js.push_str("    }\n");
     js.push_str("    function unknown(reason) { result('unknown', {status:'unknown', reason:typeof reason === 'string' ? reason : 'text_submit_unknown'}); }\n");
-    js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter'); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return'); Promise.resolve(pr).then(function (res) {\n");
+    js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter', pending.traceSeq); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return', pending.traceSeq); Promise.resolve(pr).then(function (res) {\n");
     js.push_str("      if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
     js.push_str("      else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
     js.push_str("      else unknown();\n");
