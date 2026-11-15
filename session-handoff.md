@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-15 feat-004 私有 ETW query 输出：A 停止后 B 名称/GUID 均不同，旧句柄查询输出两字段为 B（12/12）；B 复用名称/GUID 时输出与 A 两字段相同（12/12），仍不能区分代次；均未用旧句柄停止。脚本、审计负例和范围见 [progress](progress.md#current-state)。不证明其他字段、query→stop 原子性、系统 logger 或跨进程恢复；继续研究独立可核验的系统会话代次与冲突控制，权限和现场准入不变。
+
 2026-11-15 feat-004 私有 ETW 句柄 ABA：A 停止后 B 即便使用不同名称/GUID，12/12 复用 A 句柄数值；A 旧值在 B 创建前 query 12/12 返回 4201、B 创建后 12/12 返回 0。另两组同名对照同样复用；只对本轮当前句柄 stop，未对旧值 stop。细节、hash 和范围见 [progress](progress.md#current-state)。这是本机 in-process private 会话证据，不外推 system logger；后续恢复不能凭过期句柄及 query 成功确认代次，需独立解决系统级所有权与原子性，权限、隐私和现场准入仍未闭合。
 
 2026-11-15 feat-004 私有 ETW 子进程退出对照：控制进程存活时，正常、非零退出和超时终止的自建子进程启动前及结束后，私有 ETW 会话按持有句柄 query/stop 均通过；详情及 hash 见 [progress](progress.md#current-state)。未验证控制器崩溃、具名系统会话或跨进程恢复；下一步仍须建立可核验代次与无法判定时的恢复合同，stop 的 `ERROR_MORE_DATA` 不得盲目重试，系统权限和现场准入保持约束。

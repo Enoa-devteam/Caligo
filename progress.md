@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-15 feat-004 私有 ETW query 输出对照（起点 `fdc3b63`）：同一自建进程中 A 停止后创建 B，分两组各 12 次；两组均复用句柄数值。B 使用不同名称/GUID 时，以旧句柄和 A 的查询输入调用 `ControlTraceW(QUERY)`，返回名称和 GUID 12/12 是 B，能识别本组替换；B 使用同名同 GUID 时，旧句柄返回的这两个字段 12/12 与 A 一致，不能据此证明代次不变。两组均只 stop 当次成功创建的当前句柄，没有用旧值 stop；这些是本机 in-process private 会话自报样本，未比较所有返回字段、不证明 query→stop 原子性或系统 logger/跨进程行为，不接入 QQ、不启用 PMC/LBR。
+
+本机 ignored `local-evidence/feat004-etw-query-identity-20261115/` 的实验脚本/结果、逐项审计脚本/摘要 SHA-256 分别为 `4005AF551404956ADFEA2F1EE1F180E986486B9F64B58A634FD51285A00FDFF1` / `6B9A6034244774A5B867C909992BC65B6C18D717409B01F4D11ABB3A19E1847E` / `B6FF85C1CE4DA08BFE69C6881BCBE96849BAA6D588AB93B57EC3D64B95A7D374` / `664FA7207DA6EE38E035A31FDD0576380F47F0740EE8F0CB66AE660E22053262`。审计逐项核对 24 个样本和停止码，测试字节篡改、错误生命周期负例；审计依赖实验源码及自报结果，无独立 kernel trace。WPR 结束时未记录、logman 当次为空；具名系统会话权限、原子代次/所有权与控制器崩溃恢复仍未证，feat-004 保持 in-progress。
+
 2026-11-15 feat-004 私有 ETW 过期句柄 ABA 对照（起点 `8e61343`）：同一自建进程对无 provider/无文件的 in-process private ETW 会话 A 停止后创建 B，分三组各 12 次：B 与 A 相同名称及 GUID、同名不同 GUID、不同名称及不同 GUID。三组中 B 均 12/12 取得与 A 相同的句柄数值；以 A 过期值及 A 查询参数只读 query，B 存在时均 12/12 返回 0。不同名称/GUID 组另观测到 A 停止后、B 创建前旧值 query 12/12 返回 4201，而 B 创建后 12/12 返回 0。每个真实 stop 仅针对当次成功创建的当前句柄，未以旧值 stop；另有 12 次同名不同 GUID 的间隙对照保留本机。该观察证明本次私有会话句柄数值会复用，不能凭旧句柄 query 成功确认原代次；不证明系统 logger、跨进程或其他版本的同一行为，不涉及 QQ、PMC/LBR 或文件采样。
 
 脚本和结果在 ignored `local-evidence/feat004-etw-aba-20261115/`。同名同 GUID 脚本/结果 SHA-256 `38ADA04CF6A43AC5FF574F3B1DA25F7D62794EED10F6B9194518242B59CBC462` / `060D850A5A87C4692786CF7521B419A264653D687BC2745DC63312D711BDC330`；同名不同 GUID 脚本 `D34805ACF9101327A9E0F9EB653A5482093DCB2F39969F9E2C951B248DD48A90`，其结果恰与前组摘要一致；不同名称及 GUID 脚本/结果 `ECD0DFE94C975A55F58F3B4619AC34FDE0C5688799405FE501707941E0DF9518` / `7313ADC4B15B5904BC017C489E7575A5BC54EE6A0108FAE1315D770DBEF4D96D`。逐项只读审计脚本/摘要为 `37F6B21574A2B7D94BAF00B50D97AF7A42205A322C87B1E7C847BDD57345FB23` / `4B2C5F6324EC42DB1F6AF30B0D0EF850B2745C956FD60ED66AAEF73603D5D0D4`，审计依赖脚本和自报结果，无独立 kernel trace。结束时 WPR 未记录、logman 当次返回空列表；控制器崩溃、具名 system logger 实际恢复与原子所有权仍未证，feat-004 保持 in-progress。
