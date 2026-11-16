@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 发送结果表容量防护（起点 `03f4c36`）：正式文本、图片、语音发送脚本现在除原先的在途表上限外，也在提交前检查 `sendResults` 条数；达到 128 时返回既有 `send_capacity_or_duplicate`，不清除已有结果，也不调用 `sendMsg`。该限制为未来保留未确认结果提供背压，不改变目前轮询清除策略；它限制正常脚本新增条数，不证明任意外部改写或单条值大小有界。现有 adapter 将该本地脚本错误统一映射到 native code 3，不能把它解释为 QQ 业务拒绝。
+
+生产生成脚本的 Node VM 合成回归在 128 条结果、空在途表下覆盖文本/图片/语音不提交、不调用媒体存储、旧条目不被移除；127 条文本仍能提交并达到 128。修复前首次文本对照未拒绝并显示 `fired`，红灯日志 `target-harness/feat004-result-capacity-red.log` SHA-256 `A6591F07A31FB7F866E6D720D139097EED80DD2C082F8B934552134F11521199`；修复后容量及相关文本/图片/语音/媒体/轮询共 26 项通过，日志 `target-harness/feat004-result-capacity-green.log` SHA-256 `8A67562B7D9AEA74F958EC2D920DED36E329B9385B4028CF1A5000B84136FDDB`。回归为受控合成环境，未证明现场曾满额，也未覆盖 127 条媒体真实发送。 Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-result-capacity-all.log` SHA-256 `D2B9536F9EE27BA7113ADC414B1820CD73C5E932073007BE4605C374554B2EB2`；文档检查通过。
+
+GitNexus 在 `E:/stella/Caligo-feat-004`、起点 `03f4c36` 的隔离索引对文本、图片和语音 builder 上游均为 LOW；动态 JS 及跨语言边界另按源码核对。确认协议尚未接线，Rust 拒收后终态丢失、代次和重复确认的已知缺口仍在；未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-16 feat-004 轮询结果确认离线状态模型（起点 `1b29ff8`）：新增 [PollResultAckModel](scripts/poll-result-ack-model.mjs) 与 [6 项测试](scripts/poll-result-ack-model.test.mjs)，用于检验一个在途批次、未确认重复读取、代次/批次匹配、按结果修订删除、容量及单条长度上限、序号耗尽拒绝和非终态保留。旧批次发出后如果结果更新，旧确认只清理仍为原修订的条目；输入和读取均复制，调用者篡改副本不改变模型状态。模型依赖调用者提供唯一监听器代次，且调用者只在完整批次被接收后确认；不实现代次分配、QQ/V8、IPC 或 journal，不允许将模型通过当作生产修复。
 
 `node --test scripts/poll-result-ack-model.test.mjs` 6/6 通过，日志 `target-harness/feat004-ack-model-green.log` SHA-256 `3B738205E4A463CF1B73435F4F45D37B7C0245381DF5544E0B8F6901AAE8C60D`；在 ignored 副本中移除修订比较后相应旧确认负例失败，日志 `target-harness/feat004-ack-model-mutation.log` SHA-256 `75B40EC1BCC750CD0A309202008143E6F004AD2DC1E357AB970AB96BABFDA184`。Node CI 命令纳入该模型，与原工具测试合计 34 项、32 通过、2 个可选核验跳过，日志 `target-harness/feat004-ack-model-ci-node.log` SHA-256 `E27AD0BB06E005191F241DE6F931116C9C0EF17427F771FF6A9D59235F8FCAD4`。下一步仍需在生产链中定义代次、预算/背压、失败与确认调用顺序并完成真实脚本及 owner 回归；当前已知拒收后丢终态缺陷仍存在，未接 QQ、未发送，feat-004 in-progress。

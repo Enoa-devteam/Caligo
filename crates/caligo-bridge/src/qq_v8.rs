@@ -2556,7 +2556,7 @@ pub fn build_send_js(
     js.push_str("    var key = ");
     js.push_str(&request_json);
     js.push_str(";\n");
-    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.prototype.hasOwnProperty.call(R.sendResults, key) || Object.keys(R.sends).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.prototype.hasOwnProperty.call(R.sendResults, key) || Object.keys(R.sends).length >= 128 || Object.keys(R.sendResults).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
     // Retain every text cookie in this JS environment: a late notification from a
     // completed send must not be able to confirm a later same-cookie send.
     // Bound memory and fail closed on exhaustion rather than evicting old cookies.

@@ -12,7 +12,7 @@ function (args) {
       !Number.isInteger(args.timeoutMs) || args.timeoutMs <= 0)
     return failure('invalid_voice_request');
   if (Object.hasOwn(R.sends, args.requestId) || Object.hasOwn(R.sendResults, args.requestId) ||
-      Object.keys(R.sends).length >= 128)
+      Object.keys(R.sends).length >= 128 || Object.keys(R.sendResults).length >= 128)
     return failure('send_capacity_or_duplicate');
 
   const deadline = Date.now() + args.timeoutMs;
