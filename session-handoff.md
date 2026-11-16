@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 图片已退役 cookie 离线防护：合成旧通知在同 cookie、目标与图片指纹下误确认第二条图片，现限制同一 JS 环境内本图片 guard 已认领的 cookie，不驱逐历史且容量耗尽拒绝；边界和测试见 [progress](progress.md#current-state)。真实 QQ 复用及新代码现场未验证；后续现场须指定新鲜进程、重新准入，真实发送另需明确授权，不重发旧样本。语音历史、其他来源及线程/drain 不受本次覆盖，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 已退役 cookie 防护版单次私聊：用户授权一次，新鲜测试 QQ `22232` 准入、登录、发送/持久回读及单请求账本技术审计通过；用户确认对端收到且仅收到一条、内容相符，独立完整审计通过。manager/owner 正常停止、端口关闭，同代 QQ 响应并保留 bridge；不得重接、热卸载或重发。轨迹解析原失败、独立复核及范围见 [progress](progress.md#current-state)；真实 cookie 复用、迟到和原生线程/drain 未证，feat-004 保持 in-progress。
 
 2026-11-16 feat-004 已退役 cookie 防护版零发送现场：固定构建新进程 `26916` 准入、单次接入、登记账号登录核验及正常停止通过，空账本与合成停止探针经独立审计；详细证据见 [progress](progress.md#current-state)。该进程已加载 bridge，不得重接或热卸载；零发送未执行文本 guard，不能证明真实复用与原生 callback 线程/drain。

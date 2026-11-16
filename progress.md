@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 图片已退役 cookie 防护（起点 `65196b8`）：生产生成的图片发送脚本和 listener 在 Node 中先完成第一条图片，再对同 cookie、目标、图片指纹的第二条请求重放旧 add/update 与回读；修复前第二条错误以旧消息 ID 完成，负例日志 `target-harness/feat004-image-retired-red.log` SHA-256 `51ABAE381A36F89C06608791E46D19611636943DF515739741FFB2AC9C3BC598`。这是合成复现，不证明 QQ 实际复用 cookie。
+
+图片脚本现在在文件准备与原生 `sendMsg` 前，为当前 JS 环境中本 guard 认领的图片 cookie 保存最多 65,536 条历史，每条最多 256 字符；重复、畸形、guard 不可用及历史耗尽均拒绝，不淘汰历史。认领后即便准备失败仍保留；达到上限需新的 JS 环境才能继续。普通文本与图片各有独立历史，此保护不覆盖旧版本、其他环境或来源及语音的历史，也不构成同进程恶意脚本隔离。离线测试覆盖完成后的旧通知重放、同一 JS 环境中资源对象重建、容量与长度上限、可变/accessor guard 和原有图片正常路径。Windows MSVC 串行 `init.ps1 -Mode all` 通过，普通/research 图片 wrapper 各 3/3；日志 `target-harness/feat004-image-retired-all.log`。图工具对脚本文件和测试入口返回 UNKNOWN；源码补证 `qq_v8::build_image_send_js` 以 `include_str!` 接入，`qq_entry` 分派图片路径，动态 JS 边界未由图覆盖。隔离普通 release 的 EXE/bridge SHA-256 为 `7B20160E27A9C3DCA5342BE6F403ABE6DDCBC399823C1A4CBAE9C24466059799` / `6AF9710EC897B56D398832EE46D0F494ED215B61B6CD637182CE5636C9E67BBD`，research 为 `0CFCB7C96FAD85EB3C1E8877113F050790BB586E88E015DB0C54C163E3779C56` / `8FB626210F652768169E1AFC53E585CA5A300220E8B1840C036AAF6A00536EF2`。本轮未接入 QQ、未发送；现场正常路径、真实冲突、迟到回调及 QQ 原生线程/drain 仍未验，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 已退役 cookie 防护版单次私聊现场（源码 `997e92b`）：用户重启并授权向登记好友 B 单次发送；最新根 PID `22232`、创建 `2026-11-16T01:01:30.8646312Z`，固定模块、PE/backend 和唯一 Environment 准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后仅提交一次，发送与 `get_msg` retcode 0、持久身份与正文匹配。独立技术审计核对单请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 和回读，用户确认对端收到且仅收到一条、内容相符，独立完整审计通过。
 
 旧 runner 的 `trace_pass=false` 原样保留：detail 使用单引号，runner 错按 JSON 解析；独立白名单复核观察两批同一 JS 代次/序号的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，仅在本轮单请求与账本条件下解释，不证明 QQ native callback OS 线程或全局完整性。合成停止探针 pass，manager/owner 退出码 0，HTTP/SSE 端口关闭，同代次 QQ 响应并保留 bridge；不得重接、热卸载或重发该样本。
