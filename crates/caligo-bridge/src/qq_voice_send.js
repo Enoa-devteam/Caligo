@@ -37,6 +37,25 @@ function (args) {
         Object.values(R.sends).some(send => send.cookie === cookie))
       return failure('invalid_cookie');
 
+    // Retain voice cookies for this JS environment, including after settlement
+    // or listener restart, so a stale callback cannot confirm a later send.
+    const guardKey = '__caligo_voice_cookie_guard_v1';
+    if (!Object.prototype.hasOwnProperty.call(globalThis, guardKey)) {
+      const seenCookies = new Set();
+      const claimCookie = value => {
+        if (typeof value !== 'string' || !value || value === '0' || value.length > 256) return 'invalid_cookie';
+        if (seenCookies.has(value)) return 'invalid_cookie';
+        if (seenCookies.size >= 65536) return 'cookie_history_exhausted';
+        seenCookies.add(value); return 'ok';
+      };
+      Object.defineProperty(globalThis, guardKey, {value:claimCookie, writable:false, configurable:false, enumerable:false});
+    }
+    const guard = Object.getOwnPropertyDescriptor(globalThis, guardKey);
+    if (!guard || typeof guard.value !== 'function' || guard.writable !== false || guard.configurable !== false)
+      return failure('cookie_history_unavailable');
+    const claim = guard.value(cookie);
+    if (claim !== 'ok') return failure(claim);
+
     const bytes = Buffer.from(args.silk, 'hex');
     const md5 = crypto.createHash('md5').update(bytes).digest('hex');
     const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');

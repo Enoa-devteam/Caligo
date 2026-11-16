@@ -33,11 +33,11 @@ const bytes = Buffer.from('02232153494c4b5f56330300445566','hex');
 const md5 = crypto.createHash('md5').update(bytes).digest('hex');
 const msgId = '90071992547409931237', elementId = '90071992547409931238';
 const caligoVoiceAccount = '10001';
-let listener, submits, reads, storageCalls, settle, mode, dest, now = 1000;
+let listener, submits, reads, storageCalls, settle, mode, dest, cookie, now = 1000;
 let chatType=1, peerUid='u_peer', peerUin='20002';
 Date.now = () => now;
 const flush = () => new Promise(resolve=>setImmediate(resolve));
-function record(status, guildId='voice-cookie', fingerprint=md5, id=elementId) {
+function record(status, guildId=cookie, fingerprint=md5, id=elementId) {
   return {msgId,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId,chatType,msgType:2,
     subMsgType:0,peerUid,peerUin,senderUid:'u_self',senderUin:'10001',
     sendStatus:status,elements:[{elementType:4,elementId:id,
@@ -46,7 +46,7 @@ function record(status, guildId='voice-cookie', fingerprint=md5, id=elementId) {
 const service = {
   addKernelMsgListener(value) { listener=value; return 8; },
   removeKernelMsgListener() { return true; },
-  generateMsgUniqueId(chat,time) { assert.equal(chat,chatType); assert.equal(time,'qq-time'); return 'voice-cookie'; },
+  generateMsgUniqueId(chat,time) { assert.equal(chat,chatType); assert.equal(time,'qq-time'); return cookie; },
   getRichMediaFilePathForGuild(args) {
     storageCalls++;
     assert.deepEqual(args,{md5HexStr:md5,fileName:md5+'.silk',elementType:4,elementSubType:0,
@@ -57,7 +57,7 @@ const service = {
     submits++;
     assert.equal(globalThis.__caligo_res.sends['voice-7'].wireSeq,42);
     assert.equal(id,'0'); assert.equal(options.size,0);
-    assert.deepEqual(peer,{chatType,peerUid,guildId:'voice-cookie'});
+    assert.deepEqual(peer,{chatType,peerUid,guildId:cookie});
     assert.equal(element.elementType,4);
     assert.equal(element.pttElement.md5HexStr,md5);
     assert.equal(element.pttElement.fileSize,String(bytes.length));
@@ -69,7 +69,7 @@ const service = {
   getMsgsByMsgId(peer,ids) {
     reads++;
     assert.deepEqual(ids,[msgId]);
-    assert.equal(peer.guildId,'voice-cookie');
+    assert.equal(peer.guildId,cookie);
     return {result:0,msgList:[record(2,'readback-guild-id',md5,mode==='bad_readback' ? '999' : elementId)]};
   }
 };
@@ -83,7 +83,7 @@ const session = {getSessionId:()=>1,getMsgService:()=>service,
 process._linkedBinding = () => ({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}});
 function setup(kind, armedAccount='10001') {
   if (globalThis.__caligo_res) eval(stop);
-  mode=kind; submits=reads=storageCalls=0; settle=undefined; now=1000;
+  mode=kind; cookie='voice-cookie-'+kind; submits=reads=storageCalls=0; settle=undefined; now=1000;
   dest=path.join(root,kind,md5+'.silk');
   const caligoVoiceAccount=armedAccount;
   assert.ok(eval(start).startsWith('ARMED'));
@@ -102,9 +102,9 @@ function outcome(projected=false) {
 }
 function notify() {
   listener.onAddSendMsg(record(1,'wrong-cookie'));
-  listener.onAddSendMsg(record(1,'voice-cookie','0'.repeat(32)));
+  listener.onAddSendMsg(record(1,cookie,'0'.repeat(32)));
   listener.onAddSendMsg(record(1));
-  listener.onMsgInfoListUpdate([record(2,'voice-cookie',md5,'999'),record(2)]);
+  listener.onMsgInfoListUpdate([record(2,cookie,md5,'999'),record(2)]);
 }
 (async()=>{
   setup('unbound','30003');
