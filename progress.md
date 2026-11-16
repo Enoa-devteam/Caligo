@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 媒体 Promise 保守修复版图片正常路径现场（源码 `7b8b732`）：用户重启并授权向登记好友 B 单次发送 PNG；新 QQ 根 PID `48480`、创建 `2026-11-16T10:42:55.6925710Z`，固定模块、PE/backend、唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与图片标识匹配。用户分别确认对端只收到一张且图案、标记相符；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标及图片大小/MD5/尺寸与预登记样本一致。
+
+该 `get_msg` 为 OneBot 持久账本回读，不等同 QQ 原生图片下载或 `get_image`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。本轮仅验证图片正常路径，未制造真实非零 Promise、cookie 冲突或迟到回调，不证明语音正常路径或原生线程/drain；feat-004 in-progress。
+
+ignored `E:/stella/Caligo/local-evidence/feat004-media-result-image-field-20261116/` 的 preflight/runner/独立审计/审计摘要/PNG SHA-256 依次为 `80E27C54B344EE63B2E900290A01B4D88B94A9152AEB0F89EA4D3333974FCA86` / `FAFC0092C25DC7BFED2E381CCEC4DC9FBBB8701214569E28306653902815843E` / `CE2B8F5AB0B481CC62E165CF03BCC3A3294C44372D4F01566395DCC5D3771CB7` / `18A0AB6C26A93CC35DF4CEEDD27A2FCE287583A188226DC0473EA7A3BF1AAC35` / `5328C6A706AE08A7DAAF3DC12D872A1DB2E9D95D10E1DE073E7FDD7FE26DAF2C`。
+
 2026-11-16 feat-004 图片与语音非零 Promise 保守结果（起点 `bccef3e`）：使用实际生成的媒体发送脚本与生产 listener 的离线对照发现，非零整数 Promise 在 add 通知前到达时被标记为 `rejected`；Rust `complete_sends` 将该项转为 `SendOutcome::Failure`，而该 Promise 值尚无可信业务拒绝语义。图片和语音回归均在修复前失败；日志 `target-harness/feat004-media-result-red.log` SHA-256 `DDC52D2B848AE5F4883CCC8B1A1A853A9F11796B0C29FF994DE066ED600D278A`。这只证明合成输入下原实现的结果层级，不声称真实 QQ 曾返回该码或消息已送达。
 
 现将非零安全整数 Promise 统一保守映射为 `unknown`，原因字段记录有界安全整数 `send_result_ambiguous=<code>`；回执在 Promise 前后两种顺序均保持同一结果，非安全整数、畸形结果、异常或 Promise 拒绝使用媒体固定 unknown 标签，拒绝值中的私有字符串不外泄。零值正常路径仍须匹配通知和精确回读才能成功。该修复不赋予业务拒绝码语义，也不保证 Promise 不确定后迟到通知可修正：现有 `pending.failed` 会阻止后续相关匹配。图片、语音各覆盖前后顺序、非安全整数、异常字符串、畸形值和成功正例，修复后日志 `target-harness/feat004-media-result-green-final.log` SHA-256 `84CD0BCDD95DE55169EA2F595615D7F111E72C9D811DFC96D91398DB4F595859`。
