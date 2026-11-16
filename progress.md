@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 语音 cookie 防护版单次私聊现场（源码 `981b7dd`）：用户重启、登录并授权向登记好友 B 单次发送 0.9 秒高—低—高三音语音；新 QQ 根 PID `33768`、创建 `2026-11-16T05:15:14.4004368Z`，固定模块、PE/backend 和唯一 Environment 只读准入通过。research 版单次接入，listener_armed、Active 和登记账号登录核验通过后只提交一次；发送接口 retcode 0 且返回持久消息 ID。用户确认一条语音可播放、提示音相符。独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、回调 native ID 与持久消息身份一致，语音大小及 MD5 与预登记样本相符。
+
+后续现场 `get_msg` 的连接被 Windows 中止并报 `WinError 10053`，没有生成回读响应；runner 原始 `phase=send_reserved` 和失败栈原样保留，不能把发送成功、账本或对端可见当作 HTTP 回读成功。根因未知；不得重发，后续只能按合同准备新进程及原消息只读回查。manager/owner 退出码均 0，HTTP/SSE 端口关闭；同代 QQ 响应且 bridge 保留，不得重接或热卸载。合成停止探针通过，不证明真实迟到回调、QQ native callback 线程或全局 drain。样本不制造真实 cookie 冲突，feat-004 保持 in-progress。
+
+本机 ignored `E:/stella/Caligo/local-evidence/feat004-voice-cookie-field-20261116/` 保留预检、独立审计和原始现场材料；preflight/runner/审计/审计摘要/失败栈 SHA-256 依次为 `41A23E986945ED75D1E84CDE6D937C9D85D2CBEBACFE7422F49C5B1846228058` / `19DCCF15DAE3A26AB28A536F324BB8755078D673A732524B53F326BDB03E9E19` / `2CC6135FF5B7DA53D354ED85C6126D035CEA7225617BEEB104F86A213FC265A2` / `C393D74F14F65E055F1B11D073EA7BA995345D7B133B779CA7AE5C38991FCD4A` / `25EF272CA5095A8B2600CF4DC81ABF5F1607B8BA0C92A61050063A0EECDF5347`。本地生成 SILK 样本 SHA-256 `09824209A92C9BE9D6C3045EEEBCE838CF610A0337DFC30B244A8E3C701AD0D7`，45 包、0.9 秒，本机解码 45 帧通过；不将本地解码推作对端播放证据。
+
 2026-11-16 feat-004 语音已退役 cookie 防护（起点 `b537355`）：以生产生成脚本与 listener 在 Node 中先完成第一条语音，再对相同 cookie、目标和语音指纹的后续请求重放旧 add/update 与回读，修复前第二条错误使用旧消息 ID 完成；负例日志 `target-harness/feat004-voice-retired-red.log` SHA-256 `2C484A0F23C7BDABDB9D5D2B1C9BC6AF55BDD39DC8C2B8D060844B336B8FB737`。这是合成复现，不证明实际 QQ 复用 cookie。
 
 语音脚本现于文件准备和原生发送前保留当前 JS 环境中本 guard 认领的 cookie，最多 65,536 条、每条最多 256 字符，重复、无效、guard 不可用或历史耗尽均拒绝；已认领值即使后续准备失败仍保留，容量耗尽须更换 JS 环境。文本、图片和语音分别维护历史；其他环境、旧版本或外部来源不受本 guard 保护，非恶意同进程脚本隔离。离线测试覆盖完成后的旧通知重放、资源对象重建、容量/长度上限和不可用、可变或 accessor guard，原有语音发送正反路径保留。Windows MSVC 串行 `init.ps1 -Mode all` 通过，普通/research 各有 wrapper_send 15/15 和新语音 cookie 测试 2/2，日志 `target-harness/feat004-voice-retired-all.log`。GitNexus 对脚本文件与测试入口返回 UNKNOWN，源码补证 `build_voice_send_js` 以 `include_str!` 接入并由 `qq_entry` 分派，动态 JS 未完整建图。隔离普通 release 的 EXE/bridge SHA-256 为 `5F0F35592FF43DF8B29AEEC1B2D4B31A73A983B66DCA2BDCF65AA75898DC0CA2` / `0884F5AA558F5B3439B2D37A5112A31D0767F0084D8D78CEE34D3F237E67EB4A`，research 为 `17399474B78409E680BFA4184A8FEE8CCE8101BC4293509E93DD62A8B744B4EC` / `36A5C889EBE2FCAE56A81CF48941D35B811D0E5915BF3E216D462584EFDCD13C`。本轮未接入 QQ、未发送；新代码现场正常路径、真实 cookie 冲突、原生线程和全局 drain 均未验证，feat-004 保持 in-progress。

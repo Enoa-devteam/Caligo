@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 语音 cookie 防护版单次现场：用户授权的一条语音发送 retcode 0、持久账本和用户播放确认通过；现场 `get_msg` 连接 WinError 10053，未获回读，根因未知，不重发。独立审计与失败证据见 [progress](progress.md#current-state)。manager/owner 正常停止、端口关闭；QQ `33768` 响应且保留 bridge，不得重接或热卸载。下一步可准备新鲜进程上只读查询原消息，不能把旧失败覆盖为成功；真实冲突、线程/drain 仍未证，feat-004 in-progress。
+
 2026-11-16 feat-004 语音已退役 cookie 离线防护：合成复现同 cookie、目标及语音指纹的旧通知误确认，现为本 JS 环境内语音 cookie 维护有界历史，耗尽拒绝；回归与范围见 [progress](progress.md#current-state)。真实 QQ 复用和新代码现场未验证；后续现场须指定新鲜进程、重新准入，真实发送另需明确授权，不重发旧样本。其他来源及原生线程/drain 未证，feat-004 仍 in-progress。
 
 2026-11-16 feat-004 图片已退役 cookie 离线防护：合成旧通知在同 cookie、目标与图片指纹下误确认第二条图片，现限制同一 JS 环境内本图片 guard 已认领的 cookie，不驱逐历史且容量耗尽拒绝；边界和测试见 [progress](progress.md#current-state)。真实 QQ 复用及新代码现场未验证；后续现场须指定新鲜进程、重新准入，真实发送另需明确授权，不重发旧样本。语音历史、其他来源及线程/drain 不受本次覆盖，feat-004 保持 in-progress。
