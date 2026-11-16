@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 HTTP 10053 修复版真实单次发送与连续回读（源码 `de251e3`）：用户重启、登录并授权向登记好友 B 单次发送文本；新 QQ 根 PID `55192`、创建 `2026-11-16T07:57:23.0031408Z`，固定模块、PE/backend、唯一 Environment 准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验通过后只提交一次，发送接口与紧接着的 `get_msg` 均 retcode 0、持久消息 ID 和正文匹配；用户确认对端收到且仅收到一条、内容相符。独立审计确认单请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 和消息账本一致。
+
+runner 的 `trace_pass=false` 原样保留：detail 使用单引号，旧解析误按 JSON；独立白名单复核观察两批同一 JS 代次/序号的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，仅在该单请求与账本条件下解释，不证明 QQ native callback OS 线程或全局完整性。合成停止探针 pass、manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 当次同代响应并保留 bridge，不得重接、热卸载或重发。此单次样本验证修复版指定文本发送后的连续回读，不证明原两次 10053 的精确根因、媒体发送后表现或真实 cookie 复用；原失败仍保留，feat-004 in-progress。
+
+ignored `E:/stella/Caligo/local-evidence/feat004-http-fixed-send-20261116/` 的 preflight/runner/技术审计/技术摘要/完整审计/摘要 SHA-256 依次为 `7A4DA088289A32A74DCC5BA7BA4DDBF10266061F96FE12BCD530234CEC5DE648` / `BF9CB5473266D54D678BC642964D2C4D9C9FD64A66D7B7D99CDAF6A4F8BA812F` / `8735B94CABCBF990EA48DB68C5517C5F076DD91C89BC91BFD5F2418E035E19D9` / `E2A8822C9BAE5D3A4E514958D90787D9FC170AF20D81B91159E8C13FF7A7AE62` / `A9146D27ED397CC29D03A422ACA7B19C6F43CEA5E8D55D012D4A6C388805DB0A` / `6891484115A14E2B7D2A831D82C038B03F7CA1129F4EBD9115124CA3962B3F35`。
+
 2026-11-16 feat-004 HTTP 10053 修复版零发送现场（源码 `de251e3`）：用户重启并登录后指定 QQ 根 PID `47980`、创建 `2026-11-16T07:54:58.0186913Z`，固定模块、PE/backend 和唯一 Environment 准入通过。research 版单次接入，listener_armed、Active 和登记账号登录核验通过；两个 `get_status` 请求分别在客户端连接后延迟 250 ms 发请求头、发送部分请求体后延迟 250 ms 发剩余数据，均 HTTP 200 / retcode 0。延迟由客户端计时并自报，未独立观测服务端 accept 时序。
 
 将此前图片消息账本复制到隔离运行目录并核对 SHA-256 一致，对原持久消息 ID 执行一次 OneBot `get_msg`，HTTP 200 / retcode 0、原身份和图片指纹匹配；该查询读取复制的持久账本，不是 QQ 原生查询。独立审计确认本轮零发送、请求 journal 为空、两个状态探针及单次消息查询、manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次响应且保留 bridge，不得重接或热卸载。只覆盖指定零发送场景，不证明发送后连续回读或既往 10053 根因；旧失败保留，feat-004 in-progress。

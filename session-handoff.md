@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 HTTP 修复版单次现场：用户授权一次文本，QQ `55192` 准入登录后单次发送、紧接着的 `get_msg`、账本及对端一条确认通过；独立审计及旧 runner 轨迹误解析保留见 [progress](progress.md#current-state)。manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。该样本不证明既往 10053 根因、媒体连续发送回读或真实 cookie/线程/drain，feat-004 in-progress。
+
 2026-11-16 feat-004 HTTP 修复版零发送现场：新鲜 QQ `47980` 准入、登录后，延迟请求头与分段请求体的状态请求各一次通过，原图片复制账本 `get_msg` 通过；客户端自报延迟，服务端 accept 时序未独立观测。零发送及正常停止经独立审计，详见 [progress](progress.md#current-state)。QQ 同代次响应且 bridge 保留，不重接、不热卸载；既往 10053 根因、发送后连续回读及 cookie/线程/drain 尚未证明。
 
 2026-11-16 feat-004 HTTP 10053 离线修复：Windows 下监听器非阻塞模式导致已接收连接在请求未到齐时立即失败；受控延迟对照及正式入口回归先失败后通过，`serve_one` 现先将连接改为阻塞并沿用读取期限。现场两次 10053 没有独立内核证据，不能断言同一根因；新构建尚未 QQ 现场验证。结果、HIGH 影响面与产物见 [progress](progress.md#current-state)。后续现场先指定新鲜进程、按合同准入；不重发旧消息，真实 cookie/线程/drain 仍未证，feat-004 in-progress。
