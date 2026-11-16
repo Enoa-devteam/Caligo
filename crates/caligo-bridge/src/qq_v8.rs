@@ -679,6 +679,8 @@ pub const D8_POLL_JS: &str = r"
     var G = globalThis;
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
+    // Production passes the captured binding; reject before any mutation.
+    if (typeof caligoExpectedSid !== 'undefined' && R.sid !== caligoExpectedSid) return 'ERR:session_mismatch';
     var keys = Object.keys(R.sends || {});
     for (var k = 0; k < keys.length; k++) {
       var key = keys[k], send = R.sends[key];
@@ -801,11 +803,28 @@ fn isolate_addr() -> *mut c_void {
 
 /// 排空轮转点:执行 D8_POLL_JS 并返回原始 JSON("NOT_ARMED"/items JSON)。
 pub fn poll_listener_json() -> Result<String, V8Error> {
+    poll_listener_script(D8_POLL_JS)
+}
+
+/// Generate a poll tied to the listener session captured at acquisition.
+pub fn build_bound_poll_js(session: &str) -> Option<String> {
+    if session.is_empty() || session.len() > 128 { return None; }
+    let quoted = serde_json::to_string(session).ok()?;
+    Some(format!("(function(caligoExpectedSid) {{ return ({}); }})({quoted})", D8_POLL_JS))
+}
+
+/// Production poll. A missing binding must not execute the destructive script.
+pub fn poll_listener_bound_json(session: &str) -> Result<String, V8Error> {
+    let Some(source) = build_bound_poll_js(session) else { return Ok("NOT_ARMED:session_unavailable".into()); };
+    poll_listener_script(&source)
+}
+
+fn poll_listener_script(source: &str) -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 阶梯内自管全部检查;调用方保证 owner 线程。
-    let output = unsafe { exec_script(&syms, isolate_addr(), D8_POLL_JS) }?;
+    let output = unsafe { exec_script(&syms, isolate_addr(), source) }?;
     if let Some(detail) = crate::receive_diagnostics::sanitize_image_shapes(&output) {
         // This is a per-process research report budget, independent of message admission.
         static IMAGE_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

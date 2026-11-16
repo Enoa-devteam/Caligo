@@ -953,11 +953,13 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。
             if OWNER_INIT.load(Ordering::Relaxed) {
-                match crate::qq_v8::poll_listener_json() {
-                    Ok(json) if !json.starts_with("NOT_ARMED") => {
+                let session = crate::qq_v8::listener_session()
+                    .filter(|s| !s.is_empty() && s.len() <= 128);
+                let poll = session.as_deref().map(crate::qq_v8::poll_listener_bound_json);
+                match (session, poll) {
+                    (Some(session), Some(Ok(json))) if !json.starts_with("NOT_ARMED") => {
                         let mut binding = wrapper_binding.clone();
-                        binding.wrapper_session =
-                            crate::qq_v8::listener_session().unwrap_or_default();
+                        binding.wrapper_session = session;
                         if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
                             // D9:sendResults 回收(fired 的 Promise 结果)。
                             {
@@ -997,8 +999,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                             }
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
+                    (Some(_), Some(Err(e))) => {
                         // 首次/每 20 次记录轮询失败变体(不吞)。
                         static POLL_ERR_N: std::sync::atomic::AtomicU64 =
                             std::sync::atomic::AtomicU64::new(0);
@@ -1007,6 +1008,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                             qq_entry::append_stage_simple("poll_err", false, &format!("{e:?}"));
                         }
                     }
+                    _ => {}
                 }
             }
             for ev in r.take_events() {

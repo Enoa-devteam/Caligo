@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 轮询 session 前置核验：正式 owner 使用一次捕获的 session 生成绑定轮询和 decoder；空绑定跳过，JS sid 不匹配时变更前拒绝，合成复现与匹配对照见 [progress](progress.md#current-state)。sid 名称不是唯一 listener 代次，V8 返回失败、其他解码错误、确认重试和 daemon 持久化仍未解决；继续完成版本化确认协议。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
+
 2026-11-16 feat-004 resident 重复空身份结果：`IdentityPending` 收到重复空 native ID 不再重复通知，后续强身份成功和终态去重通过离线回归，详情见 [progress](progress.md#current-state)。这不提供结果版本确认、失败后重确认或持久化保证；下一步继续生产确认协议，JS 拒收后丢终态缺陷仍未修复。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
 
 2026-11-16 feat-004 结果容量防护：文本/图片/语音在 `sendResults` 达 128 条时于 `sendMsg` 前拒绝并保留旧结果，受控回归与边界见 [progress](progress.md#current-state)。这只为未来确认提供背压，并未修复批次拒收后结果丢失；下一步处理唯一代次、结果修订及 owner 重复接收/确认失败后可安全再确认，再完成生产接线回归。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。

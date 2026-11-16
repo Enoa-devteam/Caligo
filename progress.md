@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 轮询 session 前置核验（起点 `919e724`）：正式 owner 每轮先捕获一次 listener session；缺失、空或超过 decoder 限额时跳过轮询，同一捕获值用于生成绑定轮询脚本及 Rust decoder。绑定脚本在修改超时、结果表或接收队列之前比较 JS `R.sid`，不匹配返回 `ERR:session_mismatch` 并保留这些状态。旧公开无绑定轮询函数仅维持既有测试/兼容入口，正式 owner 现在使用绑定入口。此处的 sid 是 wrapper session 名称，不是已证明唯一的 listener 代次；同名重建、V8 返回/解码失败、IPC 和持久 ACK 等仍不受此修复保障。
+
+使用实际生成绑定脚本、Node VM 和生产 decoder 构造不匹配对照，旧逻辑在拒绝前已消费导致测试失败，红灯 `target-harness/feat004-session-guard-red.log` SHA-256 `E68647C2FDD403CADC4938FD9B0F32A1CA87DA53A41AB2CBD7D1E79E9D8209C7`；新逻辑保留结果、接收/统计及超时状态，匹配绑定可解码原结果，空/超长绑定拒绝，特殊字符使用 JSON 安全编码；生产生成脚本回归日志 `target-harness/feat004-session-guard-helper.log` SHA-256 `9E36F85BFBF2D046B819CEE7ABDAFD13115EB5AFD91A818B8A6D1DB569BFAFDC`，相关 wrapper 回归日志 `target-harness/feat004-session-guard-green.log` SHA-256 `8B172582E9A80142C3E5D566027AFAB0DE4F57B71D0281EB54CC494DA3F33889`。合成测试不证明 QQ 实际曾不匹配或证明跨进程交付。
+
+GitNexus 基于 `E:/stella/Caligo-feat-004` 的 `919e724` 隔离索引：`D8_POLL_JS` 与导出 owner 入口为 UNKNOWN、`poll_listener_json` 上游 LOW；结合源码及测试补核，不能把未知图边当作零影响。最终变更图 MEDIUM，涉及绑定轮询、V8 执行及诊断路径。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-session-guard-all.log` SHA-256 `4FB00F1E93913E6C9EBA76895EDB6C7E7C364FB1B5F78A0B4FC8183B2E1CB13D`；文档检查通过。本轮未接 QQ、未发送；确认协议和真实迟到、线程、drain 仍未闭合，feat-004 in-progress。
+
 2026-11-16 feat-004 resident 空身份重复结果（起点 `1793c5e`）：以真实 `Resident::complete_sends` 和合成 host 驱动发现，同一请求的 `done` 空 native ID 首次进入 `IdentityPending` 并输出 `AcceptedUnconfirmed` 后，重复输入会再次入队相同通知。现对已处于 `IdentityPending` 的空身份重复输入不重复入队；之后带非空强身份的同一请求仍能成功完成，再重复强身份也不再产生终态。已有 `DeliveryUnknown` 的空身份拒绝条件保持。该输入由离线夹具构造，不证明实际 QQ 返回过空身份或现场曾重复通知。
 
 修复前针对实际状态机的回归按预期失败，日志 `target-harness/feat004-owner-retry-red.log` SHA-256 `CDC055A902F497149AEE48828BE95EAB4837367A28AF41BA286F75957850C9EF`；修复后新增测试与 22 项 resident 生命周期测试全部通过，日志 `target-harness/feat004-owner-retry-green.log` SHA-256 `CA4C09CE3A5848B5D028ECD0CAF07AA8CAECF908DA49864E352D906981020B95`。GitNexus 对 `complete_sends` 上游为 UNKNOWN，实际调用方及测试通过文本和源码补核，未将空图认作零风险。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-owner-retry-all.log` SHA-256 `0755E29ECA6BD2DCE67A896A10B5F5DBB1A2810B9425799B289C69D899765759`；文档检查通过。此次只修复该重复通知，未实现可确认的结果版本或 ACK 重试；JS 轮询拒收后丢终态缺口仍在，未接 QQ、未发送，feat-004 in-progress。
