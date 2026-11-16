@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 轮询 batch 清空前准入（起点 `ebd3379`）：生产 `D8_POLL_JS` 先按原有预算分批，再检查最终 JSON UTF-8 大小不超过 512 KiB、schema、session 字符串和字节长度、items 数组及两项非负整数统计；统计使用 JS 安全整数，故比 Rust `u64` 范围更保守。若不满足返回 `ERR:poll_batch_invalid`，不清空接收队列、统计、诊断或已序列化发送终态；正常超时扫描仍发生在此检查之前。该防护不等于 Rust 已接收、事件逐条有效或 daemon 已持久化，也不覆盖 V8 结果丢失和同名 listener 代次。
+
+使用实际绑定轮询脚本和生产 decoder 的合成对照，分别注入 `NaN` 统计、负溢出统计、非数组 items 和大于 512 KiB 的基础诊断；失败时状态保留、纠正后原终态可读并通过 decoder。修复前首项对照失败日志 `target-harness/feat004-poll-admit-red.log` SHA-256 `64867C6F54536D7E1D1D82878A51FB75A7E8EB2169A4ADF2B10AB6E4D80BD5E1`；修复后与其他 wrapper 定向测试通过，日志 `target-harness/feat004-poll-admit-green.log` SHA-256 `7CB5A517C7EC666DF38AB01B6443ACBF6AAB8D1F3C356B8C453AB388EE3938BC`。测试为故障注入，不证明现场发生过畸形或超限。GitNexus 对 JS 常量和原无绑定轮询符号报告 UNKNOWN，按源码核对绑定 owner、执行与 decoder；不能将空图视为零影响。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-poll-admit-all.log` SHA-256 `8DDFDA791663259B01463C02577C5E4B296AE972873FD7A69F8B816646E47C21`；文档检查通过。未接 QQ、未发送，版本化确认、真实迟到/线程/drain 仍未闭合，feat-004 in-progress。
+
 2026-11-16 feat-004 轮询 session 前置核验（起点 `919e724`）：正式 owner 每轮先捕获一次 listener session；缺失、空或超过 decoder 限额时跳过轮询，同一捕获值用于生成绑定轮询脚本及 Rust decoder。绑定脚本在修改超时、结果表或接收队列之前比较 JS `R.sid`，不匹配返回 `ERR:session_mismatch` 并保留这些状态。旧公开无绑定轮询函数仅维持既有测试/兼容入口，正式 owner 现在使用绑定入口。此处的 sid 是 wrapper session 名称，不是已证明唯一的 listener 代次；同名重建、V8 返回/解码失败、IPC 和持久 ACK 等仍不受此修复保障。
 
 使用实际生成绑定脚本、Node VM 和生产 decoder 构造不匹配对照，旧逻辑在拒绝前已消费导致测试失败，红灯 `target-harness/feat004-session-guard-red.log` SHA-256 `E68647C2FDD403CADC4938FD9B0F32A1CA87DA53A41AB2CBD7D1E79E9D8209C7`；新逻辑保留结果、接收/统计及超时状态，匹配绑定可解码原结果，空/超长绑定拒绝，特殊字符使用 JSON 安全编码；生产生成脚本回归日志 `target-harness/feat004-session-guard-helper.log` SHA-256 `9E36F85BFBF2D046B819CEE7ABDAFD13115EB5AFD91A818B8A6D1DB569BFAFDC`，相关 wrapper 回归日志 `target-harness/feat004-session-guard-green.log` SHA-256 `8B172582E9A80142C3E5D566027AFAB0DE4F57B71D0281EB54CC494DA3F33889`。合成测试不证明 QQ 实际曾不匹配或证明跨进程交付。

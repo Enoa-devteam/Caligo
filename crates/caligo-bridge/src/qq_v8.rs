@@ -723,6 +723,15 @@ pub const D8_POLL_JS: &str = r"
       }
       json = JSON.stringify(out);
     }
+    // Match the decoder's batch-level admission before discarding state. This
+    // does not acknowledge delivery to Rust or its durable consumer.
+    if (Buffer.byteLength(json, 'utf8') > 524288) return 'ERR:poll_batch_invalid';
+    var wire = JSON.parse(json);
+    if (wire.schema !== 1 || typeof wire.sid !== 'string' || !wire.sid ||
+        Buffer.byteLength(wire.sid, 'utf8') > 128 || !Array.isArray(wire.items) ||
+        !Number.isSafeInteger(wire.rejected) || wire.rejected < 0 ||
+        !Number.isSafeInteger(wire.overflow) || wire.overflow < 0)
+      return 'ERR:poll_batch_invalid';
     R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = []; R.textTraceOverflow = false;
     // Only clear terminal results included in this serialized batch;
     // serialization does not imply downstream or durable acknowledgement.
