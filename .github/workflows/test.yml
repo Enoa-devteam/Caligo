@@ -45,4 +45,4 @@ jobs:
       - name: Verify docs and formal bridge workspace contracts
         run: ./.github/scripts/run-tests.ps1
       - name: Test capability tooling
-        run: node --test scripts/check-snowcat-coverage.test.mjs scripts/extract-snowcat-capabilities.test.mjs scripts/analyze-text-send-trace.test.mjs scripts/lbr-session-model.test.mjs
+        run: node --test scripts/check-snowcat-coverage.test.mjs scripts/extract-snowcat-capabilities.test.mjs scripts/analyze-text-send-trace.test.mjs scripts/lbr-session-model.test.mjs scripts/poll-result-ack-model.test.mjs

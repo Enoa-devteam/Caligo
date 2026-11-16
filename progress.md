@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 轮询结果确认离线状态模型（起点 `1b29ff8`）：新增 [PollResultAckModel](scripts/poll-result-ack-model.mjs) 与 [6 项测试](scripts/poll-result-ack-model.test.mjs)，用于检验一个在途批次、未确认重复读取、代次/批次匹配、按结果修订删除、容量及单条长度上限、序号耗尽拒绝和非终态保留。旧批次发出后如果结果更新，旧确认只清理仍为原修订的条目；输入和读取均复制，调用者篡改副本不改变模型状态。模型依赖调用者提供唯一监听器代次，且调用者只在完整批次被接收后确认；不实现代次分配、QQ/V8、IPC 或 journal，不允许将模型通过当作生产修复。
+
+`node --test scripts/poll-result-ack-model.test.mjs` 6/6 通过，日志 `target-harness/feat004-ack-model-green.log` SHA-256 `3B738205E4A463CF1B73435F4F45D37B7C0245381DF5544E0B8F6901AAE8C60D`；在 ignored 副本中移除修订比较后相应旧确认负例失败，日志 `target-harness/feat004-ack-model-mutation.log` SHA-256 `75B40EC1BCC750CD0A309202008143E6F004AD2DC1E357AB970AB96BABFDA184`。Node CI 命令纳入该模型，与原工具测试合计 34 项、32 通过、2 个可选核验跳过，日志 `target-harness/feat004-ack-model-ci-node.log` SHA-256 `E27AD0BB06E005191F241DE6F931116C9C0EF17427F771FF6A9D59235F8FCAD4`。下一步仍需在生产链中定义代次、预算/背压、失败与确认调用顺序并完成真实脚本及 owner 回归；当前已知拒收后丢终态缺陷仍存在，未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-16 feat-004 轮询提交边界离线对照（源码 `60a03f2`）：`D8_POLL_JS` 在返回 JSON 前清除本批终态；owner 随后按 listener 绑定调用 `ingest_wrapper_batch`，解码失败时不会调用 `complete_sends`。用生产 JS、Node VM 和生产 `decode_d8_batch` 构造一条合成 done：人为传入不匹配的 wrapper session 时首批被拒为 `batch_session_mismatch`，相同首批在正确绑定下可解码，但对同一 VM 再轮询已不含该终态。Windows MSVC 离线对照 1/1 通过，未接 QQ；不证明真实环境曾出现会话不匹配或结果丢失，也未复现 V8 转换/IPC 失败。
 
 这说明上一轮修复仅保证未序列化终态不会在分批时被清除，不能保证被 Rust 拒绝的批次可恢复。未来方案需分别设计批次/监听器代次和结果修订身份、只确认已安全接收的具体版本、确认失败及重复处理、超时和有界内存；不能用 request ID 单独删除可能已变化的结果，也不能把 resident 内存接收宣称为 daemon journal 已持久化。此次未改生产协议，不重发 unknown。JS 常量图影响 UNKNOWN、`poll_listener_json` 上游 LOW，图索引有截断警告；按源码补证 `lib.rs` 的 session 绑定、decoder 拒绝及 `complete_sends` 路径。feat-004 仍 in-progress，真实迟到、线程和 drain 未证。
