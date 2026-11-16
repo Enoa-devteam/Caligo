@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 HTTP 修复版图片现场：用户授权一次图片，QQ `4544` 准入登录后单次发送、紧随其后的 OneBot `get_msg`、账本指纹与对端仅一张确认通过，详见 [progress](progress.md#current-state)。回读基于持久账本，非 QQ 原生下载；manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。旧 10053 根因、语音连续回读及 cookie/线程/drain 仍未证，feat-004 in-progress。
+
 2026-11-16 feat-004 HTTP 修复版单次现场：用户授权一次文本，QQ `55192` 准入登录后单次发送、紧接着的 `get_msg`、账本及对端一条确认通过；独立审计及旧 runner 轨迹误解析保留见 [progress](progress.md#current-state)。manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。该样本不证明既往 10053 根因、媒体连续发送回读或真实 cookie/线程/drain，feat-004 in-progress。
 
 2026-11-16 feat-004 HTTP 修复版零发送现场：新鲜 QQ `47980` 准入、登录后，延迟请求头与分段请求体的状态请求各一次通过，原图片复制账本 `get_msg` 通过；客户端自报延迟，服务端 accept 时序未独立观测。零发送及正常停止经独立审计，详见 [progress](progress.md#current-state)。QQ 同代次响应且 bridge 保留，不重接、不热卸载；既往 10053 根因、发送后连续回读及 cookie/线程/drain 尚未证明。
