@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 图片与语音非零 Promise 保守结果（起点 `bccef3e`）：使用实际生成的媒体发送脚本与生产 listener 的离线对照发现，非零整数 Promise 在 add 通知前到达时被标记为 `rejected`；Rust `complete_sends` 将该项转为 `SendOutcome::Failure`，而该 Promise 值尚无可信业务拒绝语义。图片和语音回归均在修复前失败；日志 `target-harness/feat004-media-result-red.log` SHA-256 `DDC52D2B848AE5F4883CCC8B1A1A853A9F11796B0C29FF994DE066ED600D278A`。这只证明合成输入下原实现的结果层级，不声称真实 QQ 曾返回该码或消息已送达。
+
+现将非零安全整数 Promise 统一保守映射为 `unknown`，原因字段记录有界安全整数 `send_result_ambiguous=<code>`；回执在 Promise 前后两种顺序均保持同一结果，非安全整数、畸形结果、异常或 Promise 拒绝使用媒体固定 unknown 标签，拒绝值中的私有字符串不外泄。零值正常路径仍须匹配通知和精确回读才能成功。该修复不赋予业务拒绝码语义，也不保证 Promise 不确定后迟到通知可修正：现有 `pending.failed` 会阻止后续相关匹配。图片、语音各覆盖前后顺序、非安全整数、异常字符串、畸形值和成功正例，修复后日志 `target-harness/feat004-media-result-green-final.log` SHA-256 `84CD0BCDD95DE55169EA2F595615D7F111E72C9D811DFC96D91398DB4F595859`。
+
+Windows MSVC 串行 `init.ps1 -Mode all` 通过，普通/research 新增媒体结果回归各 2/2，日志 `target-harness/feat004-media-result-all.log`。GitNexus 当前隔离索引对 `build_image_send_js` / `build_voice_send_js` 上游 LOW、直接调用 `qq_entry`；动态 JS 文件和 `complete_sends` 为 UNKNOWN，源码补证 `include_str!`、`lib.rs` 的结果分派及 `resident.rs` 的 Failure/Unknown 区别，不能把缺失图边当作零影响。隔离普通 release EXE/bridge SHA-256 `73C5C54FD547BA679B05DBC71A9C8C1B006D5D38401A44A126549385A482156A` / `102BB98451D527397D613A1F18BFDD97DF637438826D3F5310FF9FEBEB09A1D0`，research 为 `3E5D33A4AF8A9784C52C0E94EC5DC87CCFD538C53AC2240948D0ED7EBA4F37AF` / `1DD5F1E36F855B263CA110B175463E726C64C4A10A34D93019452495CA9775F6`。本轮未接入 QQ、未发送，修复版现场正常路径和非零 Promise 的真实行为均未验证；不重发旧样本，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 HTTP 修复版单次语音发送与连续回读（源码 `de251e3`）：用户重启并授权向登记好友 B 单次发送约 0.9 秒低—高—低三音语音；新 QQ 根 PID `42396`、创建 `2026-11-16T08:15:50.5580602Z`，固定模块、PE/backend 和唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与语音标识匹配。用户确认对端收到且仅收到一条、内容和数量符合预期；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标和语音大小/MD5 与预登记样本一致。
 
 该 `get_msg` 是 OneBot 持久账本回读，不等同 QQ 原生下载或 `get_record`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。此单次样本未制造真实 cookie 冲突，不证明此前 10053 的精确根因、真实迟到回调或原生线程/drain；历史失败保留，feat-004 in-progress。

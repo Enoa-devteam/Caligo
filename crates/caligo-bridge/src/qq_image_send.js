@@ -120,6 +120,7 @@ function (args) {
     if (R.stopped || R.sends[key] !== pending) return;
     pending.promiseDone = true;
     pending.promiseStatus = status;
+    if (status === 'unknown') pending.unknownReason = detail.reason;
     if (pending.readback) {
       R.settleSendResult(R, key, pending);
     } else if (!pending.ambiguous && !pending.timedOut) {
@@ -127,18 +128,19 @@ function (args) {
     }
     if (status !== 'accepted') pending.failed = true;
   }
-  const unknown = () => result('unknown', {status:'unknown', reason:'image_submit_unknown'});
+  const unknown = reason => result('unknown', {status:'unknown',
+    reason:typeof reason === 'string' ? reason : 'image_submit_unknown'});
   try {
     const promise = R.ms.sendMsg('0', {chatType, peerUid, guildId:cookie}, [element], new Map());
     Promise.resolve(promise).then(value => {
       if (value && value.result === 0) {
         result('accepted', {status:'accepted'});
-      } else if (value && Number.isInteger(value.result) && !pending.addId) {
-        result('rejected', {status:'rejected', error:'native image rejected'});
+      } else if (value && Number.isSafeInteger(value.result)) {
+        unknown('send_result_ambiguous=' + String(value.result));
       } else {
         unknown();
       }
-    }, unknown);
+    }, () => unknown());
   } catch (_) {
     unknown();
   }
