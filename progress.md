@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 私有 ETW 查询结构对照（起点 `32ed378`）：同一自建进程中 A 停止后以同名同 GUID 创建 B，共 20 次；每次 A 连续两次查询、B 当前句柄查询与 A 过期值查询 B 的 `EVENT_TRACE_PROPERTIES`、嵌套 `WNODE_HEADER` 具名成员及返回名称共 25 项均相同，A/B 句柄数值均复用；只以当次创建的当前句柄停止。脚本保存字段差异而非原始指针；这仅说明指定私有会话样本中的这些字段无法区分代次，不比较结构填充或 ETW 全部状态，不证明系统 logger、跨进程或 query→stop 原子性。未接入 QQ、未启用 PMC/LBR。
+
+本机 ignored `local-evidence/feat004-etw-query-fields-20261116/` 的实验脚本/结果和逐项审计脚本/摘要 SHA-256 分别为 `5504B6F138624AA07D8130DBF28C77323EA6953B325BF7D541A5004ED56DC7D3` / `1A63E1BEED665AEB5228E6C0EB56835CF0053FD7670BB439C2AF0A0EEE8E0B71` / `FEA0A9F10EF1C8D6FD37449B24A7219530FEB045654C19244ADCE6F779D38EA4` / `2074B999E01F7E521F59B4D0E0019F1BEE4AA45E8ECD3D25392863F500C724A1`。审计核对 20 个样本、25 项范围和启动/停止码，对篡改差异的负例拒绝；结果依赖实验源码与自报摘要，没有独立 kernel trace。结束时 WPR 未记录、logman 当次为空；系统会话所有权、崩溃恢复及 LBR 仍未证，feat-004 保持 in-progress。
+
 2026-11-15 feat-004 私有 ETW query 输出对照（起点 `fdc3b63`）：同一自建进程中 A 停止后创建 B，分两组各 12 次；两组均复用句柄数值。B 使用不同名称/GUID 时，以旧句柄和 A 的查询输入调用 `ControlTraceW(QUERY)`，返回名称和 GUID 12/12 是 B，能识别本组替换；B 使用同名同 GUID 时，旧句柄返回的这两个字段 12/12 与 A 一致，不能据此证明代次不变。两组均只 stop 当次成功创建的当前句柄，没有用旧值 stop；这些是本机 in-process private 会话自报样本，未比较所有返回字段、不证明 query→stop 原子性或系统 logger/跨进程行为，不接入 QQ、不启用 PMC/LBR。
 
 本机 ignored `local-evidence/feat004-etw-query-identity-20261115/` 的实验脚本/结果、逐项审计脚本/摘要 SHA-256 分别为 `4005AF551404956ADFEA2F1EE1F180E986486B9F64B58A634FD51285A00FDFF1` / `6B9A6034244774A5B867C909992BC65B6C18D717409B01F4D11ABB3A19E1847E` / `B6FF85C1CE4DA08BFE69C6881BCBE96849BAA6D588AB93B57EC3D64B95A7D374` / `664FA7207DA6EE38E035A31FDD0576380F47F0740EE8F0CB66AE660E22053262`。审计逐项核对 24 个样本和停止码，测试字节篡改、错误生命周期负例；审计依赖实验源码及自报结果，无独立 kernel trace。WPR 结束时未记录、logman 当次为空；具名系统会话权限、原子代次/所有权与控制器崩溃恢复仍未证，feat-004 保持 in-progress。
