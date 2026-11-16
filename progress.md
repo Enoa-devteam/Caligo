@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 HTTP 修复版单次语音发送与连续回读（源码 `de251e3`）：用户重启并授权向登记好友 B 单次发送约 0.9 秒低—高—低三音语音；新 QQ 根 PID `42396`、创建 `2026-11-16T08:15:50.5580602Z`，固定模块、PE/backend 和唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与语音标识匹配。用户确认对端收到且仅收到一条、内容和数量符合预期；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标和语音大小/MD5 与预登记样本一致。
+
+该 `get_msg` 是 OneBot 持久账本回读，不等同 QQ 原生下载或 `get_record`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。此单次样本未制造真实 cookie 冲突，不证明此前 10053 的精确根因、真实迟到回调或原生线程/drain；历史失败保留，feat-004 in-progress。
+
+ignored `E:/stella/Caligo/local-evidence/feat004-http-fixed-voice-send-20261116/` 的 preflight/runner/独立审计/审计摘要/SILK SHA-256 依次为 `C3BD41AC74B28E2BDC22D814BE0B5F5B9E77F2DE8D92BDD0B1E587BBAACDAB91` / `0DD60E8F189C486BC4F365E4E1B0AAA7D6997D8ADE1BA80886FC6B1BEF0108B9` / `5DF76B82AAD04BFFEB12FC1321915C467530B5E791CFEA168FBDF130DA479059` / `A7E388D3FDDFC420B57225E8DF6827B052E6F4D4B2B21D61540D3EF2CC3A8B20` / `8D184EAC62B375A82ADA6B100AB2DDFD29E6296A10130BD7F3DB61A1B3CEDBF2`。样本本地解码 45 帧、0.9 秒，不将本地解码作为对端播放证据。
+
 2026-11-16 feat-004 HTTP 修复版单次图片发送与连续回读（源码 `de251e3`）：用户重启并授权向登记好友 B 单次发送 PNG；新 QQ 根 PID `4544`、创建 `2026-11-16T08:06:28.1804081Z`，固定模块、PE/backend 和唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与图片标识匹配。用户确认对端收到且仅收到一张、内容相符。独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标和图片大小/MD5/尺寸与预登记样本一致。
 
 该 `get_msg` 是 OneBot 持久账本回读，不等同 QQ 原生下载或 `get_image`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。此单次图片样本未制造真实 cookie 冲突，不证明此前 10053 的精确根因、语音发送后连续回读、真实迟到回调或原生线程/drain；历史失败保留，feat-004 in-progress。
