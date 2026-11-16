@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 轮询提交边界离线对照（源码 `60a03f2`）：`D8_POLL_JS` 在返回 JSON 前清除本批终态；owner 随后按 listener 绑定调用 `ingest_wrapper_batch`，解码失败时不会调用 `complete_sends`。用生产 JS、Node VM 和生产 `decode_d8_batch` 构造一条合成 done：人为传入不匹配的 wrapper session 时首批被拒为 `batch_session_mismatch`，相同首批在正确绑定下可解码，但对同一 VM 再轮询已不含该终态。Windows MSVC 离线对照 1/1 通过，未接 QQ；不证明真实环境曾出现会话不匹配或结果丢失，也未复现 V8 转换/IPC 失败。
+
+这说明上一轮修复仅保证未序列化终态不会在分批时被清除，不能保证被 Rust 拒绝的批次可恢复。未来方案需分别设计批次/监听器代次和结果修订身份、只确认已安全接收的具体版本、确认失败及重复处理、超时和有界内存；不能用 request ID 单独删除可能已变化的结果，也不能把 resident 内存接收宣称为 daemon journal 已持久化。此次未改生产协议，不重发 unknown。JS 常量图影响 UNKNOWN、`poll_listener_json` 上游 LOW，图索引有截断警告；按源码补证 `lib.rs` 的 session 绑定、decoder 拒绝及 `complete_sends` 路径。feat-004 仍 in-progress，真实迟到、线程和 drain 未证。
+
+复验源码与成功日志保存在 ignored `target-harness/feat004-poll-rejected-lab.rs` / `target-harness/feat004-poll-rejected-lab.log`，SHA-256 `F7E328946CB17B5BEFD8500CA57D1257FBE73D5DCB88EF685B79419D263427A3` / `22A1C0EEC344FA1F90B6F4D295060591D25D5E1DC29D81E48B7D67A21B7FC7BB`；首次 fixture 将整数 `host_nonce` 错写为字符串导致编译失败，原日志 `target-harness/feat004-poll-rejected-lab-initial.log` SHA-256 `1AF3DF6D5C4CB20ECE55DAB31E5831AD5D9FDDE1E5602397C2ACA7B251416DB9`，修正后重跑。复验时将该 rs 文件临时复制为 `crates/caligo-bridge/tests/feat004_poll_rejected_lab.rs`，执行 `cargo test -p caligo-bridge --test feat004_poll_rejected_lab --locked --offline --target-dir target-harness`，之后移除该临时副本。
+
 2026-11-16 feat-004 轮询结果预算离线修复（起点 `b80291f`）：生产 `D8_POLL_JS` 的 Node VM 合成对照在接收批次占用约 360 KiB、64 条约 3 KiB 终态下复现 512 KiB 上限分批时清除未返回终态；另一合成超大终态会阻塞后续较小结果。这不证明真实 QQ 出现过此类结果或 ID 长度。现在只清理已包含在序列化批次中的终态，未放入的留待下次轮询，并继续尝试较小结果；单条终态本身无法放入空批次时降为 `unknown` / `result_exceeds_poll_budget`，若该 unknown 仍放不进当前批则延后，pending 不降级。三个受控回归覆盖跨批、超大结果及 unknown 延后；序列化不等于 Rust/IPC 已接收或持久确认，基本元数据本身超预算等情形未获完整界限证明。
 
 修复前分批/超大单条对照及修复后定向日志 SHA-256 分别为 `52B650DF42031EA19E721430318C7F2A7FF2116E9462C0A153F75D7248DDA1EA` / `867E5AD82C9E55DE620CA7D23A0D9AC08C168E524B53536E57A7441654130E24` / `C00A0D2549A43F01C25A2FE5B12E4DAFA6C54C6EE426CF70CA9D9AD0561CB748`。隔离普通 release EXE/bridge SHA-256 `18B78102632B745DA34228BA026B2F26EA50D1D565892227589312F351D45AA1` / `4FB3723071D1A317F4AEFE4D69ED8FC2116804969E7ACC80E01A54A406CDA5D0`，research 为 `DFF198BA093F782705BC2618983BDC6343204F748086F352C7D4FF169639CE29` / `3F0718021771AE2AC22D69073F36D23198CB9DD58EDC72CA816069A67FB2F9D9`；两种离线 release 构建通过。Windows MSVC 串行 `init.ps1 -Mode all` 通过（含普通/research），日志 `target-harness/feat004-poll-budget-all.log` SHA-256 `CEBAF3E85D65045BA77171A57CA75F439AC5234602FA01F2AC76FA31075906AE`；`init.ps1 -Mode docs` 通过。
