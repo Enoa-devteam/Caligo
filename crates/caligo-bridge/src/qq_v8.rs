@@ -2513,7 +2513,7 @@ pub fn build_send_js(
     js.push_str("    if (typeof sv !== 'string' || !sv || sv === '0') return JSON.stringify({err:'server_time_unavailable'});\n");
     js.push_str("    var cookie = R.ms.generateMsgUniqueId(chat, sv);\n");
     js.push_str(
-        "    if (typeof cookie !== 'string' || !cookie || cookie === '0') return JSON.stringify({err:'invalid_cookie'});\n",
+        "    if (typeof cookie !== 'string' || !cookie || cookie === '0' || Object.values(R.sends).some(send => send.cookie === cookie)) return JSON.stringify({err:'invalid_cookie'});\n",
     );
     js.push_str("    var selfUin = ");
     js.push_str(&account_json);

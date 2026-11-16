@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-16 feat-004 文本在途 cookie 冲突修复（起点 `03d3272`）：正式 wrapper 的文本路径此前未像语音/图片路径那样拒绝在途 cookie 重复。使用实际生成的发送脚本和生产 listener 在 Node VM 中构造两个同 cookie、同目标、同正文请求，单条合成 add/update 与精确回读使两条请求都以同一 native ID 标为 `done`；修复前回归如预期失败，日志 `target-harness/feat004-cookie-collision-before.log` SHA-256 `DAD26F6D47E58EEDA3D032D3B1143F806F2B4A9F39618E72832FE6CDACE9D7EA`。这是合成风险复现，尚未证明固定 QQ 实际生成重复 cookie。
+
+文本脚本现在与媒体路径一致，在调用 `sendMsg` 前拒绝与 `R.sends` 在途项重复的 cookie，返回已有 `invalid_cookie`，不修改第一请求。回归验证首个请求仍经精确回读成功、第二个不发送；还覆盖在途图片/语音占用相同 cookie，以及不同 cookie 的同文请求可同时提交。修复后定向测试普通/research 各 9/9，Windows 进程内串行 `init.ps1 -Mode all` 通过（全仓测试在最后新增正向测试前运行，新增测试随后在两构建单独通过）。GitNexus 针对 `build_send_js` 的上游结果 LOW，直接调用 `send_text`、上游包括 `QqOwnerAdapter::native_op`；嵌入 JS 和动态分派仍需源码核对。只对仍在 `R.sends` 的冲突生效；项移除后的迟到回调、cookie 重用、QQ 原生 callback 线程和最终 drain 仍未证。未接入 QQ 或发送，feat-004 保持 in-progress。
+
+隔离 research release 构建通过，产物位于 `target-harness/feat004-cookie-research-20261116/x86_64-pc-windows-msvc/release/`，EXE/bridge SHA-256 分别为 `D1D458801C19463781D7E7ED97925BB6500312B966EB0AFA86E13E8DEA07D33E` / `6F15548CD0F1D37DE6C3A333881EE3FDEE4E4378E84E2E14385EFE3AECDD497D`；尚未现场加载。后续现场需重新核验已指定的新鲜进程和独立授权的发送范围；未证寿命不卸载。
+
+隔离普通 release 同样构建通过，EXE/bridge SHA-256 分别为 `3F4991F79A1A3AAB5237F14577512D96E0C80E335C144E81A2722B3FC9285B57` / `D2DFB0E5D6BC77670A00436AD13D31F90FC38D635C10A473E7F833611F61D07F`，亦未现场加载。
+
 2026-11-16 feat-004 私有 ETW 查询结构对照（起点 `32ed378`）：同一自建进程中 A 停止后以同名同 GUID 创建 B，共 20 次；每次 A 连续两次查询、B 当前句柄查询与 A 过期值查询 B 的 `EVENT_TRACE_PROPERTIES`、嵌套 `WNODE_HEADER` 具名成员及返回名称共 25 项均相同，A/B 句柄数值均复用；只以当次创建的当前句柄停止。脚本保存字段差异而非原始指针；这仅说明指定私有会话样本中的这些字段无法区分代次，不比较结构填充或 ETW 全部状态，不证明系统 logger、跨进程或 query→stop 原子性。未接入 QQ、未启用 PMC/LBR。
 
 本机 ignored `local-evidence/feat004-etw-query-fields-20261116/` 的实验脚本/结果和逐项审计脚本/摘要 SHA-256 分别为 `5504B6F138624AA07D8130DBF28C77323EA6953B325BF7D541A5004ED56DC7D3` / `1A63E1BEED665AEB5228E6C0EB56835CF0053FD7670BB439C2AF0A0EEE8E0B71` / `FEA0A9F10EF1C8D6FD37449B24A7219530FEB045654C19244ADCE6F779D38EA4` / `2074B999E01F7E521F59B4D0E0019F1BEE4AA45E8ECD3D25392863F500C724A1`。审计核对 20 个样本、25 项范围和启动/停止码，对篡改差异的负例拒绝；结果依赖实验源码与自报摘要，没有独立 kernel trace。结束时 WPR 未记录、logman 当次为空；系统会话所有权、崩溃恢复及 LBR 仍未证，feat-004 保持 in-progress。

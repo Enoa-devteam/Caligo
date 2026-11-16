@@ -268,6 +268,97 @@ assert.deepEqual(fired,{{fired:true,mid:'core-request-7'}});
 }
 
 #[test]
+fn wrapper_text_send_rejects_inflight_cookie_collision() {
+    let one = build_send_js(1, "20002", "same", "10001", "request-one", 1, 5_000);
+    let two = build_send_js(1, "20002", "same", "10001", "request-two", 2, 5_000);
+    let fixture = r#"
+const assert=require('node:assert/strict'),vm=require('node:vm');
+const start=__START__,poll=__POLL__,one=__ONE__,two=__TWO__;
+let listener,sends=0,queries=0;
+const row=(status)=>({msgId:'native-one',msgSeq:'1',msgRandom:'2',msgTime:'1794567890',
+  guildId:'same-cookie',chatType:1,msgType:2,subMsgType:0,peerUid:'u_peer',peerUin:'20002',
+  senderUid:'u_self',senderUin:'10001',sendStatus:status,
+  elements:[{elementType:1,textElement:{content:'same',atType:0}}]});
+const service={generateMsgUniqueId:()=> 'same-cookie',addKernelMsgListener(l){listener=l;return 7;},
+  removeKernelMsgListener:()=>true,sendMsg(){sends++;return Promise.resolve({result:0});},
+  getMsgsByMsgId(){queries++;return Promise.resolve({result:0,msgList:[row(2)]});}};
+const session={getSessionId:()=>1,getMsgService:()=>service,getMSFService:()=>({getServerTime:()=> 'time'}),
+  getProfileService:()=>({getUidByUin:()=>new Map([['20002','u_peer']])})};
+const c={Buffer,Promise,Date,Map,JSON,String,Object,Array,Number,
+  process:{_linkedBinding:()=>({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}})}};
+vm.createContext(c);const run=x=>vm.runInContext(x,c),tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+  assert.match(run(start),/^ARMED/);
+  assert.equal(JSON.parse(run(one)).fired,true);
+  const second=JSON.parse(run(two));
+  listener.onAddSendMsg(row(1));listener.onMsgInfoListUpdate([row(2)]);
+  await tick();await tick();
+  const batch=JSON.parse(run(poll));
+  const first=batch.sendResults['request-one'],other=batch.sendResults['request-two'];
+  assert.ok(!(first?.status==='done' && other?.status==='done' && first.msgId===other.msgId),
+    'one native callback must not confirm two requests');
+  assert.deepEqual(second,{err:'invalid_cookie'});
+  assert.equal(sends,1);assert.equal(queries,1);
+  assert.equal(first.status,'done');assert.equal(first.msgId,'native-one');
+  assert.equal(other,undefined);
+})().catch(e=>{console.error(e);process.exitCode=1});
+"#.replace("__START__", &serde_json::to_string(D8_START_JS).unwrap())
+        .replace("__POLL__", &serde_json::to_string(D8_POLL_JS).unwrap())
+        .replace("__ONE__", &serde_json::to_string(&one).unwrap())
+        .replace("__TWO__", &serde_json::to_string(&two).unwrap());
+    let output = std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn wrapper_text_send_allows_distinct_inflight_cookies_with_identical_text() {
+    let one = build_send_js(1, "20002", "same", "10001", "request-one", 1, 5_000);
+    let two = build_send_js(1, "20002", "same", "10001", "request-two", 2, 5_000);
+    let fixture = r#"
+const assert=require('node:assert/strict'),vm=require('node:vm');
+const scripts=[__ONE__,__TWO__];let next=0,calls=0;
+const R={sends:{},sendResults:{},ms:{generateMsgUniqueId:()=>`cookie-${++next}`,
+  sendMsg(){calls++;return new Promise(()=>{});}},
+  session:{getMSFService:()=>({getServerTime:()=> 'time'}),
+    getProfileService:()=>({getUidByUin:()=>new Map([['20002','u_peer']])})}};
+const c={__caligo_res:R,Promise,Date,Map,JSON,String,Object,Array,Number};vm.createContext(c);
+for(const script of scripts)assert.equal(JSON.parse(vm.runInContext(script,c)).fired,true);
+assert.equal(calls,2);assert.equal(R.sends['request-one'].cookie,'cookie-1');
+assert.equal(R.sends['request-two'].cookie,'cookie-2');
+"#.replace("__ONE__", &serde_json::to_string(&one).unwrap())
+        .replace("__TWO__", &serde_json::to_string(&two).unwrap());
+    let output = std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn wrapper_text_send_rejects_cookie_held_by_inflight_media() {
+    let send = build_send_js(1, "20002", "hello", "10001", "new-text", 9, 5_000);
+    let fixture = r#"
+const assert=require('node:assert/strict'),vm=require('node:vm');
+const send=__SEND__;
+for(const media of ['voice','image']) {
+  let calls=0;
+  const pending={cookie:'held-cookie',[media]:{size:1},done:false};
+  const R={sends:{previous:pending},sendResults:{},
+    ms:{generateMsgUniqueId:()=> 'held-cookie',sendMsg(){calls++;}},
+    session:{getMSFService:()=>({getServerTime:()=> 'time'}),
+      getProfileService:()=>({getUidByUin:()=>new Map([['20002','u_peer']])})}};
+  const c={__caligo_res:R,Promise,Date,Map,JSON,String,Object,Array,Number};
+  vm.createContext(c);
+  assert.deepEqual(JSON.parse(vm.runInContext(send,c)),{err:'invalid_cookie'});
+  assert.equal(calls,0);assert.strictEqual(R.sends.previous,pending);
+  assert.equal(Object.hasOwn(R.sends,'new-text'),false);
+}
+"#.replace("__SEND__", &serde_json::to_string(&send).unwrap());
+    let output = std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for the wrapper send fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
 fn wrapper_text_send_uncertain_submission_stays_unknown() {
     let send = build_send_js(1, "20002", "hello", "10001", "request", 42, 5_000);
     let fixture = format!(r#"

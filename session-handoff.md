@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 文本 cookie 冲突：合成生产 listener 复现同 cookie、目标和正文的两条在途文本由单个 native ID 双重确认；现于原生 `sendMsg` 前拒绝在途重复 cookie，与媒体路径一致。首条成功、第二条拒绝、媒体占用与不同 cookie 同文正例、普通/research 回归及隔离 research release hash 见 [progress](progress.md#current-state)。修复尚未现场加载；该检查不覆盖移出在途表后的迟到与复用，真实 callback OS 线程/最终 drain 仍 unknown。后续现场需指定新鲜 QQ 代次重新准入，发送另有明确范围和授权，不重发旧样本。
+
 2026-11-16 feat-004 私有 ETW 全成员对照：20 次同名同 GUID A→B 替换中，句柄复用，查询结构具名成员与名称共 25 项在 A、B 和过期值查询中一致；仅使用当前句柄停止。脚本、审计和范围见 [progress](progress.md#current-state)。这些字段快照不足以证明私有会话代次，不能外推系统 logger；继续按[观测合同](docs/acceptance/2026-11-15-feat-004-observation.md)解决系统级所有权、崩溃恢复和权限，不能凭匹配快照 stop。
 
 2026-11-15 feat-004 私有 ETW query 输出：A 停止后 B 名称/GUID 均不同，旧句柄查询输出两字段为 B（12/12）；B 复用名称/GUID 时输出与 A 两字段相同（12/12），仍不能区分代次；均未用旧句柄停止。脚本、审计负例和范围见 [progress](progress.md#current-state)。不证明其他字段、query→stop 原子性、系统 logger 或跨进程恢复；继续研究独立可核验的系统会话代次与冲突控制，权限和现场准入不变。
