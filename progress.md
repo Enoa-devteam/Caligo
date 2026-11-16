@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 媒体 Promise 保守修复版语音正常路径现场（源码 `7b8b732`）：用户重启并授权向登记好友 B 单次发送约 0.9 秒三音语音；新 QQ 根 PID `38060`、创建 `2026-11-16T10:53:51.6672356Z`，固定模块、PE/backend、唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与语音标识匹配。用户确认对端收到且仅收到一条、内容和数量符合预期；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标和语音大小/MD5 与预登记样本一致。
+
+该 `get_msg` 为 OneBot 持久账本回读，不等同 QQ 原生语音下载或 `get_record`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。本轮仅验证语音正常路径，未制造真实非零 Promise、cookie 冲突或迟到回调，不证明业务拒绝语义、未知结果后迟到纠正或原生线程/drain；feat-004 in-progress。
+
+ignored `E:/stella/Caligo/local-evidence/feat004-media-result-voice-field-20261116/` 的 preflight/runner/独立审计/审计摘要/SILK SHA-256 依次为 `80E27C54B344EE63B2E900290A01B4D88B94A9152AEB0F89EA4D3333974FCA86` / `A7AF9D574E56A30F3AF70F5AC60D348BDC63792DFCE22ED1D3311C8278BCDBC3` / `3B33518CBAE54A7CBF6EDB8E8B96E926924ACBC96A8C14AFF76E8C001DE52350` / `A7E388D3FDDFC420B57225E8DF6827B052E6F4D4B2B21D61540D3EF2CC3A8B20` / `B507162DD626706FFDC5A91DF290F18A7FC9485A6199F0189809C3133FD8DA2A`。样本本地解码 45 帧、0.9 秒，不将本地解码作为对端播放证据。
+
 2026-11-16 feat-004 媒体 Promise 保守修复版图片正常路径现场（源码 `7b8b732`）：用户重启并授权向登记好友 B 单次发送 PNG；新 QQ 根 PID `48480`、创建 `2026-11-16T10:42:55.6925710Z`，固定模块、PE/backend、唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与图片标识匹配。用户分别确认对端只收到一张且图案、标记相符；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标及图片大小/MD5/尺寸与预登记样本一致。
 
 该 `get_msg` 为 OneBot 持久账本回读，不等同 QQ 原生图片下载或 `get_image`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。本轮仅验证图片正常路径，未制造真实非零 Promise、cookie 冲突或迟到回调，不证明语音正常路径或原生线程/drain；feat-004 in-progress。

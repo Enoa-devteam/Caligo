@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 媒体 Promise 修复版语音现场：用户授权一次语音，QQ `38060` 准入登录后单次发送、OneBot `get_msg`、账本指纹及对端一条确认通过，详见 [progress](progress.md#current-state)。回读基于持久账本，非 QQ 原生下载；manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。本轮未制造真实非零 Promise，真实非零语义、未知结果后的迟到匹配及原生线程/drain 仍未证，feat-004 in-progress。
+
 2026-11-16 feat-004 媒体 Promise 修复版图片现场：用户授权一次图片，QQ `48480` 准入登录后单次发送、OneBot `get_msg`、账本指纹及对端仅一张确认通过，详见 [progress](progress.md#current-state)。回读基于持久账本，非 QQ 原生下载；manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。此轮未制造非零 Promise，语音正常路径、真实 cookie/迟到和线程/drain 尚未证，feat-004 in-progress。
 
 2026-11-16 feat-004 媒体非零 Promise 离线修复：图片/语音原先在非零 Promise 先于通知时会输出 rejected 并进入 Failure；现统一 unknown，安全整数保留诊断码，两种顺序和异常/成功对照见 [progress](progress.md#current-state)。`pending.failed` 仍阻止不确定结果后的迟到匹配，不能宣称迟到纠正已闭合；真实非零语义及新构建现场未验证。后续现场须新进程、固定 hash 准入和单次发送授权，不重发旧样本；feat-004 in-progress。
