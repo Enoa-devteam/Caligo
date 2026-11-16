@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 resident 空身份重复结果（起点 `1793c5e`）：以真实 `Resident::complete_sends` 和合成 host 驱动发现，同一请求的 `done` 空 native ID 首次进入 `IdentityPending` 并输出 `AcceptedUnconfirmed` 后，重复输入会再次入队相同通知。现对已处于 `IdentityPending` 的空身份重复输入不重复入队；之后带非空强身份的同一请求仍能成功完成，再重复强身份也不再产生终态。已有 `DeliveryUnknown` 的空身份拒绝条件保持。该输入由离线夹具构造，不证明实际 QQ 返回过空身份或现场曾重复通知。
+
+修复前针对实际状态机的回归按预期失败，日志 `target-harness/feat004-owner-retry-red.log` SHA-256 `CDC055A902F497149AEE48828BE95EAB4837367A28AF41BA286F75957850C9EF`；修复后新增测试与 22 项 resident 生命周期测试全部通过，日志 `target-harness/feat004-owner-retry-green.log` SHA-256 `CA4C09CE3A5848B5D028ECD0CAF07AA8CAECF908DA49864E352D906981020B95`。GitNexus 对 `complete_sends` 上游为 UNKNOWN，实际调用方及测试通过文本和源码补核，未将空图认作零风险。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-owner-retry-all.log` SHA-256 `0755E29ECA6BD2DCE67A896A10B5F5DBB1A2810B9425799B289C69D899765759`；文档检查通过。此次只修复该重复通知，未实现可确认的结果版本或 ACK 重试；JS 轮询拒收后丢终态缺口仍在，未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-16 feat-004 发送结果表容量防护（起点 `03f4c36`）：正式文本、图片、语音发送脚本现在除原先的在途表上限外，也在提交前检查 `sendResults` 条数；达到 128 时返回既有 `send_capacity_or_duplicate`，不清除已有结果，也不调用 `sendMsg`。该限制为未来保留未确认结果提供背压，不改变目前轮询清除策略；它限制正常脚本新增条数，不证明任意外部改写或单条值大小有界。现有 adapter 将该本地脚本错误统一映射到 native code 3，不能把它解释为 QQ 业务拒绝。
 
 生产生成脚本的 Node VM 合成回归在 128 条结果、空在途表下覆盖文本/图片/语音不提交、不调用媒体存储、旧条目不被移除；127 条文本仍能提交并达到 128。修复前首次文本对照未拒绝并显示 `fired`，红灯日志 `target-harness/feat004-result-capacity-red.log` SHA-256 `A6591F07A31FB7F866E6D720D139097EED80DD2C082F8B934552134F11521199`；修复后容量及相关文本/图片/语音/媒体/轮询共 26 项通过，日志 `target-harness/feat004-result-capacity-green.log` SHA-256 `8A67562B7D9AEA74F958EC2D920DED36E329B9385B4028CF1A5000B84136FDDB`。回归为受控合成环境，未证明现场曾满额，也未覆盖 127 条媒体真实发送。 Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-result-capacity-all.log` SHA-256 `D2B9536F9EE27BA7113ADC414B1820CD73C5E932073007BE4605C374554B2EB2`；文档检查通过。

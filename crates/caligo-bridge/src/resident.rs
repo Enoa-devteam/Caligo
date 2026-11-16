@@ -876,7 +876,11 @@ impl<A: HostAdapter> Resident<A> {
                 .iter()
                 .find(|(candidate, _)| candidate == pending_request_id)
             {
-                if record.state == ReqState::DeliveryUnknown && native_id.is_empty() {
+                // Replayed identity-less acceptance must not enqueue another
+                // notice or prevent a later strong identity from completing.
+                if native_id.is_empty()
+                    && matches!(record.state, ReqState::IdentityPending | ReqState::DeliveryUnknown)
+                {
                     continue;
                 }
                 let (state, outcome) = if native_id.is_empty() {
