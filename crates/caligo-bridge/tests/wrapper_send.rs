@@ -599,6 +599,7 @@ async function late(mode) {{
 
 #[test]
 fn wrapper_text_inline_duplicate_and_old_generation_callbacks_are_scoped() {
+    use std::io::Write;
     let send = build_send_js(1, "20002", "hello", "10001", "request", 42, 5_000);
     let fixture = format!(r#"
 const assert=require('node:assert/strict'), vm=require('node:vm');
@@ -659,8 +660,11 @@ const run=s=>vm.runInContext(s,context);
 }})().catch(e=>{{console.error(e);process.exitCode=1;}});
 "#,start=serde_json::to_string(D8_START_JS).unwrap(),stop=serde_json::to_string(D8_STOP_JS).unwrap(),
         poll=serde_json::to_string(D8_POLL_JS).unwrap(),send=serde_json::to_string(&send).unwrap());
-    let output=std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
-        .output().expect("Node.js is required for the wrapper send fixture");
+    let mut child=std::process::Command::new("node").arg("--unhandled-rejections=strict")
+        .stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn().expect("Node.js is required for the wrapper send fixture");
+    child.stdin.take().unwrap().write_all(fixture.as_bytes()).unwrap();
+    let output=child.wait_with_output().unwrap();
     assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
 }
 

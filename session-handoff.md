@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 轮询超限离线修复：合成测试发现未放入 512 KiB 批次的终态曾被清除，现保留至下批，单条无法放入空批次的终态保守 unknown；回归及边界见 [progress](progress.md#current-state)。序列化不是下游确认，修复版现场和真实迟到/线程/drain 未验证。后续继续按现有观测合同推进；任何新现场须新鲜 QQ 进程及重新准入，旧 unknown 不重发，未证寿命不卸载。
+
 2026-11-16 feat-004 媒体 Promise 修复版语音现场：用户授权一次语音，QQ `38060` 准入登录后单次发送、OneBot `get_msg`、账本指纹及对端一条确认通过，详见 [progress](progress.md#current-state)。回读基于持久账本，非 QQ 原生下载；manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。本轮未制造真实非零 Promise，真实非零语义、未知结果后的迟到匹配及原生线程/drain 仍未证，feat-004 in-progress。
 
 2026-11-16 feat-004 媒体 Promise 修复版图片现场：用户授权一次图片，QQ `48480` 准入登录后单次发送、OneBot `get_msg`、账本指纹及对端仅一张确认通过，详见 [progress](progress.md#current-state)。回读基于持久账本，非 QQ 原生下载；manager/owner 停止、端口关闭、QQ 响应且 bridge 保留，不重接、不卸载、不重发。此轮未制造非零 Promise，语音正常路径、真实 cookie/迟到和线程/drain 尚未证，feat-004 in-progress。

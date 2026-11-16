@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 轮询结果预算离线修复（起点 `b80291f`）：生产 `D8_POLL_JS` 的 Node VM 合成对照在接收批次占用约 360 KiB、64 条约 3 KiB 终态下复现 512 KiB 上限分批时清除未返回终态；另一合成超大终态会阻塞后续较小结果。这不证明真实 QQ 出现过此类结果或 ID 长度。现在只清理已包含在序列化批次中的终态，未放入的留待下次轮询，并继续尝试较小结果；单条终态本身无法放入空批次时降为 `unknown` / `result_exceeds_poll_budget`，若该 unknown 仍放不进当前批则延后，pending 不降级。三个受控回归覆盖跨批、超大结果及 unknown 延后；序列化不等于 Rust/IPC 已接收或持久确认，基本元数据本身超预算等情形未获完整界限证明。
+
+修复前分批/超大单条对照及修复后定向日志 SHA-256 分别为 `52B650DF42031EA19E721430318C7F2A7FF2116E9462C0A153F75D7248DDA1EA` / `867E5AD82C9E55DE620CA7D23A0D9AC08C168E524B53536E57A7441654130E24` / `C00A0D2549A43F01C25A2FE5B12E4DAFA6C54C6EE426CF70CA9D9AD0561CB748`。隔离普通 release EXE/bridge SHA-256 `18B78102632B745DA34228BA026B2F26EA50D1D565892227589312F351D45AA1` / `4FB3723071D1A317F4AEFE4D69ED8FC2116804969E7ACC80E01A54A406CDA5D0`，research 为 `DFF198BA093F782705BC2618983BDC6343204F748086F352C7D4FF169639CE29` / `3F0718021771AE2AC22D69073F36D23198CB9DD58EDC72CA816069A67FB2F9D9`；两种离线 release 构建通过。Windows MSVC 串行 `init.ps1 -Mode all` 通过（含普通/research），日志 `target-harness/feat004-poll-budget-all.log` SHA-256 `CEBAF3E85D65045BA77171A57CA75F439AC5234602FA01F2AC76FA31075906AE`；`init.ps1 -Mode docs` 通过。
+
+GitNexus 隔离索引对动态 JS 常量 `D8_POLL_JS` 返回 UNKNOWN，`poll_listener_json` 上游 LOW；已结合源码核对动态 JS、Rust 分派和结果消费者，不将缺失图边视为零影响。Windows 既有 wrapper 测试因拼接脚本超过 `node -e` 命令行上限报 206，现改为 stdin 输入；原失败日志 `target-harness/feat004-poll-budget-green-final.log` 保留，修复前对照 `target-harness/feat004-poll-budget-red.log`、`target-harness/feat004-poll-oversize-red.log` 与修复后 `target-harness/feat004-poll-budget-target-final.log` 保留。本轮未接入 QQ、未发送；修复版真实现场、真实迟到回调及原生线程/drain 仍未验，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 媒体 Promise 保守修复版语音正常路径现场（源码 `7b8b732`）：用户重启并授权向登记好友 B 单次发送约 0.9 秒三音语音；新 QQ 根 PID `38060`、创建 `2026-11-16T10:53:51.6672356Z`，固定模块、PE/backend、唯一 Environment 只读准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次；发送与紧接着的 OneBot `get_msg` 均 retcode 0，持久消息 ID 与语音标识匹配。用户确认对端收到且仅收到一条、内容和数量符合预期；独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID、目标和语音大小/MD5 与预登记样本一致。
 
 该 `get_msg` 为 OneBot 持久账本回读，不等同 QQ 原生语音下载或 `get_record`。合成停止探针 pass，manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次当次响应且保留 bridge，不得重接、热卸载或重发。本轮仅验证语音正常路径，未制造真实非零 Promise、cookie 冲突或迟到回调，不证明业务拒绝语义、未知结果后迟到纠正或原生线程/drain；feat-004 in-progress。

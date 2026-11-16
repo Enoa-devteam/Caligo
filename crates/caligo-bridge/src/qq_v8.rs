@@ -697,16 +697,34 @@ pub const D8_POLL_JS: &str = r"
     if (Buffer.byteLength(json, 'utf8') > 524288) {
       out.sendResults = {};
       var keys = Object.keys(R.sendResults || {});
+      var isolated = {schema:1, sid:R.sid, items:[], rejected:0, overflow:0,
+        sendResults:{}, imageShapes:[], mediaDiagnostics:[], textSendTrace:[],
+        textSendTraceGeneration:R.textTraceGeneration || 0, textSendTraceOverflow:false};
       for (var i = 0; i < keys.length; i++) {
         out.sendResults[keys[i]] = R.sendResults[keys[i]];
         if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288) {
-          delete out.sendResults[keys[i]]; break;
+          // Keep the omitted result for a later poll, but let smaller results
+          // behind it make progress in this batch.
+          delete out.sendResults[keys[i]];
+          isolated.sendResults = {};
+          isolated.sendResults[keys[i]] = R.sendResults[keys[i]];
+          if (R.sendResults[keys[i]].status !== 'pending' &&
+              Buffer.byteLength(JSON.stringify(isolated), 'utf8') > 524288) {
+            // A terminal result that cannot fit even in an otherwise empty
+            // batch cannot carry a usable identity; report unknown instead.
+            out.sendResults[keys[i]] = {status:'unknown', reason:'result_exceeds_poll_budget'};
+            if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288)
+              delete out.sendResults[keys[i]];
+          }
+          continue;
         }
       }
       json = JSON.stringify(out);
     }
     R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = []; R.textTraceOverflow = false;
-    var resultKeys = Object.keys(R.sendResults || {});
+    // Only clear terminal results included in this serialized batch;
+    // serialization does not imply downstream or durable acknowledgement.
+    var resultKeys = Object.keys(out.sendResults || {});
     for (var i = 0; i < resultKeys.length; i++) {
       if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
     }
