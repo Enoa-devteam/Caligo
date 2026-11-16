@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-16 feat-004 图片 cookie 防护版现场：用户重启并授权向登记好友 B 发送一张测试 PNG；QQ 根 PID `34236`、创建 `2026-11-16T05:29:53.3238212Z`，固定模块、PE/backend 和唯一 Environment 准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后只提交一次，发送 retcode 0 且返回持久消息 ID；用户确认图片可见且内容相符，答复未明确核实数量。独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 与持久消息身份一致，图片大小、MD5 和尺寸匹配预登记样本。
+
+发送后首次现场 `get_msg` 因 WinError 10053 连接中断，未获回读；runner 原始 `phase=send_reserved`、失败栈保留，根因未知且不重发。manager/owner 均退出码 0、HTTP/SSE 关闭，同代 QQ 当次响应且保留 bridge，不重接、不热卸载；合成停止探针不证明真实迟到回调或线程/drain。本机 ignored `E:/stella/Caligo/local-evidence/feat004-image-cookie-field-20261116/` 的 preflight/runner/审计/审计摘要/失败栈 SHA-256 依次为 `41A23E986945ED75D1E84CDE6D937C9D85D2CBEBACFE7422F49C5B1846228058` / `EC0765409D9E1F3DB9DD030ED0FB6CAC4C366C85351857EA78FFC0E5C722C5D4` / `530D6B29DCE8C4D6FAFBE430C9E59F9451CEAE850A133B4DA4D68AC5B38C6546` / `5862A31525A27C6AD772055557B9935A41387DEC38015B49254F130E7AE4ACA0` / `19FC841F558E4F111A4A4B55428AF53FA1C72F7694DE7D331BFA07178932B6B9`；PNG SHA-256 `88AB8BB6F8112832E091D9811803862BD3B1B76C1BB0784299473547274E6B48`。
+
+用户随后重启并指定新测试 QQ 根 PID `6184`、创建 `2026-11-16T05:33:04.5883110Z`，固定模块、PE/backend、唯一 Environment 和账号登录准入通过。将原消息账本复制到独立运行目录并核对 SHA-256 一致，只对原持久消息 ID 执行一次 OneBot `get_msg`：HTTP 200 / retcode 0，私聊图片标识、发送账号及原 ID 匹配，原账本的目标、图片大小、MD5 和尺寸与样本相符。查询读取复制的持久账本，不是 QQ 原生查询，不能解释第一次 10053；原失败继续保留。
+
+只读轮零发送、请求 journal 为空；独立审计确认仅一次查询、账本副本一致、manager/owner 退出码 0、HTTP/SSE 关闭。QQ 同代次当次响应且保留 bridge，不重接、不热卸载。ignored `E:/stella/Caligo/local-evidence/feat004-image-cookie-readback-20261116/` 的 preflight/runner/审计/审计摘要 SHA-256 为 `41A23E986945ED75D1E84CDE6D937C9D85D2CBEBACFE7422F49C5B1846228058` / `96D9CC4F64474AB5B57D29CBAEFF5CEA433C7940B34256AB0EAE0B38CA49894A` / `B39361CE01B38825909388970CBB264498737AE093B7E3CACF787C4D70FBED56` / `5B5104E81461055A1DF037728CAB12DA4B4CAF2134CDF45F80F0DBDCF5481856`。本轮未制造真实 cookie 冲突；真实迟到回调、原生线程和全局 drain 未证，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 语音 cookie 防护版原消息只读回查（源码 `981b7dd`）：上一轮单次发送成功但现场 `get_msg` 报 10053；用户正常重启并指定新测试 QQ 根 PID `42452`、创建 `2026-11-16T05:21:25.1083438Z`。固定模块、PE/backend、唯一 Environment 与登记账号登录准入通过。将上一轮消息账本复制到独立运行目录并核对 SHA-256 一致，针对原持久消息 ID 执行一次 OneBot `get_msg`，HTTP 200 / retcode 0，返回私聊语音标识与发送账号、原消息 ID 一致；账本的目标和语音大小、MD5 与原样本一致。此查询读取已复制的持久账本，不是向 QQ 原生服务查询，不能据此解释第一次 10053 根因。第一次失败及栈完整保留。
 
 本轮无发送、请求 journal 为空；独立审计确认 runner 不含发送动作、原账本与副本一致、仅预留一次查询，以及 manager/owner 退出码 0、HTTP/SSE 端口关闭。QQ 同代次响应并保留 bridge，不重接、不热卸载。ignored `E:/stella/Caligo/local-evidence/feat004-voice-cookie-readback-20261116/` 的 preflight/runner/审计/审计摘要 SHA-256 为 `41A23E986945ED75D1E84CDE6D937C9D85D2CBEBACFE7422F49C5B1846228058` / `4446DF4C00E608D697B051BD67B768CEBF6752D38844E75EFD6F7F7A465CABFE` / `F7768DC96821714F84B16406AF87EBD45E0E78311C42FDAAAD30900774F91DD7` / `8EF2F07FE1300956C8238D30F26B589EF94B86083D441E89EBA3AAF2FE3E32E7`。此样本未验证真实 cookie 复用、迟到回调或原生线程/drain，feat-004 保持 in-progress。

@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 图片 cookie 防护版现场：用户授权的单次图片发送 retcode 0、单请求账本和图片指纹匹配；用户确认图片可见且内容相符，未明确核实数量。首次 get_msg 因 10053 中断，原因未知、失败保留；新鲜 QQ `6184` 上对原消息复制账本的一次 OneBot 只读回查通过，非 QQ 原生查询。两轮均正常停止，最新 QQ 响应并保留 bridge，不重接、不热卸载或重发；证据见 [progress](progress.md#current-state)。真实 cookie 复用、迟到与线程/drain 未证，feat-004 in-progress。
+
 2026-11-16 feat-004 语音原消息只读回查：新鲜 QQ `42452` 准入、登录后，对原发送消息的复制账本执行一次 OneBot `get_msg`，返回匹配语音标识及原消息身份；零发送、独立审计和正常停止通过。首次 `get_msg` 的 10053 失败保留、根因未知；此回查读取复制账本而非 QQ 原生查询。证据见 [progress](progress.md#current-state)。QQ 同代响应且 bridge 保留，不重接或热卸载；真实 cookie 冲突、迟到回调及原生线程/drain 未证，feat-004 in-progress。
 
 2026-11-16 feat-004 语音 cookie 防护版单次现场：用户授权的一条语音发送 retcode 0、持久账本和用户播放确认通过；现场 `get_msg` 连接 WinError 10053，未获回读，根因未知，不重发。独立审计与失败证据见 [progress](progress.md#current-state)。manager/owner 正常停止、端口关闭；QQ `33768` 响应且保留 bridge，不得重接或热卸载。下一步可准备新鲜进程上只读查询原消息，不能把旧失败覆盖为成功；真实冲突、线程/drain 仍未证，feat-004 in-progress。
