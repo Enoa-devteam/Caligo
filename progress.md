@@ -2,11 +2,17 @@
 
 ## Current State
 
+2026-11-16 feat-004 文本 cookie 修复版正常路径现场（源码 `a8b1da4`）：用户授权向登记好友 B 单次发送新标记；指定 QQ 根 PID `5384`、创建 `2026-11-15T14:03:47.7393043Z`，此前本代次未加载 bridge，当次固定模块、PE/backend 和唯一 Environment 只读准入通过。research EXE/bridge 使用下方隔离构建；listener_armed、Active 和登记账号登录核验后只发送一次，现场 HTTP 发送与 `get_msg` 均 retcode 0、持久身份与正文匹配；用户确认对端收到且仅收到一条。
+
+独立审计确认单请求 journal 顺序 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 和消息账本一致；白名单解析器观察两批同一 JS 代次/序号的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，报告 scope unverified / completeness unknown，仅在本轮单请求及账本证据下解释。原 runner 保留 `trace_pass=false`：旧检查仍将已替换双引号的 detail 当 JSON；独立审计与解析器只读复核通过，不覆盖原结果。合成停止探针通过，manager/owner 退出码均 0、HTTP/SSE 端口关闭，QQ 同代次响应并保留 bridge；不得重接、热卸载或重发该样本。
+
+本机 ignored `local-evidence/feat004-cookie-regression-20261116/` 的现场运行器/独立审计/审计摘要 SHA-256 分别为 `0730D7471656DD748C8BD427E9C661AF036D2779834A380B97CB3BA056DEDC5C` / `C36447EE5AB83550BB4D5BEA6052D70C25981C13C9EFEBC99501F6E51790B3E8` / `6891484115A14E2B7D2A831D82C038B03F7CA1129F4EBD9115124CA3962B3F35`。该样本验证修复版正常单次私聊及回读，不制造或证明真实 cookie 冲突；合成冲突、在途移除后迟到复用、QQ 原生 callback 线程和最终 drain 仍分别受限，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 文本在途 cookie 冲突修复（起点 `03d3272`）：正式 wrapper 的文本路径此前未像语音/图片路径那样拒绝在途 cookie 重复。使用实际生成的发送脚本和生产 listener 在 Node VM 中构造两个同 cookie、同目标、同正文请求，单条合成 add/update 与精确回读使两条请求都以同一 native ID 标为 `done`；修复前回归如预期失败，日志 `target-harness/feat004-cookie-collision-before.log` SHA-256 `DAD26F6D47E58EEDA3D032D3B1143F806F2B4A9F39618E72832FE6CDACE9D7EA`。这是合成风险复现，尚未证明固定 QQ 实际生成重复 cookie。
 
 文本脚本现在与媒体路径一致，在调用 `sendMsg` 前拒绝与 `R.sends` 在途项重复的 cookie，返回已有 `invalid_cookie`，不修改第一请求。回归验证首个请求仍经精确回读成功、第二个不发送；还覆盖在途图片/语音占用相同 cookie，以及不同 cookie 的同文请求可同时提交。修复后定向测试普通/research 各 9/9，Windows 进程内串行 `init.ps1 -Mode all` 通过（全仓测试在最后新增正向测试前运行，新增测试随后在两构建单独通过）。GitNexus 针对 `build_send_js` 的上游结果 LOW，直接调用 `send_text`、上游包括 `QqOwnerAdapter::native_op`；嵌入 JS 和动态分派仍需源码核对。只对仍在 `R.sends` 的冲突生效；项移除后的迟到回调、cookie 重用、QQ 原生 callback 线程和最终 drain 仍未证。未接入 QQ 或发送，feat-004 保持 in-progress。
 
-隔离 research release 构建通过，产物位于 `target-harness/feat004-cookie-research-20261116/x86_64-pc-windows-msvc/release/`，EXE/bridge SHA-256 分别为 `D1D458801C19463781D7E7ED97925BB6500312B966EB0AFA86E13E8DEA07D33E` / `6F15548CD0F1D37DE6C3A333881EE3FDEE4E4378E84E2E14385EFE3AECDD497D`；尚未现场加载。后续现场需重新核验已指定的新鲜进程和独立授权的发送范围；未证寿命不卸载。
+隔离 research release 构建通过，产物位于 `target-harness/feat004-cookie-research-20261116/x86_64-pc-windows-msvc/release/`，EXE/bridge SHA-256 分别为 `D1D458801C19463781D7E7ED97925BB6500312B966EB0AFA86E13E8DEA07D33E` / `6F15548CD0F1D37DE6C3A333881EE3FDEE4E4378E84E2E14385EFE3AECDD497D`；该构建当时尚未现场加载，后续正常路径现场见本次最新记录；未证寿命不卸载。
 
 隔离普通 release 同样构建通过，EXE/bridge SHA-256 分别为 `3F4991F79A1A3AAB5237F14577512D96E0C80E335C144E81A2722B3FC9285B57` / `D2DFB0E5D6BC77670A00436AD13D31F90FC38D635C10A473E7F833611F61D07F`，亦未现场加载。
 
