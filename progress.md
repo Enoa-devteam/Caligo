@@ -2,6 +2,10 @@
 
 ## Current State
 
+2026-11-16 feat-004 语音 cookie 防护版原消息只读回查（源码 `981b7dd`）：上一轮单次发送成功但现场 `get_msg` 报 10053；用户正常重启并指定新测试 QQ 根 PID `42452`、创建 `2026-11-16T05:21:25.1083438Z`。固定模块、PE/backend、唯一 Environment 与登记账号登录准入通过。将上一轮消息账本复制到独立运行目录并核对 SHA-256 一致，针对原持久消息 ID 执行一次 OneBot `get_msg`，HTTP 200 / retcode 0，返回私聊语音标识与发送账号、原消息 ID 一致；账本的目标和语音大小、MD5 与原样本一致。此查询读取已复制的持久账本，不是向 QQ 原生服务查询，不能据此解释第一次 10053 根因。第一次失败及栈完整保留。
+
+本轮无发送、请求 journal 为空；独立审计确认 runner 不含发送动作、原账本与副本一致、仅预留一次查询，以及 manager/owner 退出码 0、HTTP/SSE 端口关闭。QQ 同代次响应并保留 bridge，不重接、不热卸载。ignored `E:/stella/Caligo/local-evidence/feat004-voice-cookie-readback-20261116/` 的 preflight/runner/审计/审计摘要 SHA-256 为 `41A23E986945ED75D1E84CDE6D937C9D85D2CBEBACFE7422F49C5B1846228058` / `4446DF4C00E608D697B051BD67B768CEBF6752D38844E75EFD6F7F7A465CABFE` / `F7768DC96821714F84B16406AF87EBD45E0E78311C42FDAAAD30900774F91DD7` / `8EF2F07FE1300956C8238D30F26B589EF94B86083D441E89EBA3AAF2FE3E32E7`。此样本未验证真实 cookie 复用、迟到回调或原生线程/drain，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 语音 cookie 防护版单次私聊现场（源码 `981b7dd`）：用户重启、登录并授权向登记好友 B 单次发送 0.9 秒高—低—高三音语音；新 QQ 根 PID `33768`、创建 `2026-11-16T05:15:14.4004368Z`，固定模块、PE/backend 和唯一 Environment 只读准入通过。research 版单次接入，listener_armed、Active 和登记账号登录核验通过后只提交一次；发送接口 retcode 0 且返回持久消息 ID。用户确认一条语音可播放、提示音相符。独立审计确认唯一请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、回调 native ID 与持久消息身份一致，语音大小及 MD5 与预登记样本相符。
 
 后续现场 `get_msg` 的连接被 Windows 中止并报 `WinError 10053`，没有生成回读响应；runner 原始 `phase=send_reserved` 和失败栈原样保留，不能把发送成功、账本或对端可见当作 HTTP 回读成功。根因未知；不得重发，后续只能按合同准备新进程及原消息只读回查。manager/owner 退出码均 0，HTTP/SSE 端口关闭；同代 QQ 响应且 bridge 保留，不得重接或热卸载。合成停止探针通过，不证明真实迟到回调、QQ native callback 线程或全局 drain。样本不制造真实 cookie 冲突，feat-004 保持 in-progress。
