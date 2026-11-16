@@ -2,6 +2,16 @@
 
 ## Current State
 
+2026-11-16 feat-004 已退役 cookie 防护版单次私聊现场（源码 `997e92b`）：用户重启并授权向登记好友 B 单次发送；最新根 PID `22232`、创建 `2026-11-16T01:01:30.8646312Z`，固定模块、PE/backend 和唯一 Environment 准入通过。research 版单次接入、listener_armed、Active 和登记账号登录核验后仅提交一次，发送与 `get_msg` retcode 0、持久身份与正文匹配。独立技术审计核对单请求账本 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 和回读，用户确认对端收到且仅收到一条、内容相符，独立完整审计通过。
+
+旧 runner 的 `trace_pass=false` 原样保留：detail 使用单引号，runner 错按 JSON 解析；独立白名单复核观察两批同一 JS 代次/序号的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，仅在本轮单请求与账本条件下解释，不证明 QQ native callback OS 线程或全局完整性。合成停止探针 pass，manager/owner 退出码 0，HTTP/SSE 端口关闭，同代次 QQ 响应并保留 bridge；不得重接、热卸载或重发该样本。
+
+本机 ignored `E:/stella/Caligo/local-evidence/feat004-retired-cookie-send-20261116/` 的运行器、技术审计及摘要 SHA-256 `886929405B8B113ECEEC46E8C2DBF8063102733EECA3BE3311E792E431AAB839` / `6C28DD454D067227397BD0B9DFA8679C6D1D93434F5C0FDEA26153894118B354` / `E2A8822C9BAE5D3A4E514958D90787D9FC170AF20D81B91159E8C13FF7A7AE62`。完整审计脚本和摘要 SHA-256 `06A4301D308DF02A3E3FC8EEB2CC1349EB38A56FDAB1F34E7510AD9FEBC216C0` / `6891484115A14E2B7D2A831D82C038B03F7CA1129F4EBD9115124CA3962B3F35`。此样本只验证正常发送路径，不制造真实 cookie 冲突或迟到重放；feat-004 保持 in-progress。
+
+2026-11-16 feat-004 已退役文本 cookie 防护版零发送现场（源码 `997e92b`）：用户重启并登录后指定最新测试 QQ 根 PID `26916`、创建时间 `2026-11-16T00:59:12.8212617Z`，固定模块 hash、PE/backend 审计和唯一 Environment 只读准入通过。research 版单次接入后 listener_armed、Active 和登记账号登录核验通过；本轮零发送且请求账本为空。合成停止探针 pass，manager/owner 均退出码 0、HTTP/SSE 端口关闭；进程结束时响应并保留 bridge，不重接、不热卸载。独立审计复核准入、产物 pin、无发送代码、账本和停止。
+
+本机 ignored `E:/stella/Caligo/local-evidence/feat004-retired-cookie-nosend-20261116/` 的 preflight、runner、审计脚本及摘要 SHA-256 分别为 `E8B9A2F92EA2576061B8B83A43E308891100B3F3E69B7B41868CD4AEDDD6EF52` / `09EF681AF55E25ACB2C0FADA5138E78F61325A0DD4092B5CE66CCE949508745E` / `03D767E6DD09EE084B47FDA57AFFFD328182E29BC34DCADB40C3DD82558E31ED` / `674F599658AC472EB6D53F76C1643DC904B4368E702C1517EE8FF02AA1B9C584`。零发送未执行文本 cookie guard，不证明实际 cookie 复用或真实迟到、callback 线程和全局 drain；feat-004 保持 in-progress。
+
 2026-11-16 feat-004 文本已退役 cookie 离线防护（起点 `a32f59d`）：使用真实生成脚本及生产 listener，在 Node VM 中先完成第一条请求，再对同 cookie、目标和正文的第二条请求重放旧 add/update 和读回；修复前第二条错误地以旧 native ID 完成（`target-harness/feat004-retired-cookie-repro.log`）。这是合成复现，不证明 QQ 实际复用 cookie。此前只防在途冲突，未覆盖移除后的重用。
 
 文本路径现于 `sendMsg` 前在当前 JS 环境中保留本 guard 已认领的 cookie，监听器停止/重启和超时项清理不清空；重复或无效值拒绝。历史最多 65,536 个、每个值最多 256 字符；容量耗尽时拒绝新提交，需要新 JS 环境，不能通过淘汰记录继续。guard 的全局属性必须是不可写、不可配置的数据函数，否则拒绝，避免意外可变占位绕过。已认领值即使后续提交失败仍保留。仅覆盖本 guard 在该环境中认领的文本，不涵盖其他环境、旧版本、外部 QQ 消息或媒体的历史；不是恶意同进程脚本的安全边界。

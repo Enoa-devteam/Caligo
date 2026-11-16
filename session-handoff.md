@@ -1,5 +1,9 @@
 # Session handoff
 
+2026-11-16 feat-004 已退役 cookie 防护版单次私聊：用户授权一次，新鲜测试 QQ `22232` 准入、登录、发送/持久回读及单请求账本技术审计通过；用户确认对端收到且仅收到一条、内容相符，独立完整审计通过。manager/owner 正常停止、端口关闭，同代 QQ 响应并保留 bridge；不得重接、热卸载或重发。轨迹解析原失败、独立复核及范围见 [progress](progress.md#current-state)；真实 cookie 复用、迟到和原生线程/drain 未证，feat-004 保持 in-progress。
+
+2026-11-16 feat-004 已退役 cookie 防护版零发送现场：固定构建新进程 `26916` 准入、单次接入、登记账号登录核验及正常停止通过，空账本与合成停止探针经独立审计；详细证据见 [progress](progress.md#current-state)。该进程已加载 bridge，不得重接或热卸载；零发送未执行文本 guard，不能证明真实复用与原生 callback 线程/drain。
+
 2026-11-16 feat-004 文本已退役 cookie 防护：生产 listener 的合成重放先复现旧通知误确认后续同 cookie 请求，现对当前 JS 环境内本 guard 已认领的文本 cookie 保留有界历史，超限拒绝；测试、限制和证据见 [progress](progress.md#current-state)。后续可在用户指定的新鲜 QQ 代次按固定 hash 与现场合同准备正常路径验证；单次发送需新的明确范围授权，不重发旧样本。此修复未验证实际 QQ cookie 复用、其他来源 cookie、媒体历史或原生线程/drain，feat-004 仍 in-progress。
 
 2026-11-16 feat-004 cookie 修复版正常路径现场：用户授权单次私聊并确认对端收到一条；指定根 `5384` 当次准入、登录核验、发送/现场回读、单请求账本和独立阶段审计通过。manager/owner 停止码 0、端口关闭，QQ 响应并保留 bridge；旧 runner 的 trace 误解析保留，详见 [progress](progress.md#current-state)。该样本没有制造真实 cookie 冲突，迟到/移除后复用及线程/drain 未证；不得重接此进程、热卸载或重发本样本。
