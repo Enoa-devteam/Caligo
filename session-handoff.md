@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-16 feat-004 文本已退役 cookie 防护：生产 listener 的合成重放先复现旧通知误确认后续同 cookie 请求，现对当前 JS 环境内本 guard 已认领的文本 cookie 保留有界历史，超限拒绝；测试、限制和证据见 [progress](progress.md#current-state)。后续可在用户指定的新鲜 QQ 代次按固定 hash 与现场合同准备正常路径验证；单次发送需新的明确范围授权，不重发旧样本。此修复未验证实际 QQ cookie 复用、其他来源 cookie、媒体历史或原生线程/drain，feat-004 仍 in-progress。
+
 2026-11-16 feat-004 cookie 修复版正常路径现场：用户授权单次私聊并确认对端收到一条；指定根 `5384` 当次准入、登录核验、发送/现场回读、单请求账本和独立阶段审计通过。manager/owner 停止码 0、端口关闭，QQ 响应并保留 bridge；旧 runner 的 trace 误解析保留，详见 [progress](progress.md#current-state)。该样本没有制造真实 cookie 冲突，迟到/移除后复用及线程/drain 未证；不得重接此进程、热卸载或重发本样本。
 
 2026-11-16 feat-004 文本 cookie 冲突：合成生产 listener 复现同 cookie、目标和正文的两条在途文本由单个 native ID 双重确认；现于原生 `sendMsg` 前拒绝在途重复 cookie，与媒体路径一致。首条成功、第二条拒绝、媒体占用与不同 cookie 同文正例、普通/research 回归及隔离 research release hash 见 [progress](progress.md#current-state)。当时修复尚未现场加载，后续正常路径样本见上条；该检查不覆盖移出在途表后的迟到与复用，真实 callback OS 线程/最终 drain 仍 unknown。后续现场需指定新鲜 QQ 代次重新准入，发送另有明确范围和授权，不重发旧样本。

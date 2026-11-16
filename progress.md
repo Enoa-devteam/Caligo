@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 文本已退役 cookie 离线防护（起点 `a32f59d`）：使用真实生成脚本及生产 listener，在 Node VM 中先完成第一条请求，再对同 cookie、目标和正文的第二条请求重放旧 add/update 和读回；修复前第二条错误地以旧 native ID 完成（`target-harness/feat004-retired-cookie-repro.log`）。这是合成复现，不证明 QQ 实际复用 cookie。此前只防在途冲突，未覆盖移除后的重用。
+
+文本路径现于 `sendMsg` 前在当前 JS 环境中保留本 guard 已认领的 cookie，监听器停止/重启和超时项清理不清空；重复或无效值拒绝。历史最多 65,536 个、每个值最多 256 字符；容量耗尽时拒绝新提交，需要新 JS 环境，不能通过淘汰记录继续。guard 的全局属性必须是不可写、不可配置的数据函数，否则拒绝，避免意外可变占位绕过。已认领值即使后续提交失败仍保留。仅覆盖本 guard 在该环境中认领的文本，不涵盖其他环境、旧版本、外部 QQ 消息或媒体的历史；不是恶意同进程脚本的安全边界。
+
+回归覆盖完成后重放、超时清除、监听器重启、容量/长度上限及不可用/可变/accessor guard，正例仍覆盖不同 cookie 的同文发送。修复前另有可变 guard 绕过的负例（`target-harness/feat004-guard-descriptor-red.log`）；Node 命令长度限制和首次缺 Cargo 缓存的失败日志保留，采用 stdin 并补齐锁定依赖后复验。Windows MSVC 串行 `init.ps1 -Mode all` 通过，普通/research wrapper 各 15/15（日志 `target-harness/feat004-retired-cookie-all-final.log`）；隔离普通和 research release 构建通过。GitNexus `build_send_js` 上游 LOW，动态 JS 不在图中完整建模。隔离普通 release 的 EXE/bridge SHA-256 为 `16D6CF305C19A0A1EC27F890EA3796D52D49956955F037FC71C75A0506E1CDE6` / `544F41C42E1A16DC5727B853B35EEB1D9BEA86093CF81DDFF5C0A61996C19064`，research 为 `6FC378F1B4B38A85594F41B13FE7E7DFE1EE5ED7DB345CDE438300E7DB2965C8` / `A13006D42DAC61930A9C6AFE570B52D38714889C75CF9E9DB93BF7FF84644D50`。本轮未接入 QQ 或发送，新代码没有现场验收；先前 `a8b1da4` 的现场样本不自动外推到本次修改，真实 cookie 复用、原生线程和最终 drain 仍未证，feat-004 保持 in-progress。
+
 2026-11-16 feat-004 文本 cookie 修复版正常路径现场（源码 `a8b1da4`）：用户授权向登记好友 B 单次发送新标记；指定 QQ 根 PID `5384`、创建 `2026-11-15T14:03:47.7393043Z`，此前本代次未加载 bridge，当次固定模块、PE/backend 和唯一 Environment 只读准入通过。research EXE/bridge 使用下方隔离构建；listener_armed、Active 和登记账号登录核验后只发送一次，现场 HTTP 发送与 `get_msg` 均 retcode 0、持久身份与正文匹配；用户确认对端收到且仅收到一条。
 
 独立审计确认单请求 journal 顺序 `Queued → DispatchIntent → NativeStarted → ConfirmedSuccess`、native ID 和消息账本一致；白名单解析器观察两批同一 JS 代次/序号的 registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled，报告 scope unverified / completeness unknown，仅在本轮单请求及账本证据下解释。原 runner 保留 `trace_pass=false`：旧检查仍将已替换双引号的 detail 当 JSON；独立审计与解析器只读复核通过，不覆盖原结果。合成停止探针通过，manager/owner 退出码均 0、HTTP/SSE 端口关闭，QQ 同代次响应并保留 bridge；不得重接、热卸载或重发该样本。

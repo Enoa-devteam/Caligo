@@ -2539,6 +2539,25 @@ pub fn build_send_js(
     js.push_str(&request_json);
     js.push_str(";\n");
     js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.prototype.hasOwnProperty.call(R.sendResults, key) || Object.keys(R.sends).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    // Retain every text cookie in this JS environment: a late notification from a
+    // completed send must not be able to confirm a later same-cookie send.
+    // Bound memory and fail closed on exhaustion rather than evicting old cookies.
+    js.push_str(r#"    var guardKey = '__caligo_text_cookie_guard_v1';
+    if (!Object.prototype.hasOwnProperty.call(G, guardKey)) {
+      var seenCookies = new Set();
+      var claimCookie = function (value) {
+        if (typeof value !== 'string' || !value || value === '0' || value.length > 256) return 'invalid_cookie';
+        if (seenCookies.has(value)) return 'invalid_cookie';
+        if (seenCookies.size >= 65536) return 'cookie_history_exhausted';
+        seenCookies.add(value); return 'ok';
+      };
+      Object.defineProperty(G, guardKey, {value:claimCookie, writable:false, configurable:false, enumerable:false});
+    }
+    var guardDescriptor = Object.getOwnPropertyDescriptor(G, guardKey);
+    if (!guardDescriptor || typeof guardDescriptor.value !== 'function' || guardDescriptor.writable !== false || guardDescriptor.configurable !== false) return JSON.stringify({err:'cookie_history_unavailable'});
+    var cookieClaim = guardDescriptor.value(cookie);
+    if (cookieClaim !== 'ok') return JSON.stringify({err:cookieClaim});
+"#);
     js.push_str("    var pending = {cookie:cookie, chat:chat, peer:peerUid, text:");
     js.push_str(&text_json);
     js.push_str(", selfUin:selfUin, wireSeq:");
