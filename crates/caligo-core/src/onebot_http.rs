@@ -302,6 +302,12 @@ pub fn serve_one(
     access_token: Option<&str>,
     handler: impl FnOnce(&str, &Value, Value) -> ActionResponse,
 ) -> (String, String, Option<String>, Vec<u8>) {
+    // On Windows an accepted socket can inherit the listener's nonblocking
+    // mode. Read timeouts only bound blocking reads; otherwise a client that
+    // has not sent its complete request yet is rejected as incomplete.
+    if stream.set_nonblocking(false).is_err() {
+        return (String::new(), String::new(), None, Vec::new());
+    }
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
     let read_deadline = std::time::Instant::now() + MAX_READ_DURATION;
     let mut buf = Vec::with_capacity(4096);
