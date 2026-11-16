@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-16 feat-004 HTTP 10053 修复版零发送现场（源码 `de251e3`）：用户重启并登录后指定 QQ 根 PID `47980`、创建 `2026-11-16T07:54:58.0186913Z`，固定模块、PE/backend 和唯一 Environment 准入通过。research 版单次接入，listener_armed、Active 和登记账号登录核验通过；两个 `get_status` 请求分别在客户端连接后延迟 250 ms 发请求头、发送部分请求体后延迟 250 ms 发剩余数据，均 HTTP 200 / retcode 0。延迟由客户端计时并自报，未独立观测服务端 accept 时序。
+
+将此前图片消息账本复制到隔离运行目录并核对 SHA-256 一致，对原持久消息 ID 执行一次 OneBot `get_msg`，HTTP 200 / retcode 0、原身份和图片指纹匹配；该查询读取复制的持久账本，不是 QQ 原生查询。独立审计确认本轮零发送、请求 journal 为空、两个状态探针及单次消息查询、manager/owner 退出码 0、HTTP/SSE 端口关闭；QQ 同代次响应且保留 bridge，不得重接或热卸载。只覆盖指定零发送场景，不证明发送后连续回读或既往 10053 根因；旧失败保留，feat-004 in-progress。
+
+ignored `E:/stella/Caligo/local-evidence/feat004-http-fixed-nosend-20261116/` 的 preflight/runner/审计/审计摘要/探针结果 SHA-256 依次为 `C3BD41AC74B28E2BDC22D814BE0B5F5B9E77F2DE8D92BDD0B1E587BBAACDAB91` / `5B80D3E498833A3451AD4705D6782A5E5BB04399AEECD7E87DBB7C28578AC7E5` / `48688567FCC9FC91526E31DC6EF61725144E3D352DE885666FF51E2A821E2795` / `7CB8BEBB6917EAAAE434BE661F7565BD0C6F49852D414BBD9780DEF6827F1EB2` / `D72DEE6EE4D3AB67CB4B90C1887ADA14BDF7D4FCF368DE9502EC6796696CA2C3`。
+
 2026-11-16 feat-004 现场连续 HTTP 请求的 10053 离线诊断与修复（起点 `fe2f5ac`）：两次现场失败均在 Python 发送 `get_msg` 请求时的 `sendall` 报 WinError 10053。使用当前 Windows、同一 Python 客户端和正式 OneBot HTTP 解析/并行服务、纯模拟后端进行无 QQ 对照，修复前 90 对连续请求中 86 对通过、4 对报告 10053；修复后另 90 对全部通过。另以同一 `serve_one`、自建 accept 对照控制客户端连接后延迟 200 ms 才发请求头：继承监听器非阻塞模式的 12/12 报 10053、服务端均未读到完整头；显式切换阻塞模式的 12/12 返回 HTTP 200。模拟后端没有 QQ，计数仅覆盖指定本机实验；这些结果支持一个与现场栈相符的原因，但没有现场内核/包级证据，不能证明历史两次失败均由此造成。
 
 `serve_one` 现在在读取前将已接收连接切回阻塞模式；转换失败即停止处理，后续仍使用原来的有界读取期限和写入超时。GitNexus 上游影响 HIGH，直接涉及并行及串行 HTTP 入口和测试夹具，动态边界另经源码核对；回归在 Windows 修复前并行/串行延迟请求头均失败且报 10053，修复后并行及串行的延迟请求头、分段请求体均通过，已有 HTTP 消息回读测试通过；Windows MSVC 串行 `init.ps1 -Mode all` 通过，普通/research 延迟回归各 2/2，日志 `target-harness/feat004-http-10053-all.log`。真实 QQ 未接入、未发送，修复版尚无现场验收；原发送后的两次失败和后续只读回查仍按原样保留，feat-004 保持 in-progress。
