@@ -198,7 +198,7 @@ fn spawn_bridge_agent(
                                     request_id,
                                     native_id,
                                 },
-                            ) => BridgeMsg::SendResult {
+                            ) => BridgeMsg::SendResult { notice_id: 1,
                                 request_id,
                                 outcome: OutcomePayload::Success {
                                     native_id: native_id.clone(),
@@ -208,6 +208,7 @@ fn spawn_bridge_agent(
                         };
                         bridge.send(&msg).unwrap();
                         if let BridgeMsg::SendResult {
+                            notice_id: _,
                             request_id: _,
                             outcome: OutcomePayload::Success { native_id },
                         } = msg

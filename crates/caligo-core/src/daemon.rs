@@ -1066,6 +1066,7 @@ impl Daemon {
                     }
                     BridgeMsg::SendResult {
                         request_id,
+                        notice_id,
                         outcome,
                     } => {
                         let terminal = !matches!(&outcome, OutcomePayload::AcceptedUnconfirmed);
@@ -1101,6 +1102,7 @@ impl Daemon {
                                 &conn,
                                 &CoreToBridgeMsg::SendResultAck {
                                     request_id,
+                                    notice_id,
                                     terminal,
                                 },
                             )?;

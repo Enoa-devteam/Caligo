@@ -1003,6 +1003,19 @@ impl<A: HostAdapter> Resident<A> {
         release_notice_slot(&mut c, request_id, if started { 0b01 } else { 0b10 })
     }
 
+    /// Apply an ACK for the specific unknown notice. A later strong result
+    /// must retain its own slot even if this older ACK arrives afterwards.
+    pub fn ack_unknown_notice(&self, request_id: &str) -> bool {
+        let mut c = self.core.lock().unwrap();
+        let Some(rec) = c.requests.get_mut(request_id) else { return false };
+        if rec.state != ReqState::DeliveryUnknown { return false; }
+        if rec.late_receipt_deadline.is_some() {
+            rec.unknown_acked = true;
+            return true;
+        }
+        release_notice_slot(&mut c, request_id, 0b10)
+    }
+
     /// 中间态 ACK 移除当前 outbox 项，但保留终态结果槽。
     pub fn ack_result_notice(&self, request_id: &str, terminal: bool) -> bool {
         let mut c = self.core.lock().unwrap();

@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 worker 结果序号 ACK：业务协议 revision 4 在结果与 ACK 加必填序号，worker 在自身生存期保留递增身份并按序号匹配，旧 unknown ACK 不释放后续强身份槽；合成和命名管道证据见 [progress](progress.md#current-state)。跨 worker/宿主身份、正文保留、停止恢复与 QQ 现场尚未闭合；两端须匹配 revision，unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 unknown 窗口容量：resident 到期接口现在仅在 unknown 已确认时释放槽；未确认时到期保留，确认后释放，假宿主正反测试见 [progress](progress.md#current-state)。源码未发现该到期接口的正式调用；worker 退出丢失、同类终态版本、持久恢复和现场均未闭合。后续继续有界副本与版本化 ACK；unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 worker ACK 防护：结果 ACK 现在匹配请求、终态类型和当前连接已发送项后才移除及释放槽位；定向红绿对照见 [progress](progress.md#current-state)。同类终态版本、worker 退出丢失、持久恢复和现场仍未闭合；继续版本化 ACK 与 resident 保留设计。现场须新鲜进程准入，unknown 不重发，未证寿命不卸载。

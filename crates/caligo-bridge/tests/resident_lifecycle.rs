@@ -700,6 +700,38 @@ fn unacked_unknown_keeps_capacity_after_correction_window_expires() {
 }
 
 #[test]
+fn old_unknown_ack_must_not_release_new_success_capacity() {
+    let outcomes = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let resident = Resident::new(
+        LateReceiptHost { owner: OWNER, outcomes: outcomes.clone() },
+        ResidentLimits { results_max: 2, ..ResidentLimits::default() },
+    );
+    resident.bootstrap().unwrap();
+    let request = |id: &str| OwnedRequest::SendText {
+        request_id: id.into(), wire_seq: 1, timeout_ms: 1, chat_type: 2,
+        peer_uid: "123".into(), text: "x".into(),
+    };
+    assert_eq!(resident.submit(request("r")), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    resident.take_results();
+    assert!(resident.ack_notice("r", true));
+    outcomes.lock().unwrap().push_back(("r".into(), SendOutcome::Unknown {
+        request_id: "r".into(), reason: None, late_receipt_possible: true,
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    outcomes.lock().unwrap().push_back(("r".into(), SendOutcome::Success {
+        request_id: "r".into(), native_id: "strong".into(),
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    assert_eq!(resident.take_results().len(), 2);
+    // Simulate the worker applying the older unknown ACK after success arrived.
+    assert!(!resident.ack_unknown_notice("r"));
+    assert_eq!(resident.submit(request("next")), SubmitVerdict::QueueFull);
+    assert!(resident.ack_result_notice("r", true));
+    assert_eq!(resident.submit(request("next")), SubmitVerdict::Accepted);
+}
+
+#[test]
 fn original_request_id_survives_async_response_correlation() {
     let pending = Arc::new(std::sync::Mutex::new(None));
     let resident = Resident::new(

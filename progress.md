@@ -2,6 +2,16 @@
 
 ## Current State
 
+2026-11-17 feat-004 结果 ACK 序号（起点 `a153464`）：worker 接收 owner 通知时分配本 worker 生存期内单调非零 `notice_id`，保存在跨连接 outbox；结果消息携带该序号，daemon 应用结果后在 ACK 中回显，worker 须同时匹配请求、类型、当前连接已发送状态及序号才移除。图片/语音提交前立即拒绝的结果使用保留值 0，不属于 worker outbox；普通结果不会匹配 0。序号用尽时不回绕、不再从通道取下一项；测试覆盖该边界。业务协议 revision 从 3 升至 4，握手验证拒绝不匹配，两端必须使用匹配构建；v3 wire 的结果及 ACK 字段必填，旧无序号消息不能静默解码。
+
+旧 unknown ACK 即便命中自身通知，也不能释放已到达的强身份 success 的槽；正式 worker 对 unknown 调用独立 resident ACK 路径，只有 resident 仍处于 unknown 状态才允许更新其确认或释放槽。合成对照分别复现旧同类终态 ACK 移除新 success、旧 unknown ACK 释放 success 槽，修复后通过。受控真实命名管道测试验证 daemon 对指定序号 42 的回显，以及写账后 ACK 丢失时的结果重放与假宿主不重发；不证明真实 QQ 曾发生这些故障。
+
+此序号只在同一 worker 生存期唯一，重连保留但 worker 重建可重置，尚非跨 worker/宿主持久身份；NativeStarted ACK 尚无序号；通道与 worker outbox 的正文仍可能随 worker 退出丢失。序号耗尽仅停止取通道，不提供人工恢复或完整上游背压证明；daemon 重启后连接代次唯一性、真实 QQ、最终 drain 和持久恢复均未验。必须继续实现 resident 有界持有、worker 重建身份及恢复合同，不得以此次 ACK 匹配宣称端到端持久确认；unknown 不自动重发。
+
+同类旧 ACK 与错误槽位释放红灯分别为 `target-harness/feat004-version-red.log`、`target-harness/feat004-version-slot-red.log`，SHA-256 `785420931AB884FCA2FD2A6679280164965028D7CAD49BDA648140D5600AA0B9` / `9BDAB34F8DB08DE3BE8D15BA4552D003D5E0579C2E6396CFD15A109E1FDE37C3`；对应修复后日志 `target-harness/feat004-version-green-final.log` / `target-harness/feat004-version-slot-green.log` SHA-256 `74BFC5A1294C3656DE45C9707528E90E43D1AF66AB9F38C776CFE3AA429A621B` / `5D971CF504125A8375E1BE3BDE08C713E1FFA49C0EBCB2B9EF55F88278C0DD63`。协议缺字段/序列化、耗尽、命名管道回显/ACK 丢失日志 SHA-256 依次为 `3CC60069FDC1226A741D9A201352C826C142284A25DF1E4F0D990E9832005159` / `381085478E5769C7BC8F6BCC706A1F75E88C84945F57721258A50CA6B3F98FD5` / `63F0F0C6467DA16FDD1BBAB9175D73B752D7FC2DA017EB70D66A471E8AB9754C` / `D250EA1BC6CD7CBD2F3F7F9F97626A2D9F8239DAD359D72DAF768AF6C8E56607`，日志依次为 `target-harness/feat004-version-wire.log`、`target-harness/feat004-version-exhaustion.log`、`target-harness/feat004-version-echo.log`、`target-harness/feat004-version-pipe.log`。
+
+GitNexus 基于 `E:/stella/Caligo-feat-004` 起点 `a153464`：`PendingNotice` 上游 CRITICAL，`session_loop`、`notice_message`、`take_acked_result` 上游 HIGH，IPC 枚举与 daemon 入口 UNKNOWN；按源码补核 v3 类型、worker/daemon 与握手调用，不将图缺边视为零影响。最终 11 文件变更图 HIGH；Windows MSVC 串行 `init.ps1 -Mode all` 普通及 research 全仓通过，日志 `target-harness/feat004-version-all.log` SHA-256 `2B797CEB73BC301BF31F7ABFD3061E4FD381543ABD59BE6F88260CAD33E390EC`。随后仅调整测试夹具使用不同序号并重跑 ACK 定向测试通过，日志 `target-harness/feat004-version-ack-final.log` SHA-256 `FF61D2B2DC748CD0FA750C2B395D3425BEC3435E6D26011FB8C7D0B07340635A`；文档检查通过。未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 unknown 迟到窗口的容量合同（起点 `b10cf2f`）：`expire_late_receipts` 曾在迟到强身份窗口结束时无条件释放结果槽，即使对应 unknown 尚未得到 ACK；容量为 2 的假宿主对照因此在结果未确认时接受新请求。现记录窗口内收到的 unknown ACK，仅当窗口结束且 ACK 已到达才由到期接口释放；若先到期则保留槽，随后 ACK 才释放。到期后仍拒绝迟到强身份，重复到期/ACK 不重复释放；已有 ACK 先于到期回归继续通过。
 
 此接口的源码调用搜索仅发现测试，未发现正式路径主动调用，因此本轮是对 resident 容量合同的离线修复，不声称现场触发过该问题或生产路径已获得定时清理。此修改不保留 worker/通道丢失的结果正文，也不解决同类终态旧 ACK 混淆、版本化持久确认、宿主退出或 QQ 现场验收。下一步仍须处理有界副本和精确版本确认，unknown 不重发。
