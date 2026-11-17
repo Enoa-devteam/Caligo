@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-17 feat-004 resident 满额背压恢复（起点 `31b79ef`）：通知交接现在区分 `Full`、`ChannelClosed` 和 `SequenceExhausted`。满额为可重试状态，不永久锁存；正式 QQ owner 与 research native pump 每次派发前先尝试交接已有后缀，仍满时暂停派发、查询 drain 与后续 JS 快照确认，daemon ACK 释放容量后按原 FIFO 和既有序号继续。交接恰好填满保留集合时也返回 `Full`，该 tick 不继续派发或轮询；容量满且无后缀时预检仍暂停。通道明确拒收与序号耗尽仍永久锁存并保留通知；通道关闭只有发送尝试时可检测。
+
+假宿主红灯复现旧实现满额永久锁存；修复后覆盖逐项 ACK、FIFO、容量填满时派发暂停、满额期间通道关闭、序号耗尽与重复硬停。Windows 命名管道测试使用自建 daemon、实际 worker 和暂存/转发通道控制时序：2 项容量满后，真实 daemon ACK 释放空间，unknown 与 success 后缀继续交接、账本得到强身份，假宿主发送仅一次。暂存转发是受控测试夹具，非 QQ 现场；没有独立运行 V8 来证明 JS ACK 在真实宿主的时序。
+
+红灯 `target-harness/feat004-backpressure-red.log` SHA-256 `EF7B8F4665603CEAAAD171B0DB51341B097C72D9D45E2A6C5E4E1C513DA1A430`；最终 resident 生命周期/交接回归、序号耗尽、真实管道背压回归日志 `target-harness/feat004-backpressure-final-tests.log` / `target-harness/feat004-backpressure-final-exhaustion.log` / `target-harness/feat004-backpressure-final-pipe.log` SHA-256 `34B1DAC48BE058D91DA76EE560257F77EE4111648DC7B44C8384037D4BCA4A1D` / `EFEEF87ED8C137A47D72EDBF05EF2ADBE41E8AAE354183FEC25B9C4A7EDA6880` / `A6267B343ADDF9633F53950C4A6E820A25B8DCA6F6CE7DC428D6CA12127D1752`。开发中最初 all 在收紧满额当拍暂停前启动，不能作为最终版本验证；最终 Windows MSVC 串行 `init.ps1 -Mode all` 的普通与 research 全仓测试通过，日志 `target-harness/feat004-backpressure-final-all.log` SHA-256 `98B6468108DADC73A49F7A6A3B5D7A834206EE11CF16CD35FF9ECDE5A48BEDF0`；最终 9 文件变更图 HIGH。
+
+在长期满额下，查询和 research 回调 drain 会暂停；其队列上限、持续运行与宿主行为未完成验证。通道关闭后的替换、自动 worker 重启/并发排他、进程退出持久化、NativeStarted ACK 版本、最终 drain 和 QQ 现场仍未闭合；unknown 不重发。GitNexus 对 `forward_retained`/`is_closed` 为 LOW、正式 owner/闸门调用为 UNKNOWN，结合源码核对两条泵路径；最终图不得替代真实运行验收。本轮未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 resident 内通知保留与 worker 重建（起点 `2fe9a6e`）：正式 QQ owner 与 research native pump 在向 worker 通道交接前，将通知与单调非零序号保存在 resident；worker 启动时从同一 resident 的保留集合重建 outbox，通道中的重复或已确认副本不再重复加入。daemon ACK 与已发送项匹配后，在同一 resident 锁中删除精确副本并更新容量；unknown 的旧 ACK 不释放后续强身份结果的槽。序号现在属于 resident 生命周期，跨其 worker 重建保持，但不跨宿主/新 resident 持久化；业务协议仍为 revision 4。
 
 保留集合最多 `min(results_max, 256)` 项，满额、序号耗尽或通道拒收时交接失败并锁存闸门，暂停后续 owner 派发及 JS 快照确认；已保留项和未交出的 `results_out` 后缀留在 resident 内，不声称总内存字节或所有入口均已有完整上限证明。闸门锁存后不会自动恢复：被拒项之后尚在 `results_out` 的后缀不会自动进入重建 worker，须后续设计安全恢复；当前生产入口没有自动重启 worker，人工重建仅为离线测试，且必须先确认旧 worker 已停止，尚未建立并发 worker 排他门。owner 显式 stop、进程退出、daemon 重启的连接代次、NativeStarted ACK 的版本身份、接收事件及 QQ 原生线程/drain 均未闭合；resident 不是磁盘持久化。容量锁存可能造成持续停派，不能描述为自动恢复或生产验收。

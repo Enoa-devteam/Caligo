@@ -799,12 +799,21 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
                         let _ = cv.wait_timeout(guard, std::time::Duration::from_millis(100));
                     }
                     if notice_handoff.is_closed() { continue; }
+                    // Retry a retained suffix before dispatch or response drain.
+                    if notice_handoff.forward(&resident, &result_tx).is_err() {
+                        if notice_handoff.is_closed() {
+                            stage(&report_pump, "result_notice_handoff", false, "closed_or_exhausted_retained");
+                        }
+                        continue;
+                    }
                     let _ = resident.drain();
                     // N3 retCode 消费者排空:QQ 分发线程 → 槽 → 账本终局。
                     resident.drain_send_responses();
                     resident.expire_late_receipts(std::time::Instant::now());
                     if notice_handoff.forward(&resident, &result_tx).is_err() {
-                        stage(&report_pump, "result_notice_handoff", false, "closed_or_full_retained");
+                        if notice_handoff.is_closed() {
+                            stage(&report_pump, "result_notice_handoff", false, "closed_or_exhausted_retained");
+                        }
                         continue;
                     }
                     for ev in resident.take_events() {

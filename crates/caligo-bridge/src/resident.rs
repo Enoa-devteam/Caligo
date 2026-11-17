@@ -215,18 +215,33 @@ pub struct RetainedNotice {
 /// The worker outbox uses the same item bound; a full copy set stops handoff.
 const MAX_RETAINED_NOTICES: usize = 256;
 
-/// A rejected send, full retention, or exhausted identity latches this
-/// owner-only gate so later pump ticks cannot dispatch more work.
+/// A full retained set is transient; the owner must pause until ACK frees space.
+/// A disconnected receiver or exhausted identity latches this owner-only gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffError {
+    Full(usize),
+    ChannelClosed(usize),
+    SequenceExhausted(usize),
+}
+
 #[derive(Default)]
-pub struct ResultHandoffGate { closed: std::sync::atomic::AtomicBool }
+pub struct ResultHandoffGate { closed: std::sync::atomic::AtomicU8 }
 
 impl ResultHandoffGate {
-    pub fn is_closed(&self) -> bool { self.closed.load(Ordering::Acquire) }
+    pub fn is_closed(&self) -> bool { self.closed.load(Ordering::Acquire) != 0 }
 
-    pub fn forward<A: HostAdapter>(&self, resident: &Resident<A>, sender: &std::sync::mpsc::Sender<RetainedNotice>) -> Result<usize, usize> {
-        if self.is_closed() { return Err(0); }
+    pub fn forward<A: HostAdapter>(&self, resident: &Resident<A>, sender: &std::sync::mpsc::Sender<RetainedNotice>) -> Result<usize, HandoffError> {
+        match self.closed.load(Ordering::Acquire) {
+            1 => return Err(HandoffError::ChannelClosed(0)),
+            2 => return Err(HandoffError::SequenceExhausted(0)),
+            _ => {}
+        }
         let result = resident.forward_retained(|notice| sender.send(notice).map_err(|error| error.0));
-        if result.is_err() { self.closed.store(true, Ordering::Release); }
+        match result {
+            Err(HandoffError::ChannelClosed(_)) => self.closed.store(1, Ordering::Release),
+            Err(HandoffError::SequenceExhausted(_)) => self.closed.store(2, Ordering::Release),
+            _ => {}
+        }
         result
     }
 }
@@ -903,24 +918,26 @@ impl<A: HostAdapter> Resident<A> {
     /// Single-owner handoff: retain before sending a copy. On full capacity,
     /// exhausted identity, or rejection, leave all notices in resident memory.
     /// Caller must stop producing notices on Err; no lock is held during send.
-    pub fn forward_retained<F>(&self, mut send: F) -> Result<usize, usize>
+    pub fn forward_retained<F>(&self, mut send: F) -> Result<usize, HandoffError>
     where F: FnMut(RetainedNotice) -> Result<(), RetainedNotice> {
         let mut sent = 0;
         loop {
             let retained = {
                 let mut c = self.core.lock().unwrap();
-                if c.results_out.is_empty() { return Ok(sent); }
+                // A full set pauses even when the pending queue just became
+                // empty, so the caller cannot dispatch new work in this tick.
+                let Some(notice_id) = c.next_notice_id else { return Err(HandoffError::SequenceExhausted(sent)) };
                 if c.retained_notices.len() >= c.limits.results_max.min(MAX_RETAINED_NOTICES) {
-                    return Err(sent);
+                    return Err(HandoffError::Full(sent));
                 }
-                let Some(notice_id) = c.next_notice_id else { return Err(sent) };
+                if c.results_out.is_empty() { return Ok(sent); }
                 let notice = c.results_out.pop_front().expect("checked nonempty");
                 c.next_notice_id = notice_id.checked_add(1);
                 let retained = RetainedNotice { notice_id, notice };
                 c.retained_notices.push_back(retained.clone());
                 retained
             };
-            if send(retained).is_err() { return Err(sent); }
+            if send(retained).is_err() { return Err(HandoffError::ChannelClosed(sent)); }
             sent += 1;
         }
     }
@@ -1462,10 +1479,15 @@ mod retained_sequence_tests {
         r.drain().unwrap();
         r.core.lock().unwrap().next_notice_id = Some(u64::MAX);
         let mut sent = Vec::new();
-        assert_eq!(r.forward_retained(|item| { sent.push(item); Ok(()) }), Err(1));
+        assert_eq!(r.forward_retained(|item| { sent.push(item); Ok(()) }), Err(HandoffError::SequenceExhausted(1)));
         assert_eq!(sent[0].notice_id, u64::MAX);
         assert_eq!(r.retained_notices(), sent);
-        assert_eq!(r.forward_retained(|_| panic!("must not wrap or send")), Err(0));
+        assert_eq!(r.forward_retained(|_| panic!("must not wrap or send")), Err(HandoffError::SequenceExhausted(0)));
+        let gate = ResultHandoffGate::default();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert_eq!(gate.forward(&r, &tx), Err(HandoffError::SequenceExhausted(0)));
+        assert!(gate.is_closed());
+        assert_eq!(gate.forward(&r, &tx), Err(HandoffError::SequenceExhausted(0)));
         assert_eq!(r.take_results().len(), 1);
     }
 }

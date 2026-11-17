@@ -1,5 +1,5 @@
 use caligo_bridge::host_adapter::{HostAdapter,HostError,HostOp,HostOpResult};
-use caligo_bridge::resident::{OwnedRequest,Resident,ResidentLimits,ResidentNotice,SendOutcome,SubmitVerdict,ResultHandoffGate};
+use caligo_bridge::resident::{OwnedRequest,Resident,ResidentLimits,ResidentNotice,SendOutcome,SubmitVerdict,ResultHandoffGate,HandoffError};
 struct Host;
 impl HostAdapter for Host {
  fn owner_thread_id(&self)->u64{1} fn current_thread_id(&self)->u64{1}
@@ -51,9 +51,9 @@ fn live_worker_receives_ordered_notices_once() {
 #[test]
 fn disconnected_worker_latches_and_cannot_reopen_on_later_ticks() {
  let r=resident();let gate=ResultHandoffGate::default();let (dead,rx)=std::sync::mpsc::channel();drop(rx);
- assert_eq!(gate.forward(&r,&dead),Err(0));assert!(gate.is_closed());
+ assert_eq!(gate.forward(&r,&dead),Err(HandoffError::ChannelClosed(0)));assert!(gate.is_closed());
  let (new_sender,new_receiver)=std::sync::mpsc::channel();
- assert_eq!(gate.forward(&r,&new_sender),Err(0));assert!(new_receiver.try_recv().is_err());
+ assert_eq!(gate.forward(&r,&new_sender),Err(HandoffError::ChannelClosed(0)));assert!(new_receiver.try_recv().is_err());
  assert_eq!(r.retained_notices().len(),1,"failed item stays in retained outbox");
  assert_eq!(r.take_results().len(),1,"unsent suffix stays in result queue");
 }

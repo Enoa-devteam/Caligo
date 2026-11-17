@@ -926,7 +926,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         // result snapshot; it never causes the QQ send to be replayed.
         let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
             std::sync::Mutex::new(None);
-        // A rejected handoff or exhausted retention stops subsequent dispatch.
+        // Full retention pauses dispatch; closed channel or exhausted IDs latch.
         let notice_handoff = resident::ResultHandoffGate::default();
         qq_entry::install_drain_hook(Box::new(move || {
             if owner_stop.load(Ordering::Acquire) {
@@ -938,6 +938,13 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 return 0;
             }
             if notice_handoff.is_closed() { return 0; }
+            // Flush the existing suffix before new work or JS acknowledgements.
+            if notice_handoff.forward(&r, &tx).is_err() {
+                if notice_handoff.is_closed() {
+                    qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_exhausted_retained");
+                }
+                return 0;
+            }
             r.drain_queries();
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
             // 重试直至成功;首次失败原因写阶段日志(不吞)。
@@ -955,9 +962,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             }
             let _ = r.drain();
             if notice_handoff.forward(&r, &tx).is_err() {
-                // Handoff was rejected or retention is full; preserve notices
-                // and do not acknowledge or consume another JS result snapshot.
-                qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_full_retained");
+                // Preserve the suffix and defer JS acknowledgement until handoff.
+                if notice_handoff.is_closed() {
+                    qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_exhausted_retained");
+                }
                 return 0;
             }
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;

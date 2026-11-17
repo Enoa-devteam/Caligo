@@ -672,6 +672,89 @@ fn worker_rebuild_replays_resident_notices_without_native_retry() {
     runner.join().unwrap().unwrap();
 }
 
+/// Real daemon ACKs free bounded resident capacity and unblock the pending suffix.
+#[test]
+fn daemon_ack_releases_backpressure_without_repeating_native_send() {
+    use caligo_bridge::resident::{HandoffError, OwnedRequest, ResultHandoffGate, SubmitVerdict};
+    struct AsyncLabHost;
+    impl HostAdapter for AsyncLabHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
+                HostOp::Probe => Ok(HostOpResult::ProbeDone),
+                HostOp::SendText { request_id, .. } => {
+                    LAB_SENDS.fetch_add(1, Ordering::Relaxed);
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                }
+                _ => panic!("unexpected operation"),
+            }
+        }
+    }
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("backpressure");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(AsyncLabHost, ResidentLimits { results_max: 2, ..ResidentLimits::default() }));
+    resident.bootstrap().unwrap();
+    let before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let (done, wait) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "pressure-client") { break c; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-PRESSURE".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-PRESSURE-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-PRESSURE") != Some("queued") {
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(resident.drain().unwrap(), 1);
+    resident.complete_sends(&[("R-PRESSURE".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-PRESSURE".into(), "unknown".into())]);
+    resident.complete_sends(&[("R-PRESSURE".into(), "strong-id".into())], &[], &[]);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let gate = ResultHandoffGate::default();
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(2)));
+    assert_eq!(resident.submit(OwnedRequest::Probe { id: 7 }), SubmitVerdict::Accepted);
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(0)));
+    assert_eq!(resident.pending_ingress(), 1);
+    for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+    let deadline = Instant::now() + Duration::from_secs(10); let mut probe_ran = false;
+    loop {
+        let ready = gate.forward(&resident, &staged_tx).is_ok();
+        for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+        if ready && !probe_ran { assert_eq!(resident.drain().unwrap(), 1); probe_ran = true; }
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-PRESSURE".into() }).unwrap();
+        if probe_ran && resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == "strong-id") { break; }
+        assert!(Instant::now() < deadline, "ACKs did not drain pressure and pending suffix");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::CoreStopped);
+    runner.join().unwrap().unwrap();
+}
+
 fn wake_false() -> bool {
     false
 }
