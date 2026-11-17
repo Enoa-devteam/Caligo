@@ -1030,6 +1030,8 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
                 WorkerExit::LocalStop => "LocalStop",
                 WorkerExit::CoreStopped => "CoreStopped",
                 WorkerExit::HelloRejected => "HelloRejected",
+                WorkerExit::WorkerAlreadyRunning => "WorkerAlreadyRunning",
+                WorkerExit::WorkerQuarantined => "WorkerQuarantined",
             };
             let ok = exit == WorkerExit::LocalStop || exit == WorkerExit::CoreStopped;
             stage(

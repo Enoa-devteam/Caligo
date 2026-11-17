@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-17 feat-004 resident 单 worker 与异常隔离（起点 `5139445`）：`run_worker` 在快照、计数发布和连接之前，为同一个 resident 原子获取独占 lease；第二个 worker 返回 `WorkerAlreadyRunning`，不连接或发送。正常退出时先完成内部会话和通道接收端的释放，再释放 lease，允许在同一 resident 上重新启动；线程 panic 展开时将该 resident 代次永久标为 `WorkerQuarantined`，后续 worker 不连接，等待独立恢复方案。正式入口对 lease 拒绝写固定诊断，research 入口按独立退出原因报告失败；不改变 QQ 原生回调寿命或自动重启。
+
+自建 16 线程屏障对照只允许一个 lease、正常释放后可再取得；真实 Windows 命名管道测试覆盖在首 worker 已接入时拒绝第二 worker、首 worker 健康及停止后释放，另在实际 worker 会话退出路径注入 panic，验证后续同 resident worker 隔离且零连接。同一 resident 的正常退出后通知重建回归继续通过。panic 隔离依赖 Rust unwind；abort、进程死亡、持有者内存破坏、不同 resident、QQ callback quiescence 和跨宿主恢复不在该门的证明范围。若误将原 worker 通道接收端交给被拒绝的另一调用，该接收端仍会在拒绝返回时被丢弃；调用方须保证通道所有权。
+
+旧无排他真实管道负例 `target-harness/feat004-exclusive-red.log` SHA-256 `1548C68471C060C3303533613663C0DE5B4E405F88F5AF91F8030F0CD418E4BB`；16 线程与 unwind 隔离日志 `target-harness/feat004-exclusive-concurrency.log` / `target-harness/feat004-exclusive-panic.log` SHA-256 `08A75AD678F094A72BF662714C4F0E6A669437F94A8A3C7BDA9F291B1D93203F` / `4851E5A23042962BACB792D41FB04E6F0FAEDAF5AF23AE60D4CF15CEC921EA4D`；真实管道组合回归 `target-harness/feat004-exclusive-pipe-final2.log` SHA-256 `BDADE7709660EB2C9A5B52A4416E179B39E74DA610F93A540C19B0F71D98121C`。首次组合及 all 因测试误将 daemon 初始 epoch=1 视为已连接，过早停止 worker，随后串行测试互斥锁中毒；原失败日志 `target-harness/feat004-exclusive-pipe-final.log` / `target-harness/feat004-exclusive-all.log` SHA-256 `F90BBBBA575477D985D17320BFE223F748E8C788B5A8E6C060003180A60939CB` / `6E7541FEFBFAE0F790392D2AC783953D9C3924E302448A1EDDC57F8818431962`，修正为等待当次 epoch 前进后重跑。最终 Windows MSVC 串行 `init.ps1 -Mode all` 普通与 research 全仓通过，包含两个真实管道排他/异常用例及重建回归；日志 `target-harness/feat004-exclusive-final-all.log` SHA-256 `B22F515685B76FD597CC963A7E551B645A5E17A94D8BC0F60B352934DB6179E0`。最终 8 文件变更图 HIGH。
+
+通道更换/自动 worker 重启、panic 代次人工恢复、宿主退出持久化、NativeStarted ACK 版本、长时间满额与 QQ 现场仍未闭合；不能把单 resident lease 推断为进程或账号级排他。当前只读观察到测试 QQ 根 PID `38060`（创建 `2026-11-16T10:53:51.6672356Z`）仍映射 `caligo_bridge.dll`；这是当次快照，后续现场须正常重启、登录并重新核验代次与准入，不重接此进程、不重发 unknown。GitNexus 对 `run_worker`/research 入口为 LOW、resident/退出枚举/QQ 入口 UNKNOWN，结合源码核对，不将缺边视为零影响。本轮未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 resident 满额背压恢复（起点 `31b79ef`）：通知交接现在区分 `Full`、`ChannelClosed` 和 `SequenceExhausted`。满额为可重试状态，不永久锁存；正式 QQ owner 与 research native pump 每次派发前先尝试交接已有后缀，仍满时暂停派发、查询 drain 与后续 JS 快照确认，daemon ACK 释放容量后按原 FIFO 和既有序号继续。交接恰好填满保留集合时也返回 `Full`，该 tick 不继续派发或轮询；容量满且无后缀时预检仍暂停。通道明确拒收与序号耗尽仍永久锁存并保留通知；通道关闭只有发送尝试时可检测。
 
 假宿主红灯复现旧实现满额永久锁存；修复后覆盖逐项 ACK、FIFO、容量填满时派发暂停、满额期间通道关闭、序号耗尽与重复硬停。Windows 命名管道测试使用自建 daemon、实际 worker 和暂存/转发通道控制时序：2 项容量满后，真实 daemon ACK 释放空间，unknown 与 success 后缀继续交接、账本得到强身份，假宿主发送仅一次。暂存转发是受控测试夹具，非 QQ 现场；没有独立运行 V8 来证明 JS ACK 在真实宿主的时序。

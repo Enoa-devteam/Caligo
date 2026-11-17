@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 单 worker lease：同 resident 并发 worker 拒绝，正常退出在会话/接收端关闭后释放，unwind panic 则隔离该代次；自建并发和真实管道回归见 [progress](progress.md#current-state)。不证明不同 resident、abort、原生回调/宿主退出；无自动重启或通道替换。当前测试 QQ 根 `38060` 当次仍映射 bridge，现场须重启登录并重新准入；unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 满额背压恢复：正式 owner/research pump 在派发前重试后缀；满额暂停并在 ACK 释放空间后恢复 FIFO，通道拒收/序号耗尽仍硬停。假宿主与受控真实管道对照见 [progress](progress.md#current-state)。长时间暂停下的队列、自动重启/并发排他、跨宿主恢复、stop/drain 与 QQ 现场仍未证；unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 resident 通知保留：正式 owner/research pump 在交接前保留有界副本，序号跨同一 resident 的 worker 重建保持；假宿主和真实命名管道重建/去重回归见 [progress](progress.md#current-state)。满额/拒收会锁存停派且尾项需后续恢复，无自动 worker 重启或并发排他，宿主退出、stop/drain 与 QQ 现场仍未证；unknown 不重发，未证寿命不卸载。上轮到期接口调用遗漏已在 progress 勘误：research native pump 确有调用。

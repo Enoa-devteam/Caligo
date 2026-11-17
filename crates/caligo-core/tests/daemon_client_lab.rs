@@ -755,6 +755,86 @@ fn daemon_ack_releases_backpressure_without_repeating_native_send() {
     runner.join().unwrap().unwrap();
 }
 
+#[test]
+fn concurrent_worker_for_same_resident_must_be_rejected() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-exclusive");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let baseline_epoch = daemon.connection_epoch();
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done, wait) = mpsc::channel();
+    let (first_tx, first_rx) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, first_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.connection_epoch() <= baseline_epoch || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+        assert!(Instant::now() < deadline, "first worker did not attach");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let stopped = Arc::new(AtomicBool::new(true));
+    let (second_tx, second_rx) = mpsc::channel();
+    let (rejected_counters, exit) = run_worker(worker_config(&prefix, &auth), resident.clone(), &wake_true, second_rx, _ev_placeholder(), stopped);
+    assert_eq!(exit, WorkerExit::WorkerAlreadyRunning);
+    assert_eq!(rejected_counters.connects, 0);
+    drop(second_tx);
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let mut control = ControlClient::connect(&control_name, &auth, "exclusive-client").unwrap();
+    assert!(matches!(control.request(caligo_core::ipc::ControlMsg::Health {}).unwrap(), CoreToControlMsg::HealthAck {}));
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::CoreStopped);
+    runner.join().unwrap().unwrap();
+    drop(first_tx);
+    let (next_tx, next_rx) = mpsc::channel();
+    let (_, next_exit) = run_worker(worker_config(&prefix, &auth), resident, &wake_true, next_rx, _ev_placeholder(), Arc::new(AtomicBool::new(true)));
+    assert_eq!(next_exit, WorkerExit::LocalStop, "normal worker exit must release the lease");
+    drop(next_tx);
+}
+
+#[test]
+fn worker_panic_quarantines_same_resident_without_reconnect() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-panic");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let baseline_epoch = daemon.connection_epoch();
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (_tx, rx) = mpsc::channel();
+    let worker = {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || run_worker(cfg, resident, &|| panic!("synthetic worker teardown panic"), rx, _ev_placeholder(), stop))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.connection_epoch() <= baseline_epoch || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+        assert!(Instant::now() < deadline, "first worker did not attach");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !worker.is_finished() {
+        assert!(Instant::now() < deadline, "panicking worker did not exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(worker.join().is_err());
+    let (replacement_tx, replacement_rx) = mpsc::channel();
+    let (counters, exit) = run_worker(worker_config(&prefix, &auth), resident, &wake_true, replacement_rx, _ev_placeholder(), Arc::new(AtomicBool::new(true)));
+    assert_eq!(exit, WorkerExit::WorkerQuarantined);
+    assert_eq!(counters.connects, 0);
+    drop(replacement_tx);
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let mut control = ControlClient::connect(&control_name, &auth, "panic-client").unwrap();
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    runner.join().unwrap().unwrap();
+}
+
 fn wake_false() -> bool {
     false
 }

@@ -275,6 +275,10 @@ pub enum WorkerExit {
     LocalStop,
     /// Hello 被拒(认证/身份):不可重试。
     HelloRejected,
+    /// Another worker already owns this resident.
+    WorkerAlreadyRunning,
+    /// A previous worker panicked; this resident generation is quarantined.
+    WorkerQuarantined,
 }
 
 /// 上行事件未确认窗口:满(项数或字节)→ 记 Gap 丢最旧(计数如实)。
@@ -675,6 +679,23 @@ fn recv_json(
 /// worker 主循环(自有线程内运行)。`result_rx` 由 owner 侧 drain hook 供给;
 /// `wake` = uv_async_send 包装。返回 (计数, 退出原因)。
 pub fn run_worker<A: crate::host_adapter::HostAdapter>(
+    cfg: DaemonClientConfig,
+    resident: Arc<Resident<A>>,
+    wake: &dyn Fn() -> bool,
+    result_rx: mpsc::Receiver<crate::resident::RetainedNotice>,
+    events_rx: mpsc::Receiver<crate::resident::OwnedEvent>,
+    stop: Arc<AtomicBool>,
+) -> (WorkerCounters, WorkerExit) {
+    let _lease = match resident.acquire_worker() {
+        Ok(lease) => lease,
+        Err(crate::resident::WorkerLeaseError::Busy) => return (WorkerCounters::default(), WorkerExit::WorkerAlreadyRunning),
+        Err(crate::resident::WorkerLeaseError::Quarantined) => return (WorkerCounters::default(), WorkerExit::WorkerQuarantined),
+    };
+    // Keep the lease through inner teardown, including dropping both receivers.
+    run_worker_active(cfg, resident.clone(), wake, result_rx, events_rx, stop)
+}
+
+fn run_worker_active<A: crate::host_adapter::HostAdapter>(
     cfg: DaemonClientConfig,
     resident: Arc<Resident<A>>,
     wake: &dyn Fn() -> bool,

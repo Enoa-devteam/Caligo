@@ -336,19 +336,43 @@ struct PendingQuery {
     cancel_only: bool,
 }
 
+/// A resident permits exactly one worker; a panic permanently quarantines
+/// this in-memory generation until an independently audited recovery exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerLeaseError { Busy, Quarantined }
+
+pub(crate) struct WorkerLease<'a> { state: &'a std::sync::atomic::AtomicU8 }
+
+impl Drop for WorkerLease<'_> {
+    fn drop(&mut self) {
+        let next = if std::thread::panicking() { 2 } else { 0 };
+        self.state.store(next, Ordering::Release);
+    }
+}
+
 pub struct Resident<A: HostAdapter> {
     /// 宿主 adapter(独立锁;锁序 adapter→core)。native 调用期间不持
     /// core 锁,内联回调可重入 core 面板(§7-P4)。
     adapter: Mutex<A>,
+    worker_state: std::sync::atomic::AtomicU8,
     core: Mutex<Core<A>>,
     queries: Mutex<VecDeque<PendingQuery>>,
     query_results: Mutex<VecDeque<(String, QueryScope, QueryOutcome)>>,
 }
 
 impl<A: HostAdapter> Resident<A> {
+    pub(crate) fn acquire_worker(&self) -> Result<WorkerLease<'_>, WorkerLeaseError> {
+        match self.worker_state.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Ok(WorkerLease { state: &self.worker_state }),
+            Err(1) => Err(WorkerLeaseError::Busy),
+            Err(_) => Err(WorkerLeaseError::Quarantined),
+        }
+    }
+
     pub fn new(adapter: A, limits: ResidentLimits) -> Self {
         Self {
             adapter: Mutex::new(adapter),
+            worker_state: std::sync::atomic::AtomicU8::new(0),
             queries: Mutex::new(VecDeque::new()),
             query_results: Mutex::new(VecDeque::new()),
             core: Mutex::new(Core {
@@ -1490,4 +1514,45 @@ mod retained_sequence_tests {
         assert_eq!(gate.forward(&r, &tx), Err(HandoffError::SequenceExhausted(0)));
         assert_eq!(r.take_results().len(), 1);
     }
+    #[test]
+    fn worker_lease_allows_one_concurrent_owner_then_releases() {
+        let resident = std::sync::Arc::new(Resident::new(Host, ResidentLimits::default()));
+        let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let held = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for _ in 0..16 {
+            let resident = resident.clone(); let start = start.clone(); let held = held.clone(); let winners = winners.clone();
+            threads.push(std::thread::spawn(move || {
+                start.wait();
+                let lease = resident.acquire_worker();
+                if lease.is_ok() { winners.fetch_add(1, Ordering::Relaxed); }
+                held.wait();
+                drop(lease);
+            }));
+        }
+        for thread in threads { thread.join().unwrap(); }
+        assert_eq!(winners.load(Ordering::Relaxed), 1);
+        assert!(resident.acquire_worker().is_ok(), "normal exit must release lease");
+    }
+
+    #[test]
+    fn panicking_worker_quarantines_resident_and_blocks_new_worker() {
+        let resident = std::sync::Arc::new(Resident::new(Host, ResidentLimits::default()));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = resident.acquire_worker().unwrap();
+            panic!("synthetic worker panic");
+        }));
+        assert!(caught.is_err());
+        assert!(matches!(resident.acquire_worker(), Err(WorkerLeaseError::Quarantined)));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (_events_tx, events_rx) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (counters, exit) = crate::daemon_client::run_worker(
+            crate::daemon_client::DaemonClientConfig::default(), resident, &|| panic!("must not wake"), rx, events_rx, stop,
+        );
+        assert_eq!(exit, crate::daemon_client::WorkerExit::WorkerQuarantined);
+        assert_eq!(counters.connects, 0);
+    }
+
 }

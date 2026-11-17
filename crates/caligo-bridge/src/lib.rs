@@ -1087,8 +1087,11 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     let spawned = std::thread::Builder::new()
         .name("caligo-daemon-client".into())
         .spawn(move || {
-            let (_counters, _exit) =
+            let (_counters, exit) =
                 daemon_client::run_worker(cfg, resident, &wake, rx, erx, worker_stop);
+            if matches!(exit, daemon_client::WorkerExit::WorkerAlreadyRunning | daemon_client::WorkerExit::WorkerQuarantined) {
+                qq_entry::append_stage_simple("daemon_worker", false, "worker_lease_rejected");
+            }
         });
     if spawned.is_err() {
         return c::ERR_SPAWN;
