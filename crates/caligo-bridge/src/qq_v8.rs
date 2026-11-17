@@ -694,6 +694,27 @@ pub const D8_POLL_JS: &str = r"
       sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
       textSendTrace:R.textSendTrace || [], textSendTraceGeneration:R.textTraceGeneration || 0,
       textSendTraceOverflow:R.textTraceOverflow === true};
+    var leaseMode = typeof caligoResultLease !== 'undefined' && caligoResultLease === true;
+    var resultKeysForLease = Object.keys(R.sendResults || {});
+    var hasTerminal = resultKeysForLease.some(function(k) {
+      var value = R.sendResults[k];
+      return value && (value.status === 'done' || value.status === 'unknown' || value.status === 'rejected');
+    });
+    var receipt = null;
+    if (leaseMode && hasTerminal) {
+      if (R.resultLeaseGeneration === undefined) {
+        var crypto = process.getBuiltinModule('node:crypto');
+        var generation = crypto.randomBytes(16).toString('hex');
+        if (!/^[0-9a-f]{32}$/.test(generation)) return 'ERR:result_lease_unavailable';
+        R.resultLeaseGeneration = generation;
+        R.resultLeaseSequence = 0;
+      }
+      if (typeof R.resultLeaseGeneration !== 'string' || !/^[0-9a-f]{32}$/.test(R.resultLeaseGeneration) ||
+          !Number.isSafeInteger(R.resultLeaseSequence) || R.resultLeaseSequence < 0 ||
+          R.resultLeaseSequence >= Number.MAX_SAFE_INTEGER) return 'ERR:result_lease_unavailable';
+      receipt = {generation:R.resultLeaseGeneration, sequence:++R.resultLeaseSequence};
+      out.resultReceipt = receipt;
+    }
     var json = JSON.stringify(out);
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
@@ -702,6 +723,7 @@ pub const D8_POLL_JS: &str = r"
       var isolated = {schema:1, sid:R.sid, items:[], rejected:0, overflow:0,
         sendResults:{}, imageShapes:[], mediaDiagnostics:[], textSendTrace:[],
         textSendTraceGeneration:R.textTraceGeneration || 0, textSendTraceOverflow:false};
+      if (receipt) isolated.resultReceipt = receipt;
       for (var i = 0; i < keys.length; i++) {
         out.sendResults[keys[i]] = R.sendResults[keys[i]];
         if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288) {
@@ -732,12 +754,23 @@ pub const D8_POLL_JS: &str = r"
         !Number.isSafeInteger(wire.rejected) || wire.rejected < 0 ||
         !Number.isSafeInteger(wire.overflow) || wire.overflow < 0)
       return 'ERR:poll_batch_invalid';
+    if (leaseMode && receipt) {
+      var refs = Object.create(null);
+      var emitted = Object.keys(wire.sendResults || {});
+      for (var i = 0; i < emitted.length; i++) {
+        var item = wire.sendResults[emitted[i]];
+        if (item && (item.status === 'done' || item.status === 'unknown' || item.status === 'rejected'))
+          refs[emitted[i]] = R.sendResults[emitted[i]];
+      }
+      R.resultLease = {generation:receipt.generation, sequence:receipt.sequence, refs:refs};
+    }
     R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = []; R.textTraceOverflow = false;
-    // Only clear terminal results included in this serialized batch;
-    // serialization does not imply downstream or durable acknowledgement.
-    var resultKeys = Object.keys(out.sendResults || {});
-    for (var i = 0; i < resultKeys.length; i++) {
-      if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+    if (!leaseMode) {
+      // Compatibility path; serialization is not downstream acknowledgement.
+      var resultKeys = Object.keys(out.sendResults || {});
+      for (var i = 0; i < resultKeys.length; i++) {
+        if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+      }
     }
     return json;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
@@ -776,6 +809,65 @@ pub const D8_STOP_JS: &str = r"
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 ";
+
+/// A receipt identifies one JS listener's exact serialized result snapshot.
+/// It only acknowledges resident processing, not daemon durability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollResultReceipt { pub generation: String, pub sequence: u64 }
+
+pub fn poll_result_receipt(json: &str) -> Result<Option<PollResultReceipt>, &'static str> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|_| "receipt_json")?;
+    let Some(receipt) = value.get("resultReceipt") else { return Ok(None); };
+    let generation = receipt.get("generation").and_then(|v| v.as_str())
+        .filter(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .ok_or("receipt_generation")?;
+    let sequence = receipt.get("sequence").and_then(|v| v.as_u64())
+        .filter(|n| *n > 0 && *n <= 9_007_199_254_740_991).ok_or("receipt_sequence")?;
+    Ok(Some(PollResultReceipt { generation: generation.to_string(), sequence }))
+}
+
+/// Build an idempotent ack that only removes unchanged result objects.
+pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt) -> Option<String> {
+    if session.is_empty() || session.len() > 128 || receipt.generation.len() != 32 ||
+        !receipt.generation.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) ||
+        receipt.sequence == 0 || receipt.sequence > 9_007_199_254_740_991 { return None; }
+    let args = serde_json::json!({"sid":session,"generation":receipt.generation,"sequence":receipt.sequence});
+    Some(format!(r#"(function(a) {{
+      try {{
+        var R = globalThis.__caligo_res;
+        if (!R || R.sid !== a.sid) return 'ERR:receipt_session';
+        var last = R.resultLeaseAcked;
+        if (last && last.generation === a.generation && last.sequence === a.sequence) return 'ACKED';
+        var lease = R.resultLease;
+        if (!lease || lease.generation !== a.generation || lease.sequence !== a.sequence) return 'ERR:receipt_stale';
+        var keys = Object.keys(lease.refs);
+        for (var i = 0; i < keys.length; i++) {{
+          var k = keys[i];
+          if (R.sendResults[k] === lease.refs[k]) delete R.sendResults[k];
+        }}
+        R.resultLeaseAcked = {{generation:a.generation, sequence:a.sequence}};
+        R.resultLease = null;
+        return 'ACKED';
+      }} catch (_) {{ return 'ERR:receipt_failed'; }}
+    }})({args})"#))
+}
+
+/// Advance one pending receipt only after the caller observes an ACKED reply.
+pub fn advance_poll_result_ack<F>(pending: &mut Option<(String, PollResultReceipt)>, ack: F) -> bool
+where F: FnOnce(&str, &PollResultReceipt) -> bool {
+    if let Some((session, receipt)) = pending.as_ref() {
+        if !ack(session, receipt) { return false; }
+        *pending = None;
+    }
+    true
+}
+
+pub fn ack_poll_result(session: &str, receipt: &PollResultReceipt) -> Result<String, V8Error> {
+    let Some(source) = build_poll_result_ack_js(session, receipt) else { return Ok("ERR:receipt_invalid".into()); };
+    let Some(syms) = symbols() else { return Err(V8Error::NoCurrentContext); };
+    // SAFETY: caller is the owner thread; exec_script checks the V8 ladder.
+    unsafe { exec_script(&syms, isolate_addr(), &source) }
+}
 
 // —— 共享符号存取(daemon 导出解析一次;adapter/pump 共用) ——
 
@@ -819,7 +911,7 @@ pub fn poll_listener_json() -> Result<String, V8Error> {
 pub fn build_bound_poll_js(session: &str) -> Option<String> {
     if session.is_empty() || session.len() > 128 { return None; }
     let quoted = serde_json::to_string(session).ok()?;
-    Some(format!("(function(caligoExpectedSid) {{ return ({}); }})({quoted})", D8_POLL_JS))
+    Some(format!("(function(caligoExpectedSid, caligoResultLease) {{ return ({}); }})({quoted}, true)", D8_POLL_JS))
 }
 
 /// Production poll. A missing binding must not execute the destructive script.

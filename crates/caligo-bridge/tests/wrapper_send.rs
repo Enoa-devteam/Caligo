@@ -256,10 +256,13 @@ assert.deepEqual(fired,{{fired:true,mid:'core-request-7'}});
         poll = serde_json::to_string(D8_POLL_JS).unwrap(),
         send = serde_json::to_string(&send).unwrap(),
     );
-    let output = std::process::Command::new("node")
-        .args(["--unhandled-rejections=strict", "-e", &fixture])
-        .output()
-        .expect("Node.js is required for the wrapper send fixture");
+    use std::io::Write;
+    let mut child = std::process::Command::new("node")
+        .arg("--unhandled-rejections=strict")
+        .stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn().expect("Node.js is required for the wrapper send fixture");
+    child.stdin.take().unwrap().write_all(fixture.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",

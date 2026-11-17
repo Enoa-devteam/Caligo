@@ -13,7 +13,7 @@ for(const mode of ['invalid_rejected','invalid_overflow','invalid_items','oversi
  if(mode==='invalid_overflow')R.overflow=-1;
  if(mode==='invalid_items')R.recv={not:'an array'};
  if(mode==='oversized_base')R.textSendTrace=['x'.repeat(530000)];
- const c={__caligo_res:R,Buffer,Date,JSON,Object,Array,Number,String};vm.createContext(c);
+ const c={__caligo_res:R,process,Buffer,Date,JSON,Object,Array,Number,String};vm.createContext(c);
  const before=R.recv,trace=R.textSendTrace,bytes=R.recvBytes;
  assert.equal(vm.runInContext(poll,c),'ERR:poll_batch_invalid',mode);
  assert.equal(R.recv,before);assert.equal(R.textSendTrace,trace);assert.equal(R.recvBytes,bytes);assert.equal(R.sendResults.r1.msgId,'123');

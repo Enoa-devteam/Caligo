@@ -11,7 +11,7 @@ fn mismatched_bound_session_preserves_results_and_receive_state_until_matching_p
  let js=r#"
 const assert=require('node:assert/strict'),vm=require('node:vm'),bad=__BAD__,good=__GOOD__;
 const R={sid:'nt_1',sends:{stale:{deadline:0,done:false,timedOut:false}},sendResults:{r1:{status:'done',msgId:'123'}},recv:[{invalid:'fixture'}],recvBytes:32,rejected:1,overflow:2};
-const c={__caligo_res:R,Buffer,Date,JSON,Object,Array,Number,String};vm.createContext(c);
+const c={__caligo_res:R,process,Buffer,Date,JSON,Object,Array,Number,String};vm.createContext(c);
 assert.equal(vm.runInContext(bad,c),'ERR:session_mismatch');
 assert.equal(R.sendResults.r1.msgId,'123');assert.equal(R.recv.length,1);assert.equal(R.recvBytes,32);
 assert.equal(R.rejected,1);assert.equal(R.overflow,2);assert.equal(R.sends.stale.timedOut,false);

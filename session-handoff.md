@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 发送结果快照确认已接正式 owner：JS 保留终态至指定随机代次/序号快照被确认，owner 确认失败先重试；对象已替换时不清理新值。JS/decoder/resident 离线串联与负例见 [progress](progress.md#current-state)。确认不是 daemon 持久 ACK；未知请求的忽略策略、接收队列 V8 返回失败、宿主退出/恢复、同对象原地变更及实际 QQ 未验证。继续按合同验证持久接收、真实线程及 drain；现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
+
 2026-11-16 feat-004 batch 清空前准入：生产轮询对最终 JSON 大小和 decoder 基础字段校验失败时保留相关状态；故障注入和修复后重取见 [progress](progress.md#current-state)。超时扫描仍先执行，JS 校验不是 Rust/daemon ACK，单条事件、V8 结果丢失、唯一代次与确认重试仍需处理；继续完成版本化确认。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
 
 2026-11-16 feat-004 轮询 session 前置核验：正式 owner 使用一次捕获的 session 生成绑定轮询和 decoder；空绑定跳过，JS sid 不匹配时变更前拒绝，合成复现与匹配对照见 [progress](progress.md#current-state)。sid 名称不是唯一 listener 代次，V8 返回失败、其他解码错误、确认重试和 daemon 持久化仍未解决；继续完成版本化确认协议。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。

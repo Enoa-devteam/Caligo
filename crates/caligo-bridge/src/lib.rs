@@ -922,6 +922,10 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             host_nonce: daemon_client::host_instance_nonce(),
             wrapper_session: String::new(),
         };
+        // An uncertain acknowledgement must be retried before taking a new
+        // result snapshot; it never causes the QQ send to be replayed.
+        let pending_result_ack: std::sync::Mutex<Option<(String, crate::qq_v8::PollResultReceipt)>> =
+            std::sync::Mutex::new(None);
         qq_entry::install_drain_hook(Box::new(move || {
             if owner_stop.load(Ordering::Acquire) {
                 r.set_bridge_scope(None);
@@ -953,62 +957,83 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。
             if OWNER_INIT.load(Ordering::Relaxed) {
-                let session = crate::qq_v8::listener_session()
-                    .filter(|s| !s.is_empty() && s.len() <= 128);
-                let poll = session.as_deref().map(crate::qq_v8::poll_listener_bound_json);
-                match (session, poll) {
-                    (Some(session), Some(Ok(json))) if !json.starts_with("NOT_ARMED") => {
-                        let mut binding = wrapper_binding.clone();
-                        binding.wrapper_session = session;
-                        if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
-                            // D9:sendResults 回收(fired 的 Promise 结果)。
-                            {
-                                let sr = &batch.send_results;
-                                let mut done: Vec<(String, String)> = Vec::new();
-                                let mut rejected: Vec<(String, String)> = Vec::new();
-                                let mut unknown: Vec<(String, String)> = Vec::new();
-                                for (request_id, st) in sr {
-                                    let status =
-                                        st.get("status").and_then(|x| x.as_str()).unwrap_or("");
-                                    if status == "done" {
-                                        let nid = st
-                                            .get("msgId")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        done.push((request_id.clone(), nid));
-                                    } else if status == "unknown" {
-                                        let why = st
-                                            .get("reason")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("send outcome unknown")
-                                            .to_string();
-                                        unknown.push((request_id.clone(), why));
-                                    } else if status == "rejected" {
-                                        let why = st
-                                            .get("error")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("promise rejected")
-                                            .to_string();
-                                        rejected.push((request_id.clone(), why));
-                                    }
-                                }
-                                if !done.is_empty() || !rejected.is_empty() || !unknown.is_empty() {
-                                    r.complete_sends(&done, &rejected, &unknown);
+                // Never block or reenter while the V8 acknowledgement is active.
+                if let Ok(mut pending_result_ack) = pending_result_ack.try_lock() {
+                    let ack_ready = crate::qq_v8::advance_poll_result_ack(&mut pending_result_ack, |sid, receipt| {
+                        matches!(crate::qq_v8::ack_poll_result(sid, receipt), Ok(ref value) if value == "ACKED")
+                    });
+                    if !ack_ready {
+                        static ACK_ERR_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                        let n = ACK_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 { qq_entry::append_stage_simple("poll_receipt_ack", false, "retry_pending"); }
+                    }
+                    let session = if ack_ready { crate::qq_v8::listener_session() } else { None }
+                        .filter(|s| !s.is_empty() && s.len() <= 128);
+                    let poll = session.as_deref().map(crate::qq_v8::poll_listener_bound_json);
+                    match (session, poll) {
+                        (Some(session), Some(Ok(json))) if !json.starts_with("NOT_ARMED") => {
+                            let mut binding = wrapper_binding.clone();
+                            binding.wrapper_session = session;
+                            if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
+                                // D9:sendResults 回收(fired 的 Promise 结果)。
+                                {
+                                    let sr = &batch.send_results;
+                                    let needs_receipt = sr.values().any(|st| matches!(
+                                        st.get("status").and_then(|v| v.as_str()),
+                                        Some("done" | "rejected" | "unknown")
+                                    ));
+                                    let receipt = crate::qq_v8::poll_result_receipt(&json).ok().flatten();
+                                    if !needs_receipt || receipt.is_some() {
+                                        let mut done: Vec<(String, String)> = Vec::new();
+                                        let mut rejected: Vec<(String, String)> = Vec::new();
+                                        let mut unknown: Vec<(String, String)> = Vec::new();
+                                        for (request_id, st) in sr {
+                                            let status =
+                                                st.get("status").and_then(|x| x.as_str()).unwrap_or("");
+                                            if status == "done" {
+                                                let nid = st
+                                                    .get("msgId")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                done.push((request_id.clone(), nid));
+                                            } else if status == "unknown" {
+                                                let why = st
+                                                    .get("reason")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("send outcome unknown")
+                                                    .to_string();
+                                                unknown.push((request_id.clone(), why));
+                                            } else if status == "rejected" {
+                                                let why = st
+                                                    .get("error")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("promise rejected")
+                                                    .to_string();
+                                                rejected.push((request_id.clone(), why));
+                                            }
+                                        }
+                                        if !done.is_empty() || !rejected.is_empty() || !unknown.is_empty() {
+                                            r.complete_sends(&done, &rejected, &unknown);
+                                        }
+                                        if let Some(receipt) = receipt {
+                                            *pending_result_ack = Some((binding.wrapper_session.clone(), receipt));
+                                        }
+                                    } // Invalid or missing receipts leave results in JS.
                                 }
                             }
                         }
-                    }
-                    (Some(_), Some(Err(e))) => {
-                        // 首次/每 20 次记录轮询失败变体(不吞)。
-                        static POLL_ERR_N: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let n = POLL_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if n % 20 == 0 {
-                            qq_entry::append_stage_simple("poll_err", false, &format!("{e:?}"));
+                        (Some(_), Some(Err(e))) => {
+                            // 首次/每 20 次记录轮询失败变体(不吞)。
+                            static POLL_ERR_N: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(0);
+                            let n = POLL_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if n % 20 == 0 {
+                                qq_entry::append_stage_simple("poll_err", false, &format!("{e:?}"));
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             for ev in r.take_events() {
