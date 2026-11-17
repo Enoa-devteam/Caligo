@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 worker ACK 防护：结果 ACK 现在匹配请求、终态类型和当前连接已发送项后才移除及释放槽位；定向红绿对照见 [progress](progress.md#current-state)。同类终态版本、worker 退出丢失、持久恢复和现场仍未闭合；继续版本化 ACK 与 resident 保留设计。现场须新鲜进程准入，unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 worker 退出缺口：假宿主离线复现通道成功后接收前丢失，以及 worker outbox 持有期间丢失；未修改生产协议。下一步设计 resident 有界持有与版本化 durable ACK，覆盖中间态/迟到结果、重放与退出；详见 [progress](progress.md#current-state)。现场仍须新鲜进程准入，unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 owner 通知交接：通道发送明确失败时恢复未交出项，锁存断开并停止后续 dispatch/查询 drain/JS 快照确认；假宿主回归和真实命名管道 ACK 丢失对照见 [progress](progress.md#current-state)。成功进入通道但 worker 退出前未持久化、首次发现断开之前的派发及关闭恢复仍未覆盖；继续处理 durable ACK 与退出边界。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。

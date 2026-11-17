@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 worker 结果 ACK 类型防护（起点 `c784de2`）：先前 `SendResultAck` 仅按 request_id 移除 worker outbox 中的首个结果，并先无条件调用 resident 槽位 ACK。现仅当同请求结果的中间/终态类型与 ACK 的 `terminal` 一致、且该项已在当前连接代次发送时移除，随后才通知 resident 释放对应槽位；不匹配 ACK 保留 outbox 和槽位。daemon 对 `AcceptedUnconfirmed` 返回非终态，其他结果返回终态；协议未变。合成旧匹配逻辑在旧类型 ACK 和同请求两类结果时错误移除，两个定向负例先失败后通过，并覆盖未发送、旧代次与重复确认；不证明真实 daemon 曾发送重复或错误 ACK。
+
+此防护并不解决同请求两个同类终态（例如 unknown 后迟到 success）的旧 ACK 混淆：wire 没有版本号；也不保留 worker 退出后 outbox 或通道内正文，不提供持久确认、worker 重建、宿主退出恢复或 QQ 现场验收。真实 ACK 顺序、会话代次的跨 daemon 重启唯一性仍需独立验证。下步继续设计有界 resident 副本与版本绑定 ACK，结果未知不重发。
+
+定向红灯 `target-harness/feat004-ack-kind-red.log` SHA-256 `897F5B66303B6B839831CBA97D4D595C3073E8ADC0BC1A702A4D4C58087B5301`；修复后 `target-harness/feat004-ack-kind-green.log` SHA-256 `2EF0FEE863A5BE9384ED30A28E1ABB1E883D01DAEE9C1CE702F353FCA888AA54`。GitNexus 在工作树 `E:/stella/Caligo-feat-004`、起点 `c784de2` 将 `session_loop` 上游判为 HIGH，直接影响 `run_worker` 并涉及原生 resident 入口；最终 4 文件变更图 MEDIUM（不抵消上述 HIGH 上游影响）；Windows MSVC 串行 `init.ps1 -Mode all` 普通和 research 均通过，含正式 worker/命名管道离线回归，日志 `target-harness/feat004-ack-kind-all.log` SHA-256 `AD566B5BFF89E92E9EFC89EFA7C99569F150C5A4774E865F1A62D6FCF7BA735C`。文档检查通过。本轮未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 worker 退出丢失边界离线对照（起点 `0e63770`）：实际 `ResultHandoffGate` 与 resident、假宿主的合成测试分别模拟 (1) 通道 `send` 成功后接收端在读取前退出，(2) worker 读入 outbox 后、daemon durable ACK 前丢弃 outbox；两例均观察到 resident 队列已无未确认的 NativeStarted 和 Success 通知。实验不启动真实 worker/daemon，不证明真实 QQ 曾发生该故障；4 项既有通道回归作为对照也通过。当前 worker outbox 跨连接但不跨 worker 生存期，resident 槽位掩码只保留容量而非通知正文；JS 快照确认仍可能早于 daemon 持久确认。该缺口尚未修复，不得重发原生请求。
 
 下一实现需先建立 resident 持有的、身份及修订明确且有界的通知副本，直到对应 daemon durable ACK；交接和重连只重放通知，NativeStarted 必须先于该请求结果。当前结果 ACK 仅带 request_id 与 terminal 标志，worker 以 request_id 找到首个结果即删除；中间态、unknown 和迟到强身份可能共存时，必须设计版本/内容绑定与旧 ACK、重复 ACK 的拒绝或幂等规则，不能简单按请求号清除新结果。应覆盖接收前和接收后 worker 退出、重建、daemon 落账后 ACK 丢失、同请求多个版本的旧 ACK、容量耗尽和停止/宿主退出；跨进程或宿主退出的恢复另需独立持久介质和合同，不能由内存副本推断。本轮没有修改生产行为或 IPC 协议。

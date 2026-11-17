@@ -299,6 +299,24 @@ fn notice_request_id(notice: &ResidentNotice) -> &str {
     }
 }
 
+// Match an ACK to a sent outbox entry. The wire currently carries no revision.
+fn take_acked_result(
+    outbox: &mut VecDeque<PendingNotice>,
+    request_id: &str,
+    terminal: bool,
+    epoch: u64,
+) -> Option<ResidentNotice> {
+    let index = outbox.iter().position(|item| {
+        let kind_matches = match &item.notice {
+            ResidentNotice::Outcome(SendOutcome::AcceptedUnconfirmed { .. }) => !terminal,
+            ResidentNotice::Outcome(_) => terminal,
+            ResidentNotice::NativeStarted { .. } => false,
+        };
+        kind_matches && item.sent_epoch == Some(epoch) && notice_request_id(&item.notice) == request_id
+    })?;
+    outbox.remove(index).map(|item| item.notice)
+}
+
 fn notice_message(notice: &ResidentNotice) -> (BridgeMsg, bool) {
     match notice {
         ResidentNotice::NativeStarted { request_id } => (
@@ -1245,12 +1263,8 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                 request_id,
                 terminal,
             }) => {
-                resident.ack_result_notice(&request_id, terminal);
-                if let Some(index) = result_outbox.iter().position(|item| {
-                    matches!(&item.notice, ResidentNotice::Outcome(_))
-                        && notice_request_id(&item.notice) == request_id
-                }) {
-                    result_outbox.remove(index);
+                if take_acked_result(result_outbox, &request_id, terminal, connection_epoch).is_some() {
+                    resident.ack_result_notice(&request_id, terminal);
                 }
                 heartbeat_misses = 0;
             }
@@ -1294,6 +1308,34 @@ fn peer_uid_from_target(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result_notice(outcome: SendOutcome, epoch: Option<u64>) -> PendingNotice {
+        PendingNotice { notice: ResidentNotice::Outcome(outcome), sent_epoch: epoch }
+    }
+
+    #[test]
+    fn result_ack_rejects_old_kind_and_unsent_or_old_epoch() {
+        let success = SendOutcome::Success { request_id: "r".into(), native_id: "n".into() };
+        let mut outbox = VecDeque::from([result_notice(success, Some(7))]);
+        assert!(take_acked_result(&mut outbox, "r", false, 7).is_none());
+        assert!(take_acked_result(&mut outbox, "r", true, 8).is_none());
+        outbox[0].sent_epoch = None;
+        assert!(take_acked_result(&mut outbox, "r", true, 7).is_none());
+        assert_eq!(outbox.len(), 1);
+        outbox[0].sent_epoch = Some(7);
+        assert!(take_acked_result(&mut outbox, "r", true, 7).is_some());
+        assert!(take_acked_result(&mut outbox, "r", true, 7).is_none());
+    }
+
+    #[test]
+    fn result_ack_removes_only_matching_result_kind() {
+        let mid = SendOutcome::AcceptedUnconfirmed { request_id: "r".into() };
+        let success = SendOutcome::Success { request_id: "r".into(), native_id: "n".into() };
+        let mut outbox = VecDeque::from([result_notice(mid.clone(), Some(7)), result_notice(success.clone(), Some(7))]);
+        assert_eq!(take_acked_result(&mut outbox, "r", true, 7), Some(ResidentNotice::Outcome(success)));
+        assert_eq!(take_acked_result(&mut outbox, "r", false, 7), Some(ResidentNotice::Outcome(mid)));
+        assert!(outbox.is_empty());
+    }
 
     #[test]
     fn event_window_releases_the_popped_record_with_different_sizes() {
