@@ -2,6 +2,11 @@
 
 ## Current State
 
+2026-11-17 feat-004 满额与 worker 重建组合离线回归（起点 `b53c394`）：新增真实 Windows 命名管道 daemon/worker 与假宿主测试，先由 daemon 派发请求、正常停止首 worker，再由测试线程产出 started、accepted、unknown 和强身份结果，将两项保留集合填满并丢弃暂存提示；第二 worker 从同一 resident 快照重建，同时注入重复提示，真实 daemon ACK 释放空间后逐步交接剩余结果，最终请求查得强身份、保留集合清空，假宿主发送次数为一，结果上报计数为三。worker 的重建和提示转发由测试夹具人工驱动，不代表正式入口支持自动重启；没有模拟首 worker 在写入/ACK 中途崩溃，也不证明不同 resident、跨进程持久化、真实 QQ 回调或现场长时间背压。
+
+`cargo test -p caligo-core --test daemon_client_lab --locked --offline --target-dir target-harness` 普通构建 14 项通过（在追加结果计数断言前）；research 构建定向用例通过（同样在追加断言前）；最终定向用例带结果计数断言通过。三份日志 SHA-256 分别为 `9634D8923F1ABFC0C13558BCE3D9C9D297CB87409C20D893CC9D61B368B86DED` / `9D15B5A4282EE4F4A2F356CBD3B3DC63F5A041D26CEC445805EB7854452EBCE6` / `1ADD786F0B2800B794696497C783A15721601217393DB74A4D29974049D21FB7`，位于 `target-harness/feat004-rebuild-full-suite.log`、`feat004-rebuild-full-research.log`、`feat004-rebuild-full-final.log`。GitNexus 索引比 HEAD 落后一个仅文档提交：`run_worker` 上游风险 HIGH，需保留该结论；结合源码核对两个实际入口各自创建通道，未发现把同一接收端传给两个 worker 的现有生产调用。本轮不改生产代码、不接 QQ；feat-004 保持 in-progress。
+
+
 2026-11-17 feat-004 结果保留修复版单次私聊现场（源码 `3bbd3ce`，准备提交 `f8b3558` 仅文档差异）：用户重启登录并明确授权后，测试 QQ 主进程 `17520`（创建 `2026-11-17T13:58:27.9448390Z`）通过未加载 bridge、固定模块 hash、PE/backend 和唯一 Environment 只读准入。向好友 B 单次发送 `CALIGO-FEAT004-RETAIN-361D4A93BC` 后立即 `get_msg` 成功；独立技术审计确认唯一请求依次为 Queued、DispatchIntent、NativeStarted、ConfirmedSuccess，消息身份与回读一致。用户确认对端仅收到一条且内容相符。回读来自持久账本，不能当作 QQ 原生查询。
 
 原 runner 将 `trace_pass` 报为 false，原因是轨迹 detail 同时使用单引号和小写 JSON 布尔值，`json.loads` 与 `ast.literal_eval` 均不能直接解析；原 summary 保留。独立解析审计确认同一代次、同一序号、两段均非 incomplete，registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled 八阶段齐全。技术审计通过，manager 与 owner 停止码均为 0，端口关闭；同代 QQ 仍响应并映射 bridge，不重接、不热卸载，不重发该样本。该现场未制造真实 ACK 丢失、worker 重建、背压、panic 或迟到回调，也未观察真实 callback 线程/drain，feat-004 保持 in-progress。

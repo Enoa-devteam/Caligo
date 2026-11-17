@@ -755,6 +755,109 @@ fn daemon_ack_releases_backpressure_without_repeating_native_send() {
     runner.join().unwrap().unwrap();
 }
 
+/// Rebuild after full retention and a lost channel; drain the suffix without resending.
+#[test]
+fn worker_rebuild_recovers_full_retention_and_pending_suffix_without_resend() {
+    use caligo_bridge::resident::{HandoffError, OwnedRequest, ResultHandoffGate, SubmitVerdict};
+    struct AsyncLabHost;
+    impl HostAdapter for AsyncLabHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
+                HostOp::Probe => Ok(HostOpResult::ProbeDone),
+                HostOp::SendText { request_id, .. } => {
+                    LAB_SENDS.fetch_add(1, Ordering::Relaxed);
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                }
+                _ => panic!("unexpected operation"),
+            }
+        }
+    }
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("rebuild-full");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(AsyncLabHost, ResidentLimits { results_max: 2, ..ResidentLimits::default() }));
+    resident.bootstrap().unwrap();
+    let before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let (done, wait) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "pressure-client") { break c; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-PRESSURE".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-PRESSURE-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-PRESSURE") != Some("queued") {
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(resident.drain().unwrap(), 1);
+    resident.complete_sends(&[("R-PRESSURE".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-PRESSURE".into(), "unknown".into())]);
+    resident.complete_sends(&[("R-PRESSURE".into(), "strong-id".into())], &[], &[]);
+    // Stop the active worker before retaining notices, then abandon its channel.
+    stop.store(true, Ordering::Relaxed);
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::LocalStop);
+    drop(worker_tx);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let gate = ResultHandoffGate::default();
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(2)));
+    assert_eq!(resident.submit(OwnedRequest::Probe { id: 7 }), SubmitVerdict::Accepted);
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(0)));
+    assert_eq!(resident.pending_ingress(), 1);
+    let retained = resident.retained_notices();
+    assert_eq!(retained.len(), 2);
+    // Discard staged hints after the old worker is gone. The resident retains
+    // authoritative notices; reconstruct the replacement from its snapshot.
+    drop(staged_rx);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let (worker_tx, worker_rx) = mpsc::channel();
+    for item in &retained { worker_tx.send(item.clone()).unwrap(); }
+    let stop2 = Arc::new(AtomicBool::new(false));
+    let (done2, wait2) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone();
+        std::thread::spawn(move || { done2.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop2)).unwrap(); });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10); let mut probe_ran = false;
+    loop {
+        let ready = gate.forward(&resident, &staged_tx).is_ok();
+        for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+        if ready && !probe_ran { assert_eq!(resident.drain().unwrap(), 1); probe_ran = true; }
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-PRESSURE".into() }).unwrap();
+        if probe_ran && resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == "strong-id") { break; }
+        assert!(Instant::now() < deadline, "ACKs did not drain pressure and pending suffix");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 3, "duplicate hints must not resend result notices");
+    runner.join().unwrap().unwrap();
+}
+
+
 #[test]
 fn concurrent_worker_for_same_resident_must_be_rejected() {
     let _g = TEST_SERIAL.lock().unwrap();

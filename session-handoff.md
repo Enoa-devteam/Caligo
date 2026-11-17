@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-17 feat-004 满额与 worker 重建组合 LAB：真实命名管道、同 resident、假宿主和人工重建的受控场景下，满额保留项及待交接结果恢复，重复提示未增加结果发送，宿主发送一次；测试与证据见 [progress](progress.md#current-state)。本轮未改生产代码、不接 QQ；自动 worker 重启、崩溃中途、跨宿主恢复和真实现场仍未证。继续选择未闭合的 feat-004 工作块；需现场时重新准入，unknown 不重发，未证寿命不卸载。
+
+
 2026-11-17 feat-004 修复版单次私聊现场：用户授权后 QQ `17520` 准入、单次发送、持久账本 `get_msg`、独立技术与轨迹复核通过；用户确认仅一条且内容相符。原 runner 轨迹解析 false 保留，混合格式的独立复核及证据见 [progress](progress.md#current-state)。manager/owner 停止、端口关闭，QQ 响应并保留 bridge；不重接、不卸载、不重发。真实 ACK 丢失、worker 重建、背压、panic、迟到及 callback/drain 仍未证；feat-004 in-progress。后续先选取一个未闭合工作块并实施离线验证；需新现场时重新核验新鲜进程，发送须对应授权。
 
 
