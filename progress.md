@@ -2,6 +2,11 @@
 
 ## Current State
 
+2026-11-17 feat-004 持久结果 ACK 丢失与 worker 重建组合 LAB（起点 `020f82e`）：新增真实 Windows 命名管道 daemon/worker 和假宿主测试，daemon 注入一次结果持久化后、ACK 前断链；测试确认初始 worker 观察到断链且仅连接一次，在配置的 2 秒重连等待中请求正常停止。成功结果仍保存在同一个 resident；第二个 worker 由夹具手动创建，从快照重放并收到 daemon ACK，保留集合清空，查询仍得到相同稳定 ID，重复提示不增加结果上报，假宿主发送计数为一。测试使用 700ms 观察间隔并以连接计数断言时序，时序不满足时失败，不把重连后的结果当作通过。
+
+Windows MSVC 普通构建定向用例、`cargo test -p caligo-core --test daemon_client_lab --locked --offline --target-dir target-harness` 全组 15 项、research 构建定向用例均通过；日志 `target-harness/feat004-rebuild-lost-ack-verified.log` / `feat004-rebuild-lost-ack-suite.log` / `feat004-rebuild-lost-ack-research.log` SHA-256 分别为 `3AD657E111571733E1C4CBADA971E1E1FF3BDEB1577F2EADC291685E7B27B6E3` / `B814573E03A5E07D1D784935441AA3346E68E50D0984C35F9D783DEDF613F75B` / `E1ACD3C887B4D1A0D506E8BF789FF8695F2F0E5335B491FC1201802410058D0C`。这是受控断链与正常停止，不是 worker 崩溃、进程死亡或 QQ 现场；正式自动重启、跨宿主持久化、真实 callback/drain 仍未证。本轮无生产代码修改或 QQ 接入，feat-004 保持 in-progress。
+
+
 2026-11-17 feat-004 满额与 worker 重建组合离线回归（起点 `b53c394`）：新增真实 Windows 命名管道 daemon/worker 与假宿主测试，先由 daemon 派发请求、正常停止首 worker，再由测试线程产出 started、accepted、unknown 和强身份结果，将两项保留集合填满并丢弃暂存提示；第二 worker 从同一 resident 快照重建，同时注入重复提示，真实 daemon ACK 释放空间后逐步交接剩余结果，最终请求查得强身份、保留集合清空，假宿主发送次数为一，结果上报计数为三。worker 的重建和提示转发由测试夹具人工驱动，不代表正式入口支持自动重启；没有模拟首 worker 在写入/ACK 中途崩溃，也不证明不同 resident、跨进程持久化、真实 QQ 回调或现场长时间背压。
 
 `cargo test -p caligo-core --test daemon_client_lab --locked --offline --target-dir target-harness` 普通构建 14 项通过（在追加结果计数断言前）；research 构建定向用例通过（同样在追加断言前）；最终定向用例带结果计数断言通过。三份日志 SHA-256 分别为 `9634D8923F1ABFC0C13558BCE3D9C9D297CB87409C20D893CC9D61B368B86DED` / `9D15B5A4282EE4F4A2F356CBD3B3DC63F5A041D26CEC445805EB7854452EBCE6` / `1ADD786F0B2800B794696497C783A15721601217393DB74A4D29974049D21FB7`，位于 `target-harness/feat004-rebuild-full-suite.log`、`feat004-rebuild-full-research.log`、`feat004-rebuild-full-final.log`。GitNexus 索引比 HEAD 落后一个仅文档提交：`run_worker` 上游风险 HIGH，需保留该结论；结合源码核对两个实际入口各自创建通道，未发现把同一接收端传给两个 worker 的现有生产调用。本轮不改生产代码、不接 QQ；feat-004 保持 in-progress。

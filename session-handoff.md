@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-17 feat-004 丢失 ACK 后重建组合 LAB：真实命名管道和假宿主中，daemon 持久化结果后断链、首 worker 在重连前正常停止，同 resident 由夹具重建后重放并 ACK，结果及一次发送保持；定向、普通全组和 research 定向验证见 [progress](progress.md#current-state)。不证明 worker 崩溃、自动重启、宿主持久化或 QQ 现场。继续未闭合工作；需现场时重核新进程准入，unknown 不重发，未证寿命不卸载。
+
+
 2026-11-17 feat-004 满额与 worker 重建组合 LAB：真实命名管道、同 resident、假宿主和人工重建的受控场景下，满额保留项及待交接结果恢复，重复提示未增加结果发送，宿主发送一次；测试与证据见 [progress](progress.md#current-state)。本轮未改生产代码、不接 QQ；自动 worker 重启、崩溃中途、跨宿主恢复和真实现场仍未证。继续选择未闭合的 feat-004 工作块；需现场时重新准入，unknown 不重发，未证寿命不卸载。
 
 

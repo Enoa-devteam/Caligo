@@ -591,6 +591,135 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     assert!(counters.results_sent >= 2);
 }
 
+/// Rebuild a worker after the core has persisted a result but its ACK was lost.
+#[test]
+fn worker_rebuild_replays_durable_result_after_lost_ack_without_native_retry() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("rebuild-ack-loss");
+    let (daemon, make_runner) = start_daemon_faults(&prefix, false, true);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
+    let (w_tx, w_rx) = mpsc::channel();
+    let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
+    {
+        let mut cfg = worker_config(&prefix, &auth);
+        cfg.reconnect_backoff_ms = 2_000;
+        let resident = resident.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let r = run_worker(cfg, resident, &wake_true, rx, _ev_placeholder(), stop);
+            w_tx.send(r).unwrap();
+        });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = None;
+    while Instant::now() < deadline {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "lab-client") {
+            control = Some(c);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut control = control.expect("control connected");
+
+    let mut accepted = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if matches!(
+            control
+                .request(caligo_core::ipc::ControlMsg::SendText {
+                    request_id: "R-REBUILD-ACK-LOSS".into(),
+                    target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+                    text: "CALIGO-REBUILD-ACK-LOSS".into(),
+                    deadline_ms: 30_000,
+                })
+                .unwrap(),
+            CoreToControlMsg::SendAccepted { .. }
+        ) {
+            accepted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        accepted,
+        "send request must be accepted before recovery check"
+    );
+
+    let expected_native_id = format!("NM-{}", send_count_before + 1);
+    let handoff = caligo_bridge::resident::ResultHandoffGate::default();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut durable_result_visible = false;
+    while Instant::now() < deadline {
+        let _ = resident.drain();
+        assert!(handoff.forward(&resident, &tx).is_ok());
+        if let CoreToControlMsg::QueryResult { native_id, .. } = control
+            .request(caligo_core::ipc::ControlMsg::QueryRequest {
+                request_id: "R-REBUILD-ACK-LOSS".into(),
+            })
+            .unwrap()
+        {
+            if native_id.as_deref() == Some(expected_native_id.as_str()) {
+                durable_result_visible = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        durable_result_visible,
+        "journaled native receipt must remain queryable"
+    );
+
+    // The daemon fault closes the connection after journal persistence and
+    // before the result ACK. Stop during the deliberately long backoff.
+    assert!(!resident.retained_notices().is_empty(), "lost ACK must leave resident ownership");
+    // Allow the injected break to reach the worker before requesting stop;
+    // reconnect backoff is 2 seconds, longer than this observation interval.
+    std::thread::sleep(Duration::from_millis(700));
+    stop.store(true, Ordering::Relaxed);
+    let (first_counters, exit) = w_rx.recv_timeout(Duration::from_secs(5)).expect("first worker must stop");
+    assert_eq!(exit, WorkerExit::LocalStop);
+    assert!(first_counters.reconnects >= 1, "fault must break the first connection before stop");
+    assert_eq!(first_counters.connects, 1, "first worker must not reconnect before replacement");
+    let retained = resident.retained_notices();
+    assert!(retained.iter().any(|item| matches!(&item.notice,
+        caligo_bridge::resident::ResidentNotice::Outcome(caligo_bridge::resident::SendOutcome::Success { .. }))),
+        "durable success must still be retained after lost ACK");
+    drop(tx);
+
+    let (replacement_tx, replacement_rx) = mpsc::channel();
+    for item in &retained { replacement_tx.send(item.clone()).unwrap(); }
+    let (done2, wait2) = mpsc::channel();
+    let stop2 = Arc::new(AtomicBool::new(false));
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone();
+        std::thread::spawn(move || {
+            done2.send(run_worker(cfg, resident, &wake_true, replacement_rx, _ev_placeholder(), stop2)).unwrap();
+        });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-REBUILD-ACK-LOSS".into() }).unwrap();
+        if resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == &expected_native_id) { break; }
+        assert!(Instant::now() < deadline, "replacement did not replay and release the durable receipt");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - send_count_before, 1,
+        "rebuilding the worker must never resend to native");
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).expect("replacement must stop");
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 1, "duplicate hints must not send a second receipt");
+    runner.join().unwrap().unwrap();
+}
+
 /// Reconstruct a worker after its old channel accepted notices and vanished.
 #[test]
 fn worker_rebuild_replays_resident_notices_without_native_retry() {
