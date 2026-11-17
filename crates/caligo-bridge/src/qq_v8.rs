@@ -690,14 +690,37 @@ pub const D8_POLL_JS: &str = r"
       }
       if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
     }
+    var leaseMode = typeof caligoResultLease !== 'undefined' && caligoResultLease === true;
+    var sourceResults = R.sendResults || {}, offeredResults = sourceResults;
+    var deferrals = R.resultDeferrals;
+    if (leaseMode && deferrals instanceof Map && deferrals.size) {
+      var retryNow = null;
+      try { var n = process.hrtime.bigint(); if (typeof n === 'bigint' && n >= 0n) retryNow = n; } catch (_) {}
+      if (retryNow === null) {
+        // A missing clock must not hide an unacknowledged result.
+        deferrals.clear();
+      } else {
+        deferrals.forEach(function(d, k) {
+          if (!d || typeof d.since !== 'bigint' || typeof d.until !== 'bigint' ||
+              d.until < d.since || d.until - d.since > 2000000000n ||
+              !Number.isInteger(d.count) || d.count < 1 || d.count > 4 ||
+              !Object.prototype.hasOwnProperty.call(sourceResults, k) || sourceResults[k] !== d.value)
+            deferrals.delete(k);
+        });
+        offeredResults = Object.create(null);
+        Object.keys(sourceResults).forEach(function(k) {
+          var d = deferrals.get(k);
+          if (!d || d.value !== sourceResults[k] || retryNow < d.since || retryNow >= d.until) offeredResults[k] = sourceResults[k];
+        });
+      }
+    }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
-      sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
+      sendResults:offeredResults, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
       textSendTrace:R.textSendTrace || [], textSendTraceGeneration:R.textTraceGeneration || 0,
       textSendTraceOverflow:R.textTraceOverflow === true};
-    var leaseMode = typeof caligoResultLease !== 'undefined' && caligoResultLease === true;
-    var resultKeysForLease = Object.keys(R.sendResults || {});
+    var resultKeysForLease = Object.keys(offeredResults);
     var hasTerminal = resultKeysForLease.some(function(k) {
-      var value = R.sendResults[k];
+      var value = offeredResults[k];
       return value && (value.status === 'done' || value.status === 'unknown' || value.status === 'rejected');
     });
     var receipt = null;
@@ -719,20 +742,20 @@ pub const D8_POLL_JS: &str = r"
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
       out.sendResults = {};
-      var keys = Object.keys(R.sendResults || {});
+      var keys = Object.keys(offeredResults);
       var isolated = {schema:1, sid:R.sid, items:[], rejected:0, overflow:0,
         sendResults:{}, imageShapes:[], mediaDiagnostics:[], textSendTrace:[],
         textSendTraceGeneration:R.textTraceGeneration || 0, textSendTraceOverflow:false};
       if (receipt) isolated.resultReceipt = receipt;
       for (var i = 0; i < keys.length; i++) {
-        out.sendResults[keys[i]] = R.sendResults[keys[i]];
+        out.sendResults[keys[i]] = offeredResults[keys[i]];
         if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288) {
           // Keep the omitted result for a later poll, but let smaller results
           // behind it make progress in this batch.
           delete out.sendResults[keys[i]];
           isolated.sendResults = {};
-          isolated.sendResults[keys[i]] = R.sendResults[keys[i]];
-          if (R.sendResults[keys[i]].status !== 'pending' &&
+          isolated.sendResults[keys[i]] = offeredResults[keys[i]];
+          if (offeredResults[keys[i]].status !== 'pending' &&
               Buffer.byteLength(JSON.stringify(isolated), 'utf8') > 524288) {
             // A terminal result that cannot fit even in an otherwise empty
             // batch cannot carry a usable identity; report unknown instead.
@@ -857,9 +880,27 @@ pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt, keys
           if (typeof a.keys[i] !== 'string' || !Object.prototype.hasOwnProperty.call(lease.refs, a.keys[i]))
             return 'ERR:receipt_keys';
         }}
-        for (var i = 0; i < a.keys.length; i++) {{
-          var k = a.keys[i];
-          if (R.sendResults[k] === lease.refs[k]) delete R.sendResults[k];
+        var now = null;
+        try {{ var t = process.hrtime.bigint(); if (typeof t === 'bigint' && t >= 0n) now = t; }} catch (_) {{}}
+        var deferred = R.resultDeferrals;
+        if (now !== null && !(deferred instanceof Map)) {{ deferred = new Map(); R.resultDeferrals = deferred; }}
+        if (now === null && deferred instanceof Map) {{ deferred.clear(); deferred = null; }}
+        var selected = new Set(a.keys), snapshotKeys = Object.keys(lease.refs);
+        for (var i = 0; i < snapshotKeys.length; i++) {{
+          var k = snapshotKeys[i], original = lease.refs[k];
+          if (selected.has(k)) {{
+            if (R.sendResults[k] === original) delete R.sendResults[k];
+            if (deferred) deferred.delete(k);
+          }} else if (deferred && R.sendResults[k] === original) {{
+            var prior = deferred.get(k);
+            if (prior || deferred.size < 128) {{
+              var count = prior && prior.value === original && typeof prior.since === 'bigint' &&
+                Number.isInteger(prior.count) && prior.count >= 1 && prior.count <= 4 && now >= prior.since
+                ? Math.min(prior.count + 1, 4) : 1;
+              var delayMs = 250 * Math.pow(2, count - 1);
+              deferred.set(k, {{value:original, count:count, since:now, until:now + BigInt(delayMs) * 1000000n}});
+            }}
+          }} else if (deferred) {{ deferred.delete(k); }}
         }}
         R.resultLeaseAcked = {{generation:a.generation, sequence:a.sequence, keys:fingerprint}};
         R.resultLease = null;
