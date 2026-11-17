@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 单次私聊正常路径已准备但未授权：样本 `CALIGO-FEAT004-RETAIN-361D4A93BC`，固定源码/脚本、缺授权与重复保留负例、合成审计见 [progress](progress.md#current-state)。当前 QQ `54316` 当次仍映射 bridge；先取得用户对该正文和好友 B 的单次授权，并让用户重启登录，核验新进程后才可执行一次；未知不重发、未证寿命不卸载。
+
 2026-11-17 feat-004 修复版零发送现场：新 QQ `54316` 通过固定模块/后台/唯一 Environment 准入，单次接入、登录、正常停止及独立零发送审计通过；同代 QQ 当次响应且 bridge 保留。首轮加载前 PowerShell 模块路径失败及修复对照均保留，详见 [progress](progress.md#current-state)。真实并发、panic、背压、ACK、callback/drain 与跨宿主恢复未证；下次现场须新鲜 QQ 准入，任何新消息需对应授权，unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 零发送现场已准备：源码 `3bbd3ce` 普通/research release 与脚本已固定，证据和限制见 [progress](progress.md#current-state)。当前旧 QQ 根 `38060` 当次仍映射 bridge；先请用户正常重启并登录，再重新核验新进程、固定 hash、backend、唯一 Environment，之后仅做零发送登录与正常停止；不重发、不卸载。

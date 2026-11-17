@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 结果保留/ACK 正常发送现场准备（源码 `3bbd3ce`，当前 HEAD `f9b69b8` 与之仅状态文档差异）：零发送现场后，拟在新鲜且登录的测试 QQ 上向既有好友 B **单次**发送 `CALIGO-FEAT004-RETAIN-361D4A93BC`，随后只读 `get_msg`、核对账本与独立技术审计，并请对端确认数量和内容。该样本仅验证当前修复版正常路径，不能证明真实 ACK 丢失、worker 重建、backpressure 或回调线程。当前尚未获得本样本发送授权，未执行新现场，主证据目录没有 `grant.private.json`、`attach-reserved` 或 `send-reserved`；结果未知不重发。
+
+准备目录 ignored `E:/stella/Caligo/local-evidence/feat004-retained-send-20261117-361D4A93BC/`；预检/host-op/runner/技术审计/审计自测 SHA-256 依次为 `7CE91BFA18B5C0E1FE002A40AFC6BDE689E7B2F01E9758498AB652DB52AE708B` / `0CE9FB42A61EFB863902CDF90AD7D7677D0F11D34268A0600FEB59DF5D82F4B0` / `A93A8B67352605CD97D6E560283D0226FBC67DE6920E25C22EA90212D28521BA` / `3FF1A2823182254875FC56894AE4071AFBD79D53904D7B903FD7CB3659549FD0` / `8C8F983C1B9C8439162C55793394FDC2C8E8DE37E35F2B08265A9AD1B2B7F1E0`，构建与脚本 pin 在 `preparation.json`。runner 在启动前验证单次授权和目标/正文，实际发送前以独占文件和 fsync 保留单次机会；缺授权与错误授权均在创建 manager 前拒绝，重复保留负例通过，技术审计器一项合成正例、三项负例通过。guard helper 首次因括号语法错误未执行，修正后通过；没有触碰 QQ。
+
+当前只读核验中先前测试 QQ `54316` 仍映射 bridge，不能重新接入；下一步向用户说明并取得该具体样本的单次授权，同时要求正常重启并登录测试 QQ，再按进程创建时间、固定 hash、backend 与唯一 Environment 重验。仅在准入通过且用户授权后生成授权文件并执行一次；无响应、失败或未知均不重发。源码对应 release 编译证据见前次记录；本轮仅准备，feat-004 保持 in-progress。
+
 2026-11-17 feat-004 worker lease 修复版零发送现场（源码 `3bbd3ce`，准备记录提交 `51a9065` 仅改文档）：用户正常重启并登录后，按新创建时间选定测试 QQ 主进程 PID `54316`（创建 `2026-11-17T13:32:39.4626879Z`）；只读准入核对响应状态、未映射 bridge、固定模块 hash、PE/backend 冲突审计及唯一 Environment 通过。research 构建单次实际接入后 `env_fresh`、`loop_chain`、`interrupt_posted`、`first_entry`、`listener_armed` 均通过；登记账号登录核验通过，runner 未发送任何消息。独立审计确认空请求账本、无发送保留文件、listener 与 owner TID 一致、manager/owner 停止均退出 0、HTTP/SSE 端口关闭；`synthetic_stopped_callbacks` 为 pass。现场结束时同代 QQ 仍响应并映射指定 hash 的 bridge，不重接、不热卸载。
 
 首次 runner 在加载前失败：PowerShell 5 子进程因模块搜索路径缺失无法调用 `Get-FileHash`；未创建 `attach-reserved`，未产生 entry 报告，QQ 未映射 bridge，manager 退出 0 且端口关闭。保留首轮失败证据；在新证据目录修正 host-op 的 `PSModulePath`，以不存在的假 PID 验证脚本到达预期加载前拒绝且未预留接入，再对同一仍新鲜 QQ 代次重新做完整只读准入，方执行本轮唯一一次实际接入。首轮不作为现场通过，亦未自动重试任何未知发送。
