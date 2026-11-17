@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 worker 退出缺口：假宿主离线复现通道成功后接收前丢失，以及 worker outbox 持有期间丢失；未修改生产协议。下一步设计 resident 有界持有与版本化 durable ACK，覆盖中间态/迟到结果、重放与退出；详见 [progress](progress.md#current-state)。现场仍须新鲜进程准入，unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 owner 通知交接：通道发送明确失败时恢复未交出项，锁存断开并停止后续 dispatch/查询 drain/JS 快照确认；假宿主回归和真实命名管道 ACK 丢失对照见 [progress](progress.md#current-state)。成功进入通道但 worker 退出前未持久化、首次发现断开之前的派发及关闭恢复仍未覆盖；继续处理 durable ACK 与退出边界。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 结果表压力抽样：未匹配观察按既有频率产生 `poll_result_pressure` 本机报告，仅含有界数量和满额/退避状态，异常为 unknown；合成只读、隐私及边界验证见 [progress](progress.md#current-state)。该样本不是持续健康度或未匹配精确计数，报告须留本机；仍需可审计处置、持久化、额外 V8 调用的现场兼容和退出恢复验证。未知不重发，未证寿命不卸载。

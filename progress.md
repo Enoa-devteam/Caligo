@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 worker 退出丢失边界离线对照（起点 `0e63770`）：实际 `ResultHandoffGate` 与 resident、假宿主的合成测试分别模拟 (1) 通道 `send` 成功后接收端在读取前退出，(2) worker 读入 outbox 后、daemon durable ACK 前丢弃 outbox；两例均观察到 resident 队列已无未确认的 NativeStarted 和 Success 通知。实验不启动真实 worker/daemon，不证明真实 QQ 曾发生该故障；4 项既有通道回归作为对照也通过。当前 worker outbox 跨连接但不跨 worker 生存期，resident 槽位掩码只保留容量而非通知正文；JS 快照确认仍可能早于 daemon 持久确认。该缺口尚未修复，不得重发原生请求。
+
+下一实现需先建立 resident 持有的、身份及修订明确且有界的通知副本，直到对应 daemon durable ACK；交接和重连只重放通知，NativeStarted 必须先于该请求结果。当前结果 ACK 仅带 request_id 与 terminal 标志，worker 以 request_id 找到首个结果即删除；中间态、unknown 和迟到强身份可能共存时，必须设计版本/内容绑定与旧 ACK、重复 ACK 的拒绝或幂等规则，不能简单按请求号清除新结果。应覆盖接收前和接收后 worker 退出、重建、daemon 落账后 ACK 丢失、同请求多个版本的旧 ACK、容量耗尽和停止/宿主退出；跨进程或宿主退出的恢复另需独立持久介质和合同，不能由内存副本推断。本轮没有修改生产行为或 IPC 协议。
+
+离线复验源码 `target-harness/feat004-worker-loss-lab.rs` SHA-256 `7C1FB01AD2DD04BAAE9A608F2A4BB36B71ED538A9378E51538844648185D4183`，日志 `target-harness/feat004-worker-loss-lab.log` SHA-256 `348E161F6695C407D95C91F38687D90499170AFA1F25FF659045AC4C364ACE6F`。将源码临时复制为 `crates/caligo-bridge/tests/feat004_worker_loss_lab.rs` 后运行 `cargo test -p caligo-bridge --test feat004_worker_loss_lab --locked --offline --target-dir target-harness`，6/6 通过，完成后删除临时副本；其中两项通过表示已重现丢失，不是修复通过。未接 QQ、未发送；feat-004 in-progress。
+
 2026-11-17 feat-004 owner 通知通道断开防丢（起点 `f9be5af`）：正式 owner 原先 `take_results` 后忽略 `mpsc::send` 的失败；合成关闭接收端时，已从 resident 队列移走但未交出的 NativeStarted/终态均丢失，且后续可能确认 JS 快照。现按顺序转交，发送失败时把失败项和未发送后缀恢复到 resident 队首，并锁存不可恢复的接收端关闭状态；后续 owner tick 在 dispatch、查询 drain、JS 轮询和快照确认前停止，记录固定标签 `result_notice_channel:closed_retained`。显式 stop 分支仍可执行；保留不等于支持重连或持久恢复。
 
 保护仅覆盖 `send` 明确返回失败的项：发送成功后 worker 退出但尚未接收/持久化的窗口仍存在；首次发现断开之前该轮 `r.drain` 可能已经派发请求，不能证明 worker 一断开就没有原生发送。关闭/进程退出后的通知与 JS 状态、最终 drain 和真实 QQ 回调均未验证；未确认请求不自动重发。
