@@ -100,6 +100,35 @@ fn start_daemon(
     (daemon, runner, journal)
 }
 
+#[test]
+fn daemon_shutdown_reports_journal_capacity_failure() {
+    use caligo_core::journal::{Journal, JournalRecord, RequestRecord, SyncMode};
+    for state in ["Queued", "NativeStarted"] {
+        let path = temp_journal(&format!("shutdown-full-{state}"));
+        let _ = std::fs::remove_file(&path);
+        let (mut journal, _) = Journal::open(&path, 1024 * 1024, SyncMode::Always).unwrap();
+        journal.append(&JournalRecord::Request(RequestRecord {
+            v: 1, request_id: "shutdown-request".into(), payload_hash: 42,
+            state: state.into(), native_id: None, at_unix_ms: 1,
+            session_generation: 1, wire_seq: Some(1), failure_reason: None,
+        })).unwrap();
+        drop(journal);
+        let limit = std::fs::metadata(&path).unwrap().len();
+        let cfg = DaemonConfig {
+            pipe_prefix: format!(r"\\.\pipe\caligo-shutdown-full-{}-{}", state, std::process::id()),
+            journal_path: path, module_baseline: "qq-9.9.33-52230".into(),
+            account: "10001".into(), core_build: caligo_core::CORE_BUILD.into(),
+            expect_client_pid: 0,
+            runtime: RuntimeConfig { journal_max_bytes: limit, ..RuntimeConfig::default() },
+            test_fault_break_bridge_after_hello: false, test_fault_break_bridge_after_result: false,
+        };
+        let daemon = Daemon::start(cfg).unwrap();
+        daemon.stop_flag().store(true, Ordering::Relaxed);
+        let err = daemon.run().expect_err("shutdown must not report success after a failed state write");
+        assert!(err.to_string().contains("actor shutdown failed: JournalFailure"), "{err}");
+    }
+}
+
 fn connect_bridge(daemon: &Arc<Daemon>) -> BridgeClient {
     let (bridge_name, _) = daemon.pipe_names();
     for _ in 0..100 {

@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-17 feat-004 停止落账失败修复：journal 容量耗尽时 stop/close 原先吞错并可能虚报 Closed，现传播错误、维持 Degraded/未决状态，daemon 最终收尾报错；恢复读取、真实本机 daemon 和普通/research 测试见 [progress](progress.md#current-state)。控制面 Stopped 早于最终收尾，不能单凭它证明持久化完成。尚未 QQ 现场验证；下一步固定修复版构建并准备零发送新进程接入、登录和正常停止，不重发 unknown，未证寿命不卸载。
+
+
 2026-11-17 feat-004 丢失 ACK 后重建组合 LAB：真实命名管道和假宿主中，daemon 持久化结果后断链、首 worker 在重连前正常停止，同 resident 由夹具重建后重放并 ACK，结果及一次发送保持；定向、普通全组和 research 定向验证见 [progress](progress.md#current-state)。不证明 worker 崩溃、自动重启、宿主持久化或 QQ 现场。继续未闭合工作；需现场时重核新进程准入，unknown 不重发，未证寿命不卸载。
 
 

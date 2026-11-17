@@ -583,13 +583,9 @@ impl AccountActor {
             .cloned()
             .collect();
         for id in ids {
-            if self
-                .transition(&id, ActionState::CancelledUnsent, None)
-                .is_ok()
-            {
-                cancelled += 1;
-                self.counters.sends_cancelled_unsent += 1;
-            }
+            self.transition(&id, ActionState::CancelledUnsent, None)?;
+            cancelled += 1;
+            self.counters.sends_cancelled_unsent += 1;
         }
         Ok(cancelled)
     }
@@ -606,12 +602,8 @@ impl AccountActor {
         let ids: Vec<String> = self.pending.iter().cloned().collect();
         let mut marked = 0;
         for id in ids {
-            if self
-                .transition(&id, ActionState::DeliveryUnknown, None)
-                .is_ok()
-            {
-                marked += 1;
-            }
+            self.transition(&id, ActionState::DeliveryUnknown, None)?;
+            marked += 1;
         }
         self.phase = Phase::Closed;
         Ok(marked)

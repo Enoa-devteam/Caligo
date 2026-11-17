@@ -717,9 +717,10 @@ impl Daemon {
         let r2 = t_control.join().expect("control accept thread");
         // 收尾:取消未执行 → 在途显式 unknown → Closed。
         let mut actor = self.actor.lock().unwrap();
-        let _ = actor.stop();
-        let _ = actor.close();
-        r1.and(r2)
+        let shutdown = actor.stop().and_then(|_| actor.close()).map_err(|reason| {
+            SessionError::Io(std::io::Error::other(format!("actor shutdown failed: {reason:?}")))
+        });
+        r1.and(r2).and(shutdown.map(|_| ()))
     }
 
     fn accept_loop(self: &Arc<Self>, srv: &PipeServer, role: Role) -> Result<(), SessionError> {

@@ -2,6 +2,11 @@
 
 ## Current State
 
+2026-11-17 feat-004 停止时 journal 写入失败修复（起点 `5e0a24b`）：容量耗尽对照复现 actor `stop` 写取消状态失败仍返回 `Ok(0)`，`close` 写在途 unknown 失败仍返回 `Ok(0)` 且错误进入 Closed；daemon 还忽略两者结果。现逐项传播状态迁移错误；journal 失败保持 Degraded、原未决状态与 pending 查询，daemon 收尾返回错误（正式 caligod 因此非零退出，manager 等待 runner 并报告失败）。控制面 `Stopped` 在 daemon 最终收尾之前返回，本次未改变其线协议，不能仅凭该响应证明最终持久化成功。已持久化的前缀不回滚；重启读取失败前的原状态供查询，不自动重发。
+
+Windows MSVC 测试将 journal 上限设为现有长度，在排队取消和 NativeStarted → unknown 两条路径均复现失败；修复后断言 `JournalFailure`、Degraded、原状态，重开 journal 仍见原 pending。真实本机 daemon 的两种容量耗尽收尾均返回错误；正常 stop/close 与全仓普通/research 测试通过。红灯、修复后定向、daemon 定向、最终追加重开断言及 `init.ps1 -Mode all` 日志 SHA-256 分别为 `F460BE6D0D00C754F731091A37815F3ACFCC63605476B269B6D893B5F47B95DF` / `59F0A57F93C2007561F81E39691DD638F33F97784B76301B8051AA2045788072` / `8CF5C42339BD7FF92ACD45186E2855EF5669F68759AADA6394A2301656A5A36F` / `1C0FA834F135F55B89F484018FE94BAF529F17A4F140EF28A40A4238C035B41C` / `5A966DD7F6EDD9BC374C7D451D0E35EED4809D155EDED8481E6A99378362A77B`，路径分别为 `target-harness/feat004-shutdown-red.log`、`feat004-shutdown-green.log`、`feat004-shutdown-daemon.log`、`feat004-shutdown-recovery.log`、`feat004-shutdown-all.log`；全仓测试在追加重开断言之前运行，追加断言后定向重跑通过。GitNexus 对 actor stop/close 和 daemon run 为 UNKNOWN，结合源码和 manager/CLI 调用核对，不能将缺边当零影响。本轮只做容量上限故障注入，不证明任意部分写入、介质错误或 QQ 现场；feat-004 保持 in-progress。
+
+
 2026-11-17 feat-004 持久结果 ACK 丢失与 worker 重建组合 LAB（起点 `020f82e`）：新增真实 Windows 命名管道 daemon/worker 和假宿主测试，daemon 注入一次结果持久化后、ACK 前断链；测试确认初始 worker 观察到断链且仅连接一次，在配置的 2 秒重连等待中请求正常停止。成功结果仍保存在同一个 resident；第二个 worker 由夹具手动创建，从快照重放并收到 daemon ACK，保留集合清空，查询仍得到相同稳定 ID，重复提示不增加结果上报，假宿主发送计数为一。测试使用 700ms 观察间隔并以连接计数断言时序，时序不满足时失败，不把重连后的结果当作通过。
 
 Windows MSVC 普通构建定向用例、`cargo test -p caligo-core --test daemon_client_lab --locked --offline --target-dir target-harness` 全组 15 项、research 构建定向用例均通过；日志 `target-harness/feat004-rebuild-lost-ack-verified.log` / `feat004-rebuild-lost-ack-suite.log` / `feat004-rebuild-lost-ack-research.log` SHA-256 分别为 `3AD657E111571733E1C4CBADA971E1E1FF3BDEB1577F2EADC291685E7B27B6E3` / `B814573E03A5E07D1D784935441AA3346E68E50D0984C35F9D783DEDF613F75B` / `E1ACD3C887B4D1A0D506E8BF789FF8695F2F0E5335B491FC1201802410058D0C`。这是受控断链与正常停止，不是 worker 崩溃、进程死亡或 QQ 现场；正式自动重启、跨宿主持久化、真实 callback/drain 仍未证。本轮无生产代码修改或 QQ 接入，feat-004 保持 in-progress。
