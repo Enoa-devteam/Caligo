@@ -2,6 +2,13 @@
 
 ## Current State
 
+2026-11-17 feat-004 结果保留修复版单次私聊现场（源码 `3bbd3ce`，准备提交 `f8b3558` 仅文档差异）：用户重启登录并明确授权后，测试 QQ 主进程 `17520`（创建 `2026-11-17T13:58:27.9448390Z`）通过未加载 bridge、固定模块 hash、PE/backend 和唯一 Environment 只读准入。向好友 B 单次发送 `CALIGO-FEAT004-RETAIN-361D4A93BC` 后立即 `get_msg` 成功；独立技术审计确认唯一请求依次为 Queued、DispatchIntent、NativeStarted、ConfirmedSuccess，消息身份与回读一致。用户确认对端仅收到一条且内容相符。回读来自持久账本，不能当作 QQ 原生查询。
+
+原 runner 将 `trace_pass` 报为 false，原因是轨迹 detail 同时使用单引号和小写 JSON 布尔值，`json.loads` 与 `ast.literal_eval` 均不能直接解析；原 summary 保留。独立解析审计确认同一代次、同一序号、两段均非 incomplete，registered、submit_enter、submit_return、matched_add、matched_update、promise_accepted、readback_matched、settled 八阶段齐全。技术审计通过，manager 与 owner 停止码均为 0，端口关闭；同代 QQ 仍响应并映射 bridge，不重接、不热卸载，不重发该样本。该现场未制造真实 ACK 丢失、worker 重建、背压、panic 或迟到回调，也未观察真实 callback 线程/drain，feat-004 保持 in-progress。
+
+原始资料在 ignored `E:/stella/Caligo/local-evidence/feat004-retained-send-20261117-361D4A93BC/`；preflight、runner summary、独立技术审计摘要、独立轨迹审计、对端确认与 entry 的 SHA-256 分别为 `485A36E251EF531FF72EC94851D713B0083F1D11243494148C31D3A0B167D419` / `11ACC9850FE8C13F57A0994D8190A006CB786DF0E8B1BF17D3D3923DD14DF5D0` / `AFE5D5C84A91C5B1560D96FF4586A013073119E39FE138445FD5E64EC77B3EBE` / `5116CCBFF554C8FFF728EE8EAE5EDD828646DA97859643D5BE5CE03AD7FA1056` / `7E619E91C82570DD2E05966962AF398BAD20FBCBD5061A262380ED136ECD70DE` / `E786F9DAF72DDB9796BE6966C8807FA2CF55D389EACD8EEBC32568FA8FD37DE5`。下述准备记录描述当时状态，授权与执行已由本条更新。
+
+
 2026-11-17 feat-004 结果保留/ACK 正常发送现场准备（源码 `3bbd3ce`，当前 HEAD `f9b69b8` 与之仅状态文档差异）：零发送现场后，拟在新鲜且登录的测试 QQ 上向既有好友 B **单次**发送 `CALIGO-FEAT004-RETAIN-361D4A93BC`，随后只读 `get_msg`、核对账本与独立技术审计，并请对端确认数量和内容。该样本仅验证当前修复版正常路径，不能证明真实 ACK 丢失、worker 重建、backpressure 或回调线程。当前尚未获得本样本发送授权，未执行新现场，主证据目录没有 `grant.private.json`、`attach-reserved` 或 `send-reserved`；结果未知不重发。
 
 准备目录 ignored `E:/stella/Caligo/local-evidence/feat004-retained-send-20261117-361D4A93BC/`；预检/host-op/runner/技术审计/审计自测 SHA-256 依次为 `7CE91BFA18B5C0E1FE002A40AFC6BDE689E7B2F01E9758498AB652DB52AE708B` / `0CE9FB42A61EFB863902CDF90AD7D7677D0F11D34268A0600FEB59DF5D82F4B0` / `A93A8B67352605CD97D6E560283D0226FBC67DE6920E25C22EA90212D28521BA` / `3FF1A2823182254875FC56894AE4071AFBD79D53904D7B903FD7CB3659549FD0` / `8C8F983C1B9C8439162C55793394FDC2C8E8DE37E35F2B08265A9AD1B2B7F1E0`，构建与脚本 pin 在 `preparation.json`。runner 在启动前验证单次授权和目标/正文，实际发送前以独占文件和 fsync 保留单次机会；缺授权与错误授权均在创建 manager 前拒绝，重复保留负例通过，技术审计器一项合成正例、三项负例通过。guard helper 首次因括号语法错误未执行，修正后通过；没有触碰 QQ。

@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-17 feat-004 修复版单次私聊现场：用户授权后 QQ `17520` 准入、单次发送、持久账本 `get_msg`、独立技术与轨迹复核通过；用户确认仅一条且内容相符。原 runner 轨迹解析 false 保留，混合格式的独立复核及证据见 [progress](progress.md#current-state)。manager/owner 停止、端口关闭，QQ 响应并保留 bridge；不重接、不卸载、不重发。真实 ACK 丢失、worker 重建、背压、panic、迟到及 callback/drain 仍未证；feat-004 in-progress。后续先选取一个未闭合工作块并实施离线验证；需新现场时重新核验新鲜进程，发送须对应授权。
+
+
 2026-11-17 feat-004 单次私聊正常路径已准备但未授权：样本 `CALIGO-FEAT004-RETAIN-361D4A93BC`，固定源码/脚本、缺授权与重复保留负例、合成审计见 [progress](progress.md#current-state)。当前 QQ `54316` 当次仍映射 bridge；先取得用户对该正文和好友 B 的单次授权，并让用户重启登录，核验新进程后才可执行一次；未知不重发、未证寿命不卸载。
 
 2026-11-17 feat-004 修复版零发送现场：新 QQ `54316` 通过固定模块/后台/唯一 Environment 准入，单次接入、登录、正常停止及独立零发送审计通过；同代 QQ 当次响应且 bridge 保留。首轮加载前 PowerShell 模块路径失败及修复对照均保留，详见 [progress](progress.md#current-state)。真实并发、panic、背压、ACK、callback/drain 与跨宿主恢复未证；下次现场须新鲜 QQ 准入，任何新消息需对应授权，unknown 不重发，未证寿命不卸载。
