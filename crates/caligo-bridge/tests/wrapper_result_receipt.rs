@@ -1,4 +1,4 @@
-use caligo_bridge::qq_v8::{build_bound_poll_js,build_poll_result_ack_js,poll_result_receipt,advance_poll_result_ack,PollResultReceipt};
+use caligo_bridge::qq_v8::{build_bound_poll_js,build_poll_result_ack_js,poll_result_receipt,advance_poll_result_ack,PollResultReceipt,PollResultAck};
 use std::io::Write;
 #[test]
 fn bound_poll_replays_terminal_result_after_lost_v8_return() {
@@ -20,10 +20,10 @@ assert.ok(first.resultReceipt && second.resultReceipt);assert.notDeepEqual(first
 fn receipt_ack_is_idempotent_scoped_and_never_deletes_newer_results() {
  let poll=build_bound_poll_js("nt_1").unwrap();
  let receipt=|n| PollResultReceipt{generation:"11".repeat(16),sequence:n};
- let ack1=build_poll_result_ack_js("nt_1",&receipt(1)).unwrap();
- let ack2=build_poll_result_ack_js("nt_1",&receipt(2)).unwrap();
- let wrong=build_poll_result_ack_js("nt_other",&receipt(1)).unwrap();
- assert!(build_poll_result_ack_js("nt_1",&receipt(0)).is_none());
+ let ack1=build_poll_result_ack_js("nt_1",&receipt(1),&["r1".into(),"r2".into()]).unwrap();
+ let ack2=build_poll_result_ack_js("nt_1",&receipt(2),&["r1".into()]).unwrap();
+ let wrong=build_poll_result_ack_js("nt_other",&receipt(1),&["r1".into(),"r2".into()]).unwrap();
+ assert!(build_poll_result_ack_js("nt_1",&receipt(0),&[]).is_none());
  assert!(poll_result_receipt(r#"{"resultReceipt":{"generation":"bad","sequence":1}}"#).is_err());
  assert!(poll_result_receipt(r#"{"resultReceipt":{"generation":"11111111111111111111111111111111","sequence":0}}"#).is_err());
  assert!(poll_result_receipt(r#"{}"#).unwrap().is_none());
@@ -50,19 +50,20 @@ assert.equal(run(ack2),'ERR:receipt_stale');assert.equal(R.sendResults.r1.status
 #[test]
 fn owner_retries_uncertain_ack_before_allowing_another_poll() {
  let receipt=PollResultReceipt{generation:"ab".repeat(16),sequence:7};
- let mut pending=Some(("nt_1".to_string(),receipt.clone()));let mut attempts=0;
- let ready=advance_poll_result_ack(&mut pending,|sid,r|{attempts+=1;assert_eq!(sid,"nt_1");assert_eq!(r,&receipt);false});
- assert!(!ready);assert_eq!(pending,Some(("nt_1".to_string(),receipt.clone())));
- let ready=advance_poll_result_ack(&mut pending,|sid,r|{attempts+=1;assert_eq!(sid,"nt_1");assert_eq!(r,&receipt);true});
+ let item=PollResultAck{session:"nt_1".into(),receipt:receipt.clone(),keys:vec!["request-1".into()]};
+ let mut pending=Some(item.clone());let mut attempts=0;
+ let ready=advance_poll_result_ack(&mut pending,|got|{attempts+=1;assert_eq!(got,&item);false});
+ assert!(!ready);assert_eq!(pending,Some(item.clone()));
+ let ready=advance_poll_result_ack(&mut pending,|got|{attempts+=1;assert_eq!(got,&item);true});
  assert!(ready);assert_eq!(pending,None);assert_eq!(attempts,2);
- assert!(advance_poll_result_ack(&mut pending,|_,_|panic!("no pending receipt")));
+ assert!(advance_poll_result_ack(&mut pending,|_|panic!("no pending receipt")));
 }
 
 #[test]
 fn entropy_failure_keeps_results_and_oversize_unknown_is_acknowledged() {
  let poll=build_bound_poll_js("nt_1").unwrap();
  let receipt=PollResultReceipt{generation:"33".repeat(16),sequence:1};
- let ack=build_poll_result_ack_js("nt_1",&receipt).unwrap();
+ let ack=build_poll_result_ack_js("nt_1",&receipt,&["big".into()]).unwrap();
  let js=r#"
 const assert=require('node:assert/strict'),vm=require('node:vm'),poll=__POLL__,ack=__ACK__;
 const R={sid:'nt_1',sends:{},sendResults:{big:{status:'done',msgId:'x'.repeat(530000)}},recv:[],recvBytes:0,rejected:0,overflow:0};
@@ -95,7 +96,7 @@ fn leased_result_crosses_decoder_and_resident_before_acknowledgement() {
  }
  let node=r#"
 const vm=require('node:vm'),readline=require('node:readline');
-const R={sid:'nt_1',sends:{},sendResults:{'request-1':{status:'done',msgId:'native-1'}},recv:[],recvBytes:0,rejected:0,overflow:0};
+const R={sid:'nt_1',sends:{},sendResults:{'request-1':{status:'done',msgId:'native-1'},orphan:{status:'unknown',reason:'timeout'}},recv:[],recvBytes:0,rejected:0,overflow:0};
 const c={__caligo_res:R,process,Buffer,Date,JSON,Object,Array,Number,String};vm.createContext(c);
 readline.createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);
  if(q.op==='quit'){process.exit(0);return;} const result=q.op==='run'?vm.runInContext(q.script,c):Object.keys(R.sendResults);
@@ -118,15 +119,16 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const q=JSON.pa
  let binding=WrapperBinding{account:"10001".into(),session_generation:1,host_nonce:1,wrapper_session:"nt_1".into()};
  let batch=resident.ingest_wrapper_batch(json,&binding).unwrap();
  let id=batch.send_results["request-1"]["msgId"].as_str().unwrap().to_string();
- resident.complete_sends(&[("request-1".into(),id)],&[],&[]);
+ let accepted=resident.complete_sends(&[("request-1".into(),id)],&[],&[("orphan".into(),"timeout".into())]);
+ assert_eq!(accepted,vec!["request-1".to_string()]);
  assert_eq!(resident.take_results(),vec![ResidentNotice::Outcome(SendOutcome::Success{request_id:"request-1".into(),native_id:"native-1".into()})]);
- let mut pending=Some(("nt_1".to_string(),receipt));
- assert!(!advance_poll_result_ack(&mut pending,|_,_|false));
- assert_eq!(rpc(&mut input,&mut output,serde_json::json!({"op":"inspect"})),serde_json::json!(["request-1"]));
- assert!(advance_poll_result_ack(&mut pending,|sid,r|{
-  let script=build_poll_result_ack_js(sid,r).unwrap();rpc(&mut input,&mut output,run(&script))==serde_json::json!("ACKED")
+ let mut pending=Some(PollResultAck{session:"nt_1".into(),receipt,keys:accepted});
+ assert!(!advance_poll_result_ack(&mut pending,|_|false));
+ assert_eq!(rpc(&mut input,&mut output,serde_json::json!({"op":"inspect"})),serde_json::json!(["request-1","orphan"]));
+ assert!(advance_poll_result_ack(&mut pending,|item|{
+  let script=build_poll_result_ack_js(&item.session,&item.receipt,&item.keys).unwrap();rpc(&mut input,&mut output,run(&script))==serde_json::json!("ACKED")
  }));
- assert_eq!(rpc(&mut input,&mut output,serde_json::json!({"op":"inspect"})),serde_json::json!([]));
+ assert_eq!(rpc(&mut input,&mut output,serde_json::json!({"op":"inspect"})),serde_json::json!(["orphan"]));
  writeln!(input,"{{\"op\":\"quit\"}}").unwrap();drop(input);assert!(child.wait().unwrap().success());
 }
 
@@ -134,7 +136,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const q=JSON.pa
 fn superseded_snapshot_rejects_old_ack_and_keeps_result() {
  let poll=build_bound_poll_js("nt_1").unwrap();
  let token=|n| PollResultReceipt{generation:"44".repeat(16),sequence:n};
- let ack1=build_poll_result_ack_js("nt_1",&token(1)).unwrap();let ack2=build_poll_result_ack_js("nt_1",&token(2)).unwrap();
+ let ack1=build_poll_result_ack_js("nt_1",&token(1),&["r".into()]).unwrap();let ack2=build_poll_result_ack_js("nt_1",&token(2),&["r".into()]).unwrap();
  let js=r#"
 const assert=require('node:assert/strict'),vm=require('node:vm'),poll=__POLL__,ack1=__ACK1__,ack2=__ACK2__;
 const R={sid:'nt_1',sends:{},sendResults:{r:{status:'done',msgId:'123'}},recv:[],recvBytes:0,rejected:0,overflow:0};

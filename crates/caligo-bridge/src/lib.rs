@@ -924,7 +924,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         };
         // An uncertain acknowledgement must be retried before taking a new
         // result snapshot; it never causes the QQ send to be replayed.
-        let pending_result_ack: std::sync::Mutex<Option<(String, crate::qq_v8::PollResultReceipt)>> =
+        let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
             std::sync::Mutex::new(None);
         qq_entry::install_drain_hook(Box::new(move || {
             if owner_stop.load(Ordering::Acquire) {
@@ -959,8 +959,8 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             if OWNER_INIT.load(Ordering::Relaxed) {
                 // Never block or reenter while the V8 acknowledgement is active.
                 if let Ok(mut pending_result_ack) = pending_result_ack.try_lock() {
-                    let ack_ready = crate::qq_v8::advance_poll_result_ack(&mut pending_result_ack, |sid, receipt| {
-                        matches!(crate::qq_v8::ack_poll_result(sid, receipt), Ok(ref value) if value == "ACKED")
+                    let ack_ready = crate::qq_v8::advance_poll_result_ack(&mut pending_result_ack, |item| {
+                        matches!(crate::qq_v8::ack_poll_result(item), Ok(ref value) if value == "ACKED")
                     });
                     if !ack_ready {
                         static ACK_ERR_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1013,11 +1013,19 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                                                 rejected.push((request_id.clone(), why));
                                             }
                                         }
-                                        if !done.is_empty() || !rejected.is_empty() || !unknown.is_empty() {
-                                            r.complete_sends(&done, &rejected, &unknown);
+                                        let submitted = done.len() + rejected.len() + unknown.len();
+                                        let accepted = if submitted > 0 {
+                                            r.complete_sends(&done, &rejected, &unknown)
+                                        } else { Vec::new() };
+                                        if accepted.len() < submitted {
+                                            static UNMATCHED_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                            let n = UNMATCHED_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            if n % 20 == 0 { qq_entry::append_stage_simple("poll_result_unmatched", false, "retained"); }
                                         }
                                         if let Some(receipt) = receipt {
-                                            *pending_result_ack = Some((binding.wrapper_session.clone(), receipt));
+                                            *pending_result_ack = Some(crate::qq_v8::PollResultAck {
+                                                session: binding.wrapper_session.clone(), receipt, keys: accepted,
+                                            });
                                         }
                                     } // Invalid or missing receipts leave results in JS.
                                 }

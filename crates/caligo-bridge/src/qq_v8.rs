@@ -815,6 +815,14 @@ pub const D8_STOP_JS: &str = r"
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PollResultReceipt { pub generation: String, pub sequence: u64 }
 
+/// Only the result keys accepted by the resident may be acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollResultAck {
+    pub session: String,
+    pub receipt: PollResultReceipt,
+    pub keys: Vec<String>,
+}
+
 pub fn poll_result_receipt(json: &str) -> Result<Option<PollResultReceipt>, &'static str> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|_| "receipt_json")?;
     let Some(receipt) = value.get("resultReceipt") else { return Ok(None); };
@@ -827,25 +835,33 @@ pub fn poll_result_receipt(json: &str) -> Result<Option<PollResultReceipt>, &'st
 }
 
 /// Build an idempotent ack that only removes unchanged result objects.
-pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt) -> Option<String> {
+pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt, keys: &[String]) -> Option<String> {
     if session.is_empty() || session.len() > 128 || receipt.generation.len() != 32 ||
         !receipt.generation.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) ||
-        receipt.sequence == 0 || receipt.sequence > 9_007_199_254_740_991 { return None; }
-    let args = serde_json::json!({"sid":session,"generation":receipt.generation,"sequence":receipt.sequence});
+        receipt.sequence == 0 || receipt.sequence > 9_007_199_254_740_991 || keys.len() > 128 { return None; }
+    let unique: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
+    if unique.len() != keys.len() || serde_json::to_string(keys).ok()?.len() > 524288 { return None; }
+    let args = serde_json::json!({"sid":session,"generation":receipt.generation,"sequence":receipt.sequence,"keys":keys});
     Some(format!(r#"(function(a) {{
       try {{
         var R = globalThis.__caligo_res;
         if (!R || R.sid !== a.sid) return 'ERR:receipt_session';
+        if (!Array.isArray(a.keys) || a.keys.length > 128) return 'ERR:receipt_keys';
+        var fingerprint = JSON.stringify(a.keys);
         var last = R.resultLeaseAcked;
-        if (last && last.generation === a.generation && last.sequence === a.sequence) return 'ACKED';
+        if (last && last.generation === a.generation && last.sequence === a.sequence)
+          return last.keys === fingerprint ? 'ACKED' : 'ERR:receipt_replay_mismatch';
         var lease = R.resultLease;
         if (!lease || lease.generation !== a.generation || lease.sequence !== a.sequence) return 'ERR:receipt_stale';
-        var keys = Object.keys(lease.refs);
-        for (var i = 0; i < keys.length; i++) {{
-          var k = keys[i];
+        for (var i = 0; i < a.keys.length; i++) {{
+          if (typeof a.keys[i] !== 'string' || !Object.prototype.hasOwnProperty.call(lease.refs, a.keys[i]))
+            return 'ERR:receipt_keys';
+        }}
+        for (var i = 0; i < a.keys.length; i++) {{
+          var k = a.keys[i];
           if (R.sendResults[k] === lease.refs[k]) delete R.sendResults[k];
         }}
-        R.resultLeaseAcked = {{generation:a.generation, sequence:a.sequence}};
+        R.resultLeaseAcked = {{generation:a.generation, sequence:a.sequence, keys:fingerprint}};
         R.resultLease = null;
         return 'ACKED';
       }} catch (_) {{ return 'ERR:receipt_failed'; }}
@@ -853,17 +869,17 @@ pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt) -> O
 }
 
 /// Advance one pending receipt only after the caller observes an ACKED reply.
-pub fn advance_poll_result_ack<F>(pending: &mut Option<(String, PollResultReceipt)>, ack: F) -> bool
-where F: FnOnce(&str, &PollResultReceipt) -> bool {
-    if let Some((session, receipt)) = pending.as_ref() {
-        if !ack(session, receipt) { return false; }
+pub fn advance_poll_result_ack<F>(pending: &mut Option<PollResultAck>, ack: F) -> bool
+where F: FnOnce(&PollResultAck) -> bool {
+    if let Some(item) = pending.as_ref() {
+        if !ack(item) { return false; }
         *pending = None;
     }
     true
 }
 
-pub fn ack_poll_result(session: &str, receipt: &PollResultReceipt) -> Result<String, V8Error> {
-    let Some(source) = build_poll_result_ack_js(session, receipt) else { return Ok("ERR:receipt_invalid".into()); };
+pub fn ack_poll_result(item: &PollResultAck) -> Result<String, V8Error> {
+    let Some(source) = build_poll_result_ack_js(&item.session, &item.receipt, &item.keys) else { return Ok("ERR:receipt_invalid".into()); };
     let Some(syms) = symbols() else { return Err(V8Error::NoCurrentContext); };
     // SAFETY: caller is the owner thread; exec_script checks the V8 ladder.
     unsafe { exec_script(&syms, isolate_addr(), &source) }

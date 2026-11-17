@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 快照逐项确认（起点 `401b42c`）：原快照 ACK 会清除同批全部终态，即使 `Resident::complete_sends` 没有匹配该请求；JS 合成对照复现匹配条目与孤立条目同时被删除。现由 resident 返回实际推进状态或已接受的等价空身份中间结果的键，owner 将这组键与 receipt 一起重试；JS 在任何删除前校验所有键均属于快照，逐项按原对象身份删除。键列表最多 128、序列化有界且不接受重复键；同一 receipt 的重复确认必须带相同键列表，否则拒绝。未知请求、状态已终结及过期的迟到结果保持在 JS 结果表内，正常 128 条容量保护可能因此阻止新发送；同一未知批次可反复轮询与空确认，当前无额外退避，性能和人工处置尚未验证。
+
+`IdentityPending` 的重复空身份与此前已接受的中间结果等价，可确认但不再生成通知；`DeliveryUnknown` 的重复未知及终结态重复结果没有保存可核对的结果指纹，保守不确认，即使内容可能相同。结果表项原地变更、daemon 持久确认、QQ 现场及退出恢复仍未验证；此内存确认不代表持久化或对端接收。
+
+旧全批确认红灯 `target-harness/feat004-selective-red.log` SHA-256 `9584D800A7085A1AB060B01CDE7B8EB19AEE5BE5EA5B2D0ACA1D49A606B69BA6`；修复后真实 JS/decoder/resident 串联、同批孤立项、伪造键无部分删除、同 receipt 换键拒绝、空确认、三种终态、重复中间态、迟到过期和既有生命周期共 33 项定向回归通过，日志 `target-harness/feat004-selective-green-final2.log` SHA-256 `C60827F897AD667408FBB0C0EF4A14E7DCEE9D068E2F29C3855DF13F10EB19E4`。确认键边界追加定向测试通过，日志 `target-harness/feat004-selective-key-bounds.log` SHA-256 `353C8DF11427B77A0708C2B5FDED3FF3B339078347D90CFD78B960D17605EA5E`。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research），日志 `target-harness/feat004-selective-all.log` SHA-256 `58CF6F9EBF5CC6890DAB4DDC5E04BED3BF1A485C94A6E33ED7BFDBFCB9744151`；文档检查通过。合成对照不证明真实 QQ 曾出现孤立结果。GitNexus 基于 `E:/stella/Caligo-feat-004` 起点 `401b42c`：builder 和确认重试上游 LOW，`complete_sends`、V8 入口与 owner 为 UNKNOWN，调用方经源码补核；不将空图视为无影响。最终变更图 MEDIUM，涉及确认脚本进入 V8 的三条路径。本轮未接 QQ、未发送；feat-004 in-progress。
+
 2026-11-17 feat-004 发送结果快照确认接线（起点 `76e2966`）：正式绑定轮询现在保留已序列化的 `done`/`unknown`/`rejected` 结果，附加 listener 内 128 位随机代次和安全整数序号；owner 完成 batch 解码并调用 `complete_sends` 后保存该 receipt，下一轮先执行确认，确认失败或返回未知时保留 receipt 并暂停新轮询，不重派 QQ 发送。JS 仅清除仍与快照为同一对象的终态，旧确认、不同 session/代次和在途更新不会清除新对象；确认成功但返回丢失时可幂等重试。源码核对现有发送路径均用新对象替换结果，依赖该不变量；原无绑定兼容轮询仍是旧清除语义。发送入口的 128 条结果上限提供背压，超限单条保守 unknown，随机源不可用或序号耗尽时拒绝并保留结果。
 
 此确认只表示指定 batch 已经由 resident 处理，`complete_sends` 原有对未知或不再匹配请求的忽略策略未改变；不代表结果已送达 daemon、journal 持久化或对端可见。原接收事件队列仍在 JS 返回前清空，V8 返回失败不保证接收事件保留；停止/宿主退出、跨进程恢复、同一个 listener 内对象被外部原地修改、随机代次碰撞及 QQ 中的实际执行均未验证。随机代次依赖宿主 Node 的加密随机源，碰撞风险非数学上零；无法取得随机数时保守停排空。 每个含终态批次增加一次 V8 确认调用，现场兼容性与性能尚未验证。后续须独立验证真实 callback、ACK 失败/恢复、worker 与 journal durable ACK 以及停止/drain，未证寿命不卸载；feat-004 in-progress。

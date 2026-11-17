@@ -851,10 +851,11 @@ impl<A: HostAdapter> Resident<A> {
         done: &[(String, String)],
         rejected: &[(String, String)],
         unknown: &[(String, String)],
-    ) {
+    ) -> Vec<String> {
         let mut c = self.core.lock().unwrap();
         let mut outcomes = Vec::new();
         let mut updates = Vec::new();
+        let mut accepted = Vec::new();
         for (request_id, record) in &c.requests {
             if !matches!(
                 record.state,
@@ -881,6 +882,10 @@ impl<A: HostAdapter> Resident<A> {
                 if native_id.is_empty()
                     && matches!(record.state, ReqState::IdentityPending | ReqState::DeliveryUnknown)
                 {
+                    // This exact identity-less intermediate outcome was already accepted.
+                    if record.state == ReqState::IdentityPending {
+                        accepted.push(pending_request_id.to_string());
+                    }
                     continue;
                 }
                 let (state, outcome) = if native_id.is_empty() {
@@ -901,6 +906,7 @@ impl<A: HostAdapter> Resident<A> {
                 };
                 outcomes.push(ResidentNotice::Outcome(outcome));
                 updates.push((request_id.clone(), state));
+                accepted.push(pending_request_id.to_string());
             } else if let Some((_, reason)) = rejected
                 .iter()
                 .find(|(candidate, _)| candidate == request_id)
@@ -913,6 +919,7 @@ impl<A: HostAdapter> Resident<A> {
                     reason: reason.clone(),
                 }));
                 updates.push((request_id.clone(), ReqState::Done));
+                accepted.push(request_id.clone());
             } else if let Some((_, reason)) = unknown
                 .iter()
                 .find(|(candidate, _)| candidate == request_id)
@@ -926,6 +933,7 @@ impl<A: HostAdapter> Resident<A> {
                     late_receipt_possible: true,
                 }));
                 updates.push((request_id.clone(), ReqState::DeliveryUnknown));
+                accepted.push(request_id.clone());
             }
         }
         for (request_id, state) in updates {
@@ -945,6 +953,7 @@ impl<A: HostAdapter> Resident<A> {
             }
         }
         c.results_out.extend(outcomes);
+        accepted
     }
 
     /// core durable ACK 后归还 NativeStarted 通知槽。重复 ACK 幂等。
