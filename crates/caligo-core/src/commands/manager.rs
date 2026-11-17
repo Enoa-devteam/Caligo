@@ -752,12 +752,16 @@ pub fn entry(args: &[String]) {
         thread::sleep(Duration::from_millis(25));
     }
 
-    let _ = manager.lock().expect("manager mutex poisoned").shutdown();
+    let shutdown_failed = manager.lock().expect("manager mutex poisoned").shutdown().is_err();
     for (_, set) in listeners {
         let _ = join_set(set);
     }
     if let Some(mut server) = management.take() {
         let _ = server.shutdown();
+    }
+    if shutdown_failed {
+        eprintln!("[caligo-manager] account shutdown failed");
+        std::process::exit(6);
     }
     if listener_failure {
         // A runtime listener failure is isolated and does not fail the manager.

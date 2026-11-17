@@ -187,6 +187,8 @@ pub struct AccountManager {
     root: PathBuf,
     config: ManagerConfig,
     running: BTreeMap<u64, RunningAccount>,
+    // A failed join/shutdown cannot become success merely because its handle was consumed.
+    failed_stops: BTreeSet<u64>,
 }
 
 impl AccountManager {
@@ -202,6 +204,7 @@ impl AccountManager {
                     accounts: Vec::new(),
                 },
                 running: BTreeMap::new(),
+                failed_stops: BTreeSet::new(),
             }),
             _ => Self::new(&root, ManagerConfig::load(&root)?),
         }
@@ -233,6 +236,7 @@ impl AccountManager {
             root,
             config,
             running: BTreeMap::new(),
+            failed_stops: BTreeSet::new(),
         })
     }
 
@@ -275,6 +279,9 @@ impl AccountManager {
     }
 
     pub fn start(&mut self, account: u64) -> Result<Arc<Daemon>> {
+        if self.failed_stops.contains(&account) {
+            return Err(invalid("account has an unresolved daemon shutdown failure"));
+        }
         if self.running.contains_key(&account) {
             return Err(invalid("account already started; stop/join before restart"));
         }
@@ -416,24 +423,34 @@ impl AccountManager {
             return Err(invalid("unknown account"));
         }
         let Some(running) = self.running.remove(&account) else {
-            return Ok(());
+            return if self.failed_stops.contains(&account) {
+                Err(invalid("account daemon previously failed during shutdown"))
+            } else {
+                Ok(())
+            };
         };
         running.daemon.stop_flag().store(true, Ordering::Release);
         // run() cancels its accept/read loops and joins both pipe owners. If it
         // failed before spawning them, explicitly close the opened actor too.
         let joined = running.runner.join();
-        if let Ok(mut actor) = running.daemon.actor.lock() {
-            let _ = actor.stop();
-            let _ = actor.close();
+        let cleanup = match running.daemon.actor.lock() {
+            Ok(mut actor) => actor.stop().and_then(|_| actor.close()).map(|_| ()),
+            Err(_) => Err(caligo_model::RejectReason::JournalFailure),
+        };
+        // A startup/pipe error can be retried after successful cleanup. A
+        // failed durable shutdown, failed cleanup, or panic remains unresolved.
+        if cleanup.is_err() || matches!(&joined, Ok(Err(SessionError::Shutdown(_))) | Err(_)) {
+            self.failed_stops.insert(account);
         }
         match joined {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(invalid("account daemon failed (all owned threads joined)")),
+            Ok(Ok(())) if cleanup.is_ok() => Ok(()),
+            Ok(_) => Err(invalid("account daemon failed (all owned threads joined)")),
             Err(_) => Err(invalid("account daemon thread panicked")),
         }
     }
     pub fn shutdown(&mut self) -> Result<()> {
-        let accounts: Vec<_> = self.running.keys().copied().collect();
+        let accounts: Vec<_> = self.running.keys().chain(self.failed_stops.iter()).copied()
+            .collect::<BTreeSet<_>>().into_iter().collect();
         let mut errors = Vec::new();
         for account in accounts {
             if let Err(error) = self.stop(account) {
@@ -842,4 +859,62 @@ fn check_private(path: &Path) -> Result<()> {
         }
         Ok(())
     })
+}
+
+
+#[cfg(all(test, windows))]
+mod shutdown_failure_tests {
+    use super::*;
+    use crate::journal::{Journal, JournalRecord, RequestRecord, SyncMode};
+    use crate::runtime::RuntimeConfig;
+
+    #[test]
+    fn failed_shutdown_remains_visible_and_blocks_restart() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("caligo-manager-failed-stop-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let journal_path = root.join("journal.jsonl");
+        let (mut journal, _) = Journal::open(&journal_path, 1024 * 1024, SyncMode::Always).unwrap();
+        journal.append(&JournalRecord::Request(RequestRecord {
+            v: 1, request_id: "inflight".into(), payload_hash: 42, state: "NativeStarted".into(),
+            native_id: None, at_unix_ms: 1, session_generation: 1, wire_seq: Some(1), failure_reason: None,
+        })).unwrap();
+        drop(journal);
+        let limit = fs::metadata(&journal_path).unwrap().len();
+        let pipe_prefix = format!("caligo-stop-failure-{}-{stamp}", std::process::id());
+        let daemon = Daemon::start(DaemonConfig {
+            pipe_prefix: pipe_prefix.clone(), journal_path,
+            module_baseline: "offline-lab".into(), account: "10001".into(), core_build: crate::CORE_BUILD.into(),
+            expect_client_pid: 0, runtime: RuntimeConfig {journal_max_bytes: limit, ..RuntimeConfig::default()},
+            test_fault_break_bridge_after_hello: false, test_fault_break_bridge_after_result: false,
+        }).unwrap();
+        let d = daemon.clone();
+        let runner = std::thread::spawn(move || d.run());
+        let lock = File::create(root.join("test.lock")).unwrap();
+        let spec = AccountSpec { account: 10001, data_dir: "account".into(), pipe_prefix,
+            module_baseline: "offline-lab".into(), expect_client_pid: 0, ports: PortConfig::default() };
+        let other_pipe = format!("caligo-stop-other-{}-{stamp}", std::process::id());
+        let other = Daemon::start(DaemonConfig {
+            pipe_prefix: other_pipe.clone(), journal_path: root.join("other.jsonl"),
+            module_baseline: "offline-lab".into(), account: "10002".into(), core_build: crate::CORE_BUILD.into(),
+            expect_client_pid: 0, runtime: RuntimeConfig::default(),
+            test_fault_break_bridge_after_hello: false, test_fault_break_bridge_after_result: false,
+        }).unwrap();
+        let d2 = other.clone();
+        let runner2 = std::thread::spawn(move || d2.run());
+        let other_lock = File::create(root.join("other.lock")).unwrap();
+        let spec2 = AccountSpec { account: 10002, data_dir: "other".into(), pipe_prefix: other_pipe,
+            module_baseline: "offline-lab".into(), expect_client_pid: 0, ports: PortConfig::default() };
+        let mut manager = AccountManager { root: root.clone(), config: ManagerConfig {version: 1, accounts: vec![spec, spec2]},
+            running: [(10001, RunningAccount {daemon, runner, _directory_lock: lock}),
+                      (10002, RunningAccount {daemon: other, runner: runner2, _directory_lock: other_lock})].into_iter().collect(),
+            failed_stops: BTreeSet::new() };
+        assert!(manager.stop(10001).is_err(), "first stop must report failed journal close");
+        assert!(manager.stop(10002).is_ok(), "another account must stop normally");
+        assert!(manager.stop(10001).is_err(), "repeated stop must retain the earlier failure");
+        assert!(manager.start(10001).is_err(), "same manager must reject restart after unresolved shutdown");
+        assert!(manager.shutdown().is_err(), "manager shutdown must retain the earlier failure");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
