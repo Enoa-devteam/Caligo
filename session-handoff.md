@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-17 feat-004 停止落账修复版零发送现场：新测试 QQ `64928` 只读准入、单次接入、登录核验、正常停止和独立零发送审计通过，证据及固定构建见 [progress](progress.md#current-state)。此 QQ 仍映射 bridge，不重接、不卸载；现场未注入 journal 故障，容量失败与恢复仅有离线证据。继续未闭合的停止恢复及真实 callback/drain；后续现场须新进程并重新准入，新的发送需对应授权，unknown 不重发。
+
+
 2026-11-17 feat-004 停止落账失败修复：journal 容量耗尽时 stop/close 原先吞错并可能虚报 Closed，现传播错误、维持 Degraded/未决状态，daemon 最终收尾报错；恢复读取、真实本机 daemon 和普通/research 测试见 [progress](progress.md#current-state)。控制面 Stopped 早于最终收尾，不能单凭它证明持久化完成。尚未 QQ 现场验证；下一步固定修复版构建并准备零发送新进程接入、登录和正常停止，不重发 unknown，未证寿命不卸载。
 
 
