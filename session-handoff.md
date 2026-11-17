@@ -1,5 +1,8 @@
 # Session handoff
 
+2026-11-18 feat-004 管理器停止错误保留版零发送现场：新 QQ `30968` 只读准入、一次接入、登录及正常停止、独立零发送审计通过，固定构建与证据见 [progress](progress.md#current-state)。同代 QQ 仍映射 bridge，不重接、不热卸载；现场未注入 journal 故障，管理器锁存只限同进程。继续跨进程恢复及真实 callback/drain；后续现场须新进程准入，新消息需对应授权，unknown 不重发。
+
+
 2026-11-18 feat-004 管理器停止错误保留：同进程内 journal 收尾失败、清理失败或线程 panic 不再因 join handle 被移除而变成 stop/shutdown 成功，并拒绝同账号再次 start；已清理的启动冲突仍可重试，其他账号可停止，manager 最终对 shutdown 失败非零退出。受控真实 daemon、启动回滚、失败对照和普通/research 全仓证据见 [progress](progress.md#current-state)。锁存仅限当前管理器进程，非跨重启持久化；未在 QQ 现场制造故障。下一步固定构建并准备新进程零发送正常停止验证；unknown 不重发，未证寿命不卸载。
 
 
