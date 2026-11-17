@@ -650,3 +650,27 @@ fn d8_zero_current_refuses_v8_ladder_before_scope() {
     let err = caligo_bridge::qq_v8::poll_listener_json().unwrap_err();
     assert_eq!(err, caligo_bridge::qq_v8::V8Error::NoCurrentContext);
 }
+
+#[test]
+fn result_pressure_uses_fake_v8_ladder_and_never_reports_untrusted_fields() {
+    let _g = TEST_LOCK.lock().unwrap();
+    caligo_bridge::qq_entry::test_reset_state();
+    install_fake_v8();
+    let (_qq, qqnt_base, env, _loop) = FakeQq::new();
+    fake_v8::CURRENT.store(FAKE_EXPECTED_ISOLATE.load(Ordering::Acquire), Ordering::Release);
+    let cfg = EntryConfig { qqnt_base, env, report_path: report_path("pressure") };
+    let _handle = bootstrap(&cfg, &fake_symbols()).unwrap();
+    *fake_v8::RESPONSES.lock().unwrap() = vec![
+        r#"{"entries":128,"over_capacity":false,"delayed":4,"secret":"DO-NOT-REPORT"}"#.into(),
+        r#"{"entries":129,"over_capacity":false,"delayed":0}"#.into(),
+    ];
+    let detail = caligo_bridge::qq_v8::read_result_pressure("nt_3").unwrap().unwrap();
+    assert!(!detail.contains("DO-NOT-REPORT"));
+    let value: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(value["entries"], 128); assert_eq!(value["saturated"], true); assert_eq!(value["delayed"], 4);
+    assert!(fake_v8::LAST_SRC.lock().unwrap().contains("pressure_session"));
+    assert_eq!(caligo_bridge::qq_v8::read_result_pressure("nt_3").unwrap(), None);
+    fake_v8::CURRENT.store(0xBAD_0001, Ordering::Release);
+    assert_eq!(caligo_bridge::qq_v8::read_result_pressure("nt_3").unwrap_err(),
+        caligo_bridge::qq_v8::V8Error::NoCurrentContext);
+}

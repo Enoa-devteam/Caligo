@@ -833,6 +833,67 @@ pub const D8_STOP_JS: &str = r"
 })()
 ";
 
+/// Build a read-only, session-bound aggregate of the result table. No result
+/// key, message content, reason, generation or account is returned.
+pub fn build_result_pressure_js(session: &str) -> Option<String> {
+    if session.is_empty() || session.len() > 128 { return None; }
+    let sid = serde_json::to_string(session).ok()?;
+    Some(format!(r#"(function(expected) {{
+      try {{
+        var R = globalThis.__caligo_res;
+        if (!R || R.sid !== expected) return 'ERR:pressure_session';
+        var results = R.sendResults;
+        if (!results || typeof results !== 'object' || Array.isArray(results) ||
+            (Object.getPrototypeOf(results) !== Object.prototype && Object.getPrototypeOf(results) !== null)) return 'ERR:pressure_state';
+        var keys = Object.keys(results), overflow = keys.length > 128;
+        var delayed = null, deferrals = R.resultDeferrals;
+        if (!overflow && (deferrals === undefined || deferrals === null)) delayed = 0;
+        else if (!overflow && deferrals instanceof Map) {{
+          if (deferrals.size === 0) delayed = 0;
+          else if (deferrals.size <= 128) {{
+            var now = null;
+            try {{ var t = process.hrtime.bigint(); if (typeof t === 'bigint' && t >= 0n) now = t; }} catch (_) {{}}
+            if (now !== null) {{
+              delayed = 0;
+              for (var i = 0; i < keys.length; i++) {{
+                var d = deferrals.get(keys[i]);
+                if (d === undefined) continue;
+                if (!d || typeof d.since !== 'bigint' || typeof d.until !== 'bigint' ||
+                    d.until < d.since || d.until - d.since > 2000000000n ||
+                    !Number.isInteger(d.count) || d.count < 1 || d.count > 4) {{ delayed = null; break; }}
+                if (d.value === results[keys[i]] && now >= d.since && now < d.until) delayed++;
+              }}
+            }}
+          }}
+        }}
+        return JSON.stringify({{entries:Math.min(keys.length,128), over_capacity:overflow, delayed:delayed}});
+      }} catch (_) {{ return 'ERR:pressure_unavailable'; }}
+    }})({sid})"#))
+}
+
+/// Validate and reconstruct only the fixed aggregate fields; arbitrary input
+/// fields never reach the stage report. A missing sample is not zero pressure.
+pub fn sanitize_result_pressure(input: &str) -> Option<String> {
+    if input.len() > 1024 { return None; }
+    let value: serde_json::Value = serde_json::from_str(input).ok()?;
+    let entries = value.get("entries")?.as_u64().filter(|n| *n <= 128)?;
+    let over = value.get("over_capacity")?.as_bool()?;
+    if over && entries != 128 { return None; }
+    let delayed = match value.get("delayed")? {
+        serde_json::Value::Null => None,
+        v => Some(v.as_u64().filter(|n| *n <= entries)?),
+    };
+    if over && delayed.is_some() { return None; }
+    Some(serde_json::json!({"entries":entries,"capacity":128,"saturated":entries == 128,
+        "over_capacity":over,"delayed":delayed}).to_string())
+}
+
+pub fn read_result_pressure(session: &str) -> Result<Option<String>, V8Error> {
+    let Some(source) = build_result_pressure_js(session) else { return Ok(None); };
+    let output = run_fixed_query_script(&source)?;
+    Ok(sanitize_result_pressure(&output))
+}
+
 /// A receipt identifies one JS listener's exact serialized result snapshot.
 /// It only acknowledges resident processing, not daemon durability.
 #[derive(Debug, Clone, PartialEq, Eq)]

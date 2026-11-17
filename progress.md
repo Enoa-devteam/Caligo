@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 结果表容量只读抽样（起点 `bb26384`）：owner 遇到未匹配终态时沿用进程内共享计数的首项及每 20 次观察的采样频率（不保证各会话均被采样），在保存待确认 receipt 后，执行会话绑定的只读 JS 统计并写入 `--report` JSONL 的 `poll_result_pressure` 阶段。详情仅重建固定字段：结果表可枚举自有键数 `entries`（最多显示 128）、`capacity=128`、`saturated`、`over_capacity` 和当前 `delayed`；超过 128 时 `entries=128` 表示下界、`over_capacity=true`，`delayed=null` 表示未知。时钟不可用、退避结构异常或样本失效时不会伪造零；采样失败或无法验证输出时阶段记录 `unknown`。
+
+`entries` 包含 pending、已受理和未匹配等全部结果表项，不等于未匹配数量；低于上限不证明其他在途容量或 QQ 可发送。`ok=true` 只表示样本通过字段校验，不是系统健康或交付成功；采样是该时刻的快照，不是全程计数，也只在未匹配观察时触发。阶段报告仍属于本机敏感运行证据，不能据此自动删除、重发或卸载；结果积压的有界处置、daemon 持久化、退出恢复及 QQ 现场仍未验证，feat-004 in-progress。
+
+生产生成 JS 与 Rust 白名单校验的离线测试覆盖只读、绑定不匹配、3/128/超限、时钟不可用和畸形结构、极值/类型负例及去除额外敏感字段，连同退避/receipt 共 16 项定向回归通过，日志 `target-harness/feat004-pressure-tests-final4.log` SHA-256 `50C95A5018AC4C0E5AAFE6A46F2C21ED9FE9B9416C9B4F01EA5F71D81693A926`。 另以假 V8 ABI 验证采样调用、白名单输出、无效结果及错误 current 拒绝，与原入口测试合计 10 项通过，日志 `target-harness/feat004-pressure-v8-lab.log` SHA-256 `0F25A33B149D0B8388FF1A693854761CD34F493B1EA35DA23FCA8866CA28C5C6`；假 ABI 不证明真实宿主执行。首次夹具的模拟 `process` 遮蔽 stdout 导致失败，保留 `target-harness/feat004-pressure-tests.log` SHA-256 `118C08F88C945DDF19122FD9C1D9DBD96745C5674FD80728826EE548C745A482`，修复后重跑。GitNexus 对 owner 入口为 UNKNOWN，公共阶段日志入口 CRITICAL 但本轮未修改；按源码核对调用与报告写入。最终变更图首次因 LadybugDB 暂时不可用未完成，保留 `target-harness/feat004-pressure-final2-detect.json`；重试成功覆盖 7 文件、LOW，动态边仍依赖源码补证。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research，均含新增假 V8 与抽样测试），日志 `target-harness/feat004-pressure-all-final.log` SHA-256 `5F38F31382F3C5D1E53E49896362C9565A6C0F185C53199AB0341BCB63FCB64F`；文档检查通过。该采样增加一次间歇 V8 调用，重入、QQ 实际时钟/性能及现场隐私仍须独立验证；未接 QQ、未发送。
+
 2026-11-17 feat-004 未匹配结果有界退避（起点 `2c05f57`）：正式绑定轮询仅对逐项确认后仍未匹配且对象未变的终态设置退避，使用 Node 单调时钟逐次等待 250/500/1000/2000 ms，之后上限 2 秒；退避只影响同一结果对象的再次展示，不删除结果、不重发 QQ 请求。新键和同键新对象立即可见，其他接收事件继续轮询；单次 receipt 的重复确认不会延长计时。旧无绑定兼容路径保持原行为。
 
 正常脚本维护的退避表最多 128 项，失效对象在后续轮询清理；合成超出容量的条目不被隐藏或删除。单调时钟不可用或返回无效值时清除退避并立即重试，时钟回退和畸形退避记录也不隐藏结果，因此该异常下退避效果不保证；实际 QQ 的时钟支持、性能和长期运行未验证。此措施不解决未匹配结果积累、128 条背压、人工处置、daemon 持久确认、V8 接收事件丢失或退出恢复，feat-004 in-progress。

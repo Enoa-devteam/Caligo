@@ -1017,15 +1017,22 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                                         let accepted = if submitted > 0 {
                                             r.complete_sends(&done, &rejected, &unknown)
                                         } else { Vec::new() };
-                                        if accepted.len() < submitted {
-                                            static UNMATCHED_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                                            let n = UNMATCHED_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                            if n % 20 == 0 { qq_entry::append_stage_simple("poll_result_unmatched", false, "retained"); }
-                                        }
+                                        let unmatched = accepted.len() < submitted;
                                         if let Some(receipt) = receipt {
                                             *pending_result_ack = Some(crate::qq_v8::PollResultAck {
                                                 session: binding.wrapper_session.clone(), receipt, keys: accepted,
                                             });
+                                        }
+                                        if unmatched {
+                                            static UNMATCHED_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                            let n = UNMATCHED_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            if n % 20 == 0 {
+                                                qq_entry::append_stage_simple("poll_result_unmatched", false, "retained");
+                                                match crate::qq_v8::read_result_pressure(&binding.wrapper_session) {
+                                                    Ok(Some(detail)) => qq_entry::append_stage_simple("poll_result_pressure", true, &detail),
+                                                    _ => qq_entry::append_stage_simple("poll_result_pressure", false, "unknown"),
+                                                }
+                                            }
                                         }
                                     } // Invalid or missing receipts leave results in JS.
                                 }
