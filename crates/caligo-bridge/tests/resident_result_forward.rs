@@ -54,5 +54,6 @@ fn disconnected_worker_latches_and_cannot_reopen_on_later_ticks() {
  assert_eq!(gate.forward(&r,&dead),Err(0));assert!(gate.is_closed());
  let (new_sender,new_receiver)=std::sync::mpsc::channel();
  assert_eq!(gate.forward(&r,&new_sender),Err(0));assert!(new_receiver.try_recv().is_err());
- assert_eq!(r.take_results().len(),2,"latched gate must retain both notices");
+ assert_eq!(r.retained_notices().len(),1,"failed item stays in retained outbox");
+ assert_eq!(r.take_results().len(),1,"unsent suffix stays in result queue");
 }

@@ -2,6 +2,14 @@
 
 ## Current State
 
+2026-11-17 feat-004 resident 内通知保留与 worker 重建（起点 `2fe9a6e`）：正式 QQ owner 与 research native pump 在向 worker 通道交接前，将通知与单调非零序号保存在 resident；worker 启动时从同一 resident 的保留集合重建 outbox，通道中的重复或已确认副本不再重复加入。daemon ACK 与已发送项匹配后，在同一 resident 锁中删除精确副本并更新容量；unknown 的旧 ACK 不释放后续强身份结果的槽。序号现在属于 resident 生命周期，跨其 worker 重建保持，但不跨宿主/新 resident 持久化；业务协议仍为 revision 4。
+
+保留集合最多 `min(results_max, 256)` 项，满额、序号耗尽或通道拒收时交接失败并锁存闸门，暂停后续 owner 派发及 JS 快照确认；已保留项和未交出的 `results_out` 后缀留在 resident 内，不声称总内存字节或所有入口均已有完整上限证明。闸门锁存后不会自动恢复：被拒项之后尚在 `results_out` 的后缀不会自动进入重建 worker，须后续设计安全恢复；当前生产入口没有自动重启 worker，人工重建仅为离线测试，且必须先确认旧 worker 已停止，尚未建立并发 worker 排他门。owner 显式 stop、进程退出、daemon 重启的连接代次、NativeStarted ACK 的版本身份、接收事件及 QQ 原生线程/drain 均未闭合；resident 不是磁盘持久化。容量锁存可能造成持续停派，不能描述为自动恢复或生产验收。
+
+假宿主回归覆盖通道接受后接收前/接收后丢失、按顺序和序号保留、伪造/重复 ACK、unknown 与新 success 容量隔离、满额保留后缀及锁存；真实 Windows 命名管道对照先停止旧 worker，模拟旧通道接受后丢失，再以同一 resident 新建 worker，从副本回放、账本确认并删除副本，通道重复提示只发送一次结果，假宿主调用一次。测试不证明真实 QQ 曾发生故障或跨宿主恢复。定向日志 `target-harness/feat004-retained-unit-final2.log` / `target-harness/feat004-retained-rebuild-final.log` SHA-256 `30F0210479AB9B2A22E88584307C48CCA25CD5C876C6E680B8D2D676BF11B507` / `C26FC91C8074B81ADC27086F786D85B447B78D1734DD147BEC26B8CE6E476BBB`；resident 序号耗尽不回绕、后缀不出队在普通与 research 定向通过，日志 `target-harness/feat004-retained-sequence.log` / `target-harness/feat004-retained-sequence-research.log` SHA-256 `8A53C4BDB154021F5DB6EF1FA76732CF68A262FD4F443E1564795BD1ECBDA6A1` / `912242047025AFCB6D06C9FDB5A10A91EFDBCD6FCAA8EC2688CA2E93BF1D047D`。Windows MSVC 串行 `init.ps1 -Mode all` 普通及 research 全仓通过，日志 `target-harness/feat004-retained-all.log` SHA-256 `B1D586D7B4991CB8FBAE771834475A85CACA90298D1F286583B18299C7F70ADE`；序号耗尽测试在全仓运行启动后新增并另行在两种构建通过；伪造内容负例随后加入并重跑相关定向集。
+
+勘误：上一段 `a153464` 记录称未发现到期接口正式调用，但当时搜索范围遗漏 `native_resident.rs`；research native pump 的 `native_resident_run` 确实调用 `expire_late_receipts`，QQ owner 路径未发现该调用。原记录保留，本次修正不证明实际现场触发。GitNexus 基于 `E:/stella/Caligo-feat-004` 起点 `2fe9a6e`：`take_acked_result` CRITICAL，`session_loop` 与通知接收 HIGH，多个 resident/owner 符号 UNKNOWN；结合源码核对正式与 research 路径。最终变更图 HIGH，覆盖改动与新增测试；文档检查通过。未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 结果 ACK 序号（起点 `a153464`）：worker 接收 owner 通知时分配本 worker 生存期内单调非零 `notice_id`，保存在跨连接 outbox；结果消息携带该序号，daemon 应用结果后在 ACK 中回显，worker 须同时匹配请求、类型、当前连接已发送状态及序号才移除。图片/语音提交前立即拒绝的结果使用保留值 0，不属于 worker outbox；普通结果不会匹配 0。序号用尽时不回绕、不再从通道取下一项；测试覆盖该边界。业务协议 revision 从 3 升至 4，握手验证拒绝不匹配，两端必须使用匹配构建；v3 wire 的结果及 ACK 字段必填，旧无序号消息不能静默解码。
 
 旧 unknown ACK 即便命中自身通知，也不能释放已到达的强身份 success 的槽；正式 worker 对 unknown 调用独立 resident ACK 路径，只有 resident 仍处于 unknown 状态才允许更新其确认或释放槽。合成对照分别复现旧同类终态 ACK 移除新 success、旧 unknown ACK 释放 success 槽，修复后通过。受控真实命名管道测试验证 daemon 对指定序号 42 的回显，以及写账后 ACK 丢失时的结果重放与假宿主不重发；不证明真实 QQ 曾发生这些故障。

@@ -729,7 +729,7 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
         session_generation,
     );
     let resident = Arc::new(Resident::new(adapter, ResidentLimits::default()));
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<crate::resident::ResidentNotice>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<crate::resident::RetainedNotice>();
     let (event_tx, event_rx) = std::sync::mpsc::channel::<OwnedEvent>();
     let wake_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let callback_quarantine_complete = Arc::new(AtomicBool::new(false));
@@ -790,6 +790,7 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
                 if boot_ok {
                     stage(&report_pump, "n3res_bootstrap", true, "Ready(owner=pump)");
                 }
+                let notice_handoff = crate::resident::ResultHandoffGate::default();
                 while boot_ok && !stop_pump.load(Ordering::Relaxed) {
                     {
                         let (flag, cv) = &*wake_pair;
@@ -797,12 +798,14 @@ pub unsafe fn native_resident_run(ctx: *const NativeResidentCtx) -> u32 {
                         // 100ms 节拍 + wake 即时唤醒。
                         let _ = cv.wait_timeout(guard, std::time::Duration::from_millis(100));
                     }
+                    if notice_handoff.is_closed() { continue; }
                     let _ = resident.drain();
                     // N3 retCode 消费者排空:QQ 分发线程 → 槽 → 账本终局。
                     resident.drain_send_responses();
                     resident.expire_late_receipts(std::time::Instant::now());
-                    for notice in resident.take_results() {
-                        let _ = result_tx.send(notice);
+                    if notice_handoff.forward(&resident, &result_tx).is_err() {
+                        stage(&report_pump, "result_notice_handoff", false, "closed_or_full_retained");
+                        continue;
                     }
                     for ev in resident.take_events() {
                         let _ = event_tx.send(ev);

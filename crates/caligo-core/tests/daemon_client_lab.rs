@@ -376,7 +376,7 @@ fn dispatch_roundtrip_through_real_worker() {
     // (owner = 测试线程,与 drain 一致)。
     resident.bootstrap().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     {
         let cfg = worker_config(&prefix, &auth);
@@ -429,9 +429,7 @@ fn dispatch_roundtrip_through_real_worker() {
     while Instant::now() < round_deadline {
         // resident.drain 只能在 owner 线程(LAB 假宿主以本线程为 owner)。
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
         if let CoreToControlMsg::QueryResult {
             state, native_id, ..
         } = control
@@ -488,7 +486,7 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
     resident.bootstrap().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
     {
@@ -593,6 +591,87 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     assert!(counters.results_sent >= 2);
 }
 
+/// Reconstruct a worker after its old channel accepted notices and vanished.
+#[test]
+fn worker_rebuild_replays_resident_notices_without_native_retry() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-rebuild");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop1 = Arc::new(AtomicBool::new(false));
+    let (_tx1, rx1) = mpsc::channel();
+    let (done1, wait1) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop1.clone();
+        std::thread::spawn(move || {
+            done1.send(run_worker(cfg, resident, &wake_true, rx1, _ev_placeholder(), stop)).unwrap();
+        });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "rebuild-client") { break c; }
+        assert!(Instant::now() < deadline, "control connection timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-REBUILD".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-REBUILD-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline, "dispatch acceptance timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-REBUILD") != Some("queued") {
+        assert!(Instant::now() < deadline, "resident queue timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop1.store(true, Ordering::Relaxed);
+    assert_eq!(wait1.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::LocalStop);
+    assert_eq!(resident.drain().unwrap(), 1);
+    let (lost_tx, lost_rx) = mpsc::channel();
+    assert_eq!(caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &lost_tx), Ok(2));
+    let retained = resident.retained_notices();
+    assert_eq!(retained.len(), 2);
+    drop(lost_rx); // simulate successful send then loss before worker receives
+    assert_eq!(resident.retained_notices(), retained);
+    let stop2 = Arc::new(AtomicBool::new(false));
+    let (tx2, rx2) = mpsc::channel();
+    // Duplicate hints must not duplicate notices already in the startup snapshot.
+    for item in &retained { tx2.send(item.clone()).unwrap(); }
+    let (done2, wait2) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop2.clone();
+        std::thread::spawn(move || {
+            done2.send(run_worker(cfg, resident, &wake_true, rx2, _ev_placeholder(), stop)).unwrap();
+        });
+    }
+    let expected_id = format!("NM-{}", send_count_before + 1);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-REBUILD".into() }).unwrap();
+        if matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == &expected_id)
+            && resident.retained_notices().is_empty() { break; }
+        assert!(Instant::now() < deadline, "rebuilt worker did not persist and acknowledge result");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - send_count_before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 1, "duplicate channel hints must not send a second result");
+    runner.join().unwrap().unwrap();
+}
+
 fn wake_false() -> bool {
     false
 }
@@ -606,7 +685,7 @@ fn pipe_names_from_prefix(prefix: &str) -> (String, String) {
 }
 
 // run_worker 的 rx 参数占位(第一个用例不消费结果)。
-fn _rx_placeholder() -> mpsc::Receiver<caligo_bridge::resident::ResidentNotice> {
+fn _rx_placeholder() -> mpsc::Receiver<caligo_bridge::resident::RetainedNotice> {
     let (_t, r) = mpsc::channel();
     r
 }
@@ -722,7 +801,7 @@ fn native_started_only_after_resident_accepts() {
     let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
     // 故意不 bootstrap:Dispatch 到达时 submit 返回 NotReady → pending。
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     {
         let cfg = worker_config(&prefix, &auth);
@@ -794,9 +873,7 @@ fn native_started_only_after_resident_accepts() {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
         if let CoreToControlMsg::QueryResult {
             state, native_id, ..
         } = control
@@ -1061,9 +1138,7 @@ fn private_and_group_png_traverse_real_worker_and_owner_without_retry() {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             resident.drain().unwrap();
-            for notice in resident.take_results() {
-                tx.send(notice).unwrap();
-            }
+            caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
             if matches!(
                 daemon.onebot_text_status(&id, &target),
                 Some((caligo_model::ActionState::ConfirmedSuccess { .. }, None))

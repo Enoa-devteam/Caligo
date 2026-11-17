@@ -907,7 +907,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         QqOwnerAdapter::new(handle, account.clone()),
         ResidentLimits::default(),
     ));
-    let (tx, rx) = std::sync::mpsc::channel::<resident::ResidentNotice>();
+    let (tx, rx) = std::sync::mpsc::channel::<resident::RetainedNotice>();
     let (etx, erx) = std::sync::mpsc::channel::<resident::OwnedEvent>();
     // resident 初始化必须在 owner 线程执行(计划 §5.1:宿主 API 前的
     // owner 检查不是形式 —— 远程线程调用会被正确拒绝,D7-b 现场实证)。
@@ -926,7 +926,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         // result snapshot; it never causes the QQ send to be replayed.
         let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
             std::sync::Mutex::new(None);
-        // A disconnected receiver cannot be revived; stop subsequent dispatch.
+        // A rejected handoff or exhausted retention stops subsequent dispatch.
         let notice_handoff = resident::ResultHandoffGate::default();
         qq_entry::install_drain_hook(Box::new(move || {
             if owner_stop.load(Ordering::Acquire) {
@@ -955,9 +955,9 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             }
             let _ = r.drain();
             if notice_handoff.forward(&r, &tx).is_err() {
-                // The worker cannot receive; retain the rejected suffix and do
-                // not acknowledge or consume another JS result snapshot.
-                qq_entry::append_stage_simple("result_notice_channel", false, "closed_retained");
+                // Handoff was rejected or retention is full; preserve notices
+                // and do not acknowledge or consume another JS result snapshot.
+                qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_full_retained");
                 return 0;
             }
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;

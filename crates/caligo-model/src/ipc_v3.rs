@@ -137,7 +137,7 @@ pub enum BridgeMsg {
     /// 发送结果(receipt 契约三分类,与 runtime::NativeResult 对应)。
     SendResult {
         request_id: String,
-        /// Nonzero worker-lifetime sequence; zero identifies an immediate rejection.
+        /// Nonzero resident-lifetime sequence; zero identifies an immediate rejection.
         notice_id: u64,
         outcome: OutcomePayload,
     },

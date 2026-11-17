@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 resident 通知保留：正式 owner/research pump 在交接前保留有界副本，序号跨同一 resident 的 worker 重建保持；假宿主和真实命名管道重建/去重回归见 [progress](progress.md#current-state)。满额/拒收会锁存停派且尾项需后续恢复，无自动 worker 重启或并发排他，宿主退出、stop/drain 与 QQ 现场仍未证；unknown 不重发，未证寿命不卸载。上轮到期接口调用遗漏已在 progress 勘误：research native pump 确有调用。
+
 2026-11-17 feat-004 worker 结果序号 ACK：业务协议 revision 4 在结果与 ACK 加必填序号，worker 在自身生存期保留递增身份并按序号匹配，旧 unknown ACK 不释放后续强身份槽；合成和命名管道证据见 [progress](progress.md#current-state)。跨 worker/宿主身份、正文保留、停止恢复与 QQ 现场尚未闭合；两端须匹配 revision，unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 unknown 窗口容量：resident 到期接口现在仅在 unknown 已确认时释放槽；未确认时到期保留，确认后释放，假宿主正反测试见 [progress](progress.md#current-state)。源码未发现该到期接口的正式调用；worker 退出丢失、同类终态版本、持久恢复和现场均未闭合。后续继续有界副本与版本化 ACK；unknown 不重发，未证寿命不卸载。
