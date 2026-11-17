@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 修复版零发送现场：新 QQ `54316` 通过固定模块/后台/唯一 Environment 准入，单次接入、登录、正常停止及独立零发送审计通过；同代 QQ 当次响应且 bridge 保留。首轮加载前 PowerShell 模块路径失败及修复对照均保留，详见 [progress](progress.md#current-state)。真实并发、panic、背压、ACK、callback/drain 与跨宿主恢复未证；下次现场须新鲜 QQ 准入，任何新消息需对应授权，unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 零发送现场已准备：源码 `3bbd3ce` 普通/research release 与脚本已固定，证据和限制见 [progress](progress.md#current-state)。当前旧 QQ 根 `38060` 当次仍映射 bridge；先请用户正常重启并登录，再重新核验新进程、固定 hash、backend、唯一 Environment，之后仅做零发送登录与正常停止；不重发、不卸载。
 
 2026-11-17 feat-004 单 worker lease：同 resident 并发 worker 拒绝，正常退出在会话/接收端关闭后释放，unwind panic 则隔离该代次；自建并发和真实管道回归见 [progress](progress.md#current-state)。不证明不同 resident、abort、原生回调/宿主退出；无自动重启或通道替换。当前测试 QQ 根 `38060` 当次仍映射 bridge，现场须重启登录并重新准入；unknown 不重发，未证寿命不卸载。
