@@ -537,13 +537,12 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     );
 
     let expected_native_id = format!("NM-{}", send_count_before + 1);
+    let handoff = caligo_bridge::resident::ResultHandoffGate::default();
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut durable_result_visible = false;
     while Instant::now() < deadline {
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        assert!(handoff.forward(&resident, &tx).is_ok());
         if let CoreToControlMsg::QueryResult { native_id, .. } = control
             .request(caligo_core::ipc::ControlMsg::QueryRequest {
                 request_id: "R-ACK-LOSS".into(),

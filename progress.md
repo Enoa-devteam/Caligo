@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 owner 通知通道断开防丢（起点 `f9be5af`）：正式 owner 原先 `take_results` 后忽略 `mpsc::send` 的失败；合成关闭接收端时，已从 resident 队列移走但未交出的 NativeStarted/终态均丢失，且后续可能确认 JS 快照。现按顺序转交，发送失败时把失败项和未发送后缀恢复到 resident 队首，并锁存不可恢复的接收端关闭状态；后续 owner tick 在 dispatch、查询 drain、JS 轮询和快照确认前停止，记录固定标签 `result_notice_channel:closed_retained`。显式 stop 分支仍可执行；保留不等于支持重连或持久恢复。
+
+保护仅覆盖 `send` 明确返回失败的项：发送成功后 worker 退出但尚未接收/持久化的窗口仍存在；首次发现断开之前该轮 `r.drain` 可能已经派发请求，不能证明 worker 一断开就没有原生发送。关闭/进程退出后的通知与 JS 状态、最终 drain 和真实 QQ 回调均未验证；未确认请求不自动重发。
+
+修复前实际旧交接方式在关闭通道后丢失两条通知，红灯 `target-harness/feat004-outbox-red.log` SHA-256 `905CECDB6C39278A9F4834B8E6A9408ED6732A09A39D6F89FDD0D0AB6B0C2275`。修复后覆盖断开保留、部分成功与并发新增的 FIFO 顺序、正常一次交接和断开后锁存，并与 resident/receipt 定向测试通过，日志 `target-harness/feat004-outbox-green-final2.log` SHA-256 `7D15558B13D65E47BF69AAB91524A22439BF5996C3600240D55C08902F486D89`。既有真实命名管道的离线故障测试改用正式交接闸门：daemon 已写账但 ACK 丢失时 worker 重放通知且假宿主发送次数不增加，日志 `target-harness/feat004-outbox-pipe.log` SHA-256 `71B86F8CB2FE3655F26F6B8BCD28796D37EB7AC77966CF60D059BA92B217676D`；这不是 QQ 原生现场证据。GitNexus 对 owner、`take_results` 和该链测试的上游均为 UNKNOWN，已结合源码核对，不把空图视为零影响。最终变更图 MEDIUM，涉及通知交接与取队列路径。Windows MSVC 串行 `init.ps1 -Mode all` 通过（普通及 research，均含 4 项交接回归和命名管道对照），日志 `target-harness/feat004-outbox-all.log` SHA-256 `64F0EE8713BF0CD55CDD77269B153AF393EF29471B236506B308EEE30345CF4C`；文档检查通过。本轮未接 QQ、未发送；feat-004 in-progress。
+
 2026-11-17 feat-004 结果表容量只读抽样（起点 `bb26384`）：owner 遇到未匹配终态时沿用进程内共享计数的首项及每 20 次观察的采样频率（不保证各会话均被采样），在保存待确认 receipt 后，执行会话绑定的只读 JS 统计并写入 `--report` JSONL 的 `poll_result_pressure` 阶段。详情仅重建固定字段：结果表可枚举自有键数 `entries`（最多显示 128）、`capacity=128`、`saturated`、`over_capacity` 和当前 `delayed`；超过 128 时 `entries=128` 表示下界、`over_capacity=true`，`delayed=null` 表示未知。时钟不可用、退避结构异常或样本失效时不会伪造零；采样失败或无法验证输出时阶段记录 `unknown`。
 
 `entries` 包含 pending、已受理和未匹配等全部结果表项，不等于未匹配数量；低于上限不证明其他在途容量或 QQ 可发送。`ok=true` 只表示样本通过字段校验，不是系统健康或交付成功；采样是该时刻的快照，不是全程计数，也只在未匹配观察时触发。阶段报告仍属于本机敏感运行证据，不能据此自动删除、重发或卸载；结果积压的有界处置、daemon 持久化、退出恢复及 QQ 现场仍未验证，feat-004 in-progress。

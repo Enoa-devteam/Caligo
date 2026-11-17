@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 owner 通知交接：通道发送明确失败时恢复未交出项，锁存断开并停止后续 dispatch/查询 drain/JS 快照确认；假宿主回归和真实命名管道 ACK 丢失对照见 [progress](progress.md#current-state)。成功进入通道但 worker 退出前未持久化、首次发现断开之前的派发及关闭恢复仍未覆盖；继续处理 durable ACK 与退出边界。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。
+
 2026-11-17 feat-004 结果表压力抽样：未匹配观察按既有频率产生 `poll_result_pressure` 本机报告，仅含有界数量和满额/退避状态，异常为 unknown；合成只读、隐私及边界验证见 [progress](progress.md#current-state)。该样本不是持续健康度或未匹配精确计数，报告须留本机；仍需可审计处置、持久化、额外 V8 调用的现场兼容和退出恢复验证。未知不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 未匹配结果退避：同一未匹配对象按单调时钟 250 ms 到 2 秒递增重试，新键/新对象和接收事件不受阻；时钟不可用立即重试，保留结果，合成证据见 [progress](progress.md#current-state)。退避不清理未知或消除 128 条容量阻塞；仍需可审计处置、daemon 持久化及真实 QQ/退出恢复验证。现场须新鲜进程重新准入，unknown 不重发，未证寿命不卸载。

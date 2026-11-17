@@ -204,6 +204,22 @@ pub enum ResidentNotice {
     Outcome(SendOutcome),
 }
 
+/// A closed std mpsc receiver cannot reconnect. This owner-only handoff gate
+/// latches the failure so later pump ticks cannot dispatch more work.
+#[derive(Default)]
+pub struct ResultHandoffGate { closed: std::sync::atomic::AtomicBool }
+
+impl ResultHandoffGate {
+    pub fn is_closed(&self) -> bool { self.closed.load(Ordering::Acquire) }
+
+    pub fn forward<A: HostAdapter>(&self, resident: &Resident<A>, sender: &std::sync::mpsc::Sender<ResidentNotice>) -> Result<usize, usize> {
+        if self.is_closed() { return Err(0); }
+        let result = resident.forward_results(|notice| sender.send(notice).map_err(|error| error.0));
+        if result.is_err() { self.closed.store(true, Ordering::Release); }
+        result
+    }
+}
+
 /// 关闭报告(计数回基线的验收数据)。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CloseReport {
@@ -842,6 +858,28 @@ impl<A: HostAdapter> Resident<A> {
     pub fn take_results(&self) -> Vec<ResidentNotice> {
         let mut c = self.core.lock().unwrap();
         c.results_out.drain(..).collect()
+    }
+
+    /// Transfer notices in order. If the destination rejects a notice, the
+    /// callback must return that same owned notice; it and the unsent suffix
+    /// are restored ahead of notices produced concurrently. A successful send
+    /// is only an in-memory handoff, not a durable acknowledgement.
+    pub fn forward_results<F>(&self, mut send: F) -> Result<usize, usize>
+    where F: FnMut(ResidentNotice) -> Result<(), ResidentNotice> {
+        let mut notices = self.take_results().into_iter();
+        let mut sent = 0;
+        while let Some(notice) = notices.next() {
+            match send(notice) {
+                Ok(()) => sent += 1,
+                Err(failed) => {
+                    let mut c = self.core.lock().unwrap();
+                    for notice in notices.rev() { c.results_out.push_front(notice); }
+                    c.results_out.push_front(failed);
+                    return Err(sent);
+                }
+            }
+        }
+        Ok(sent)
     }
 
     /// Promise 状态由原始 core request_id 关联；只有精确 wrapper 回读

@@ -926,6 +926,8 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         // result snapshot; it never causes the QQ send to be replayed.
         let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
             std::sync::Mutex::new(None);
+        // A disconnected receiver cannot be revived; stop subsequent dispatch.
+        let notice_handoff = resident::ResultHandoffGate::default();
         qq_entry::install_drain_hook(Box::new(move || {
             if owner_stop.load(Ordering::Acquire) {
                 r.set_bridge_scope(None);
@@ -935,6 +937,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 }
                 return 0;
             }
+            if notice_handoff.is_closed() { return 0; }
             r.drain_queries();
             // owner 初始化:安静 QQ 的轮转点上下文条件可能暂不满足 —— 每次泵
             // 重试直至成功;首次失败原因写阶段日志(不吞)。
@@ -951,8 +954,11 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 }
             }
             let _ = r.drain();
-            for notice in r.take_results() {
-                let _ = tx.send(notice);
+            if notice_handoff.forward(&r, &tx).is_err() {
+                // The worker cannot receive; retain the rejected suffix and do
+                // not acknowledge or consume another JS result snapshot.
+                qq_entry::append_stage_simple("result_notice_channel", false, "closed_retained");
+                return 0;
             }
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。
