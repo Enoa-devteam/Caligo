@@ -260,6 +260,8 @@ struct ReqRecord {
     /// V8 Promise 路线的本地调用键；native CPB 文本候选不写入此字段。
     pending_mid: Option<String>,
     late_receipt_deadline: Option<std::time::Instant>,
+    /// Unknown ACK arrived while the correction window still held the slot.
+    unknown_acked: bool,
     /// bit 0 = NativeStarted 未确认, bit 1 = terminal result 未确认。
     unacked_notice_mask: u8,
 }
@@ -507,6 +509,7 @@ impl<A: HostAdapter> Resident<A> {
                     state: ReqState::Queued,
                     pending_mid: None,
                     late_receipt_deadline: None,
+                    unknown_acked: false,
                     unacked_notice_mask: 0b11,
                 },
             );
@@ -1004,15 +1007,13 @@ impl<A: HostAdapter> Resident<A> {
     pub fn ack_result_notice(&self, request_id: &str, terminal: bool) -> bool {
         let mut c = self.core.lock().unwrap();
         if terminal {
-            if c.requests
-                .get(request_id)
-                .map(|rec| {
-                    rec.state == ReqState::DeliveryUnknown && rec.late_receipt_deadline.is_some()
-                })
-                .unwrap_or(false)
-            {
-                // ACK 接受了 Unknown；槽仍为迟到强身份预留。
-                return true;
+            if let Some(rec) = c.requests.get_mut(request_id) {
+                if rec.state == ReqState::DeliveryUnknown && rec.late_receipt_deadline.is_some() {
+                    // Keep the correction slot until its window ends, but remember
+                    // that expiry is now allowed to release it.
+                    rec.unknown_acked = true;
+                    return true;
+                }
             }
             release_notice_slot(&mut c, request_id, 0b10)
         } else {
@@ -1023,7 +1024,7 @@ impl<A: HostAdapter> Resident<A> {
         }
     }
 
-    /// Release result capacity after the bounded late-identity correction window.
+    /// End the correction window; release capacity only after its unknown ACK.
     pub fn expire_late_receipts(&self, now: std::time::Instant) -> usize {
         let mut c = self.core.lock().unwrap();
         let expired: Vec<String> = c
@@ -1039,10 +1040,15 @@ impl<A: HostAdapter> Resident<A> {
             .map(|(request_id, _)| request_id.clone())
             .collect();
         for request_id in &expired {
-            if let Some(rec) = c.requests.get_mut(request_id) {
+            let acked = if let Some(rec) = c.requests.get_mut(request_id) {
                 rec.late_receipt_deadline = None;
+                rec.unknown_acked
+            } else {
+                false
+            };
+            if acked {
+                release_notice_slot(&mut c, request_id, 0b10);
             }
-            release_notice_slot(&mut c, request_id, 0b10);
         }
         expired.len()
     }

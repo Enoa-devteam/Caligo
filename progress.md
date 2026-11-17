@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 unknown 迟到窗口的容量合同（起点 `b10cf2f`）：`expire_late_receipts` 曾在迟到强身份窗口结束时无条件释放结果槽，即使对应 unknown 尚未得到 ACK；容量为 2 的假宿主对照因此在结果未确认时接受新请求。现记录窗口内收到的 unknown ACK，仅当窗口结束且 ACK 已到达才由到期接口释放；若先到期则保留槽，随后 ACK 才释放。到期后仍拒绝迟到强身份，重复到期/ACK 不重复释放；已有 ACK 先于到期回归继续通过。
+
+此接口的源码调用搜索仅发现测试，未发现正式路径主动调用，因此本轮是对 resident 容量合同的离线修复，不声称现场触发过该问题或生产路径已获得定时清理。此修改不保留 worker/通道丢失的结果正文，也不解决同类终态旧 ACK 混淆、版本化持久确认、宿主退出或 QQ 现场验收。下一步仍须处理有界副本和精确版本确认，unknown 不重发。
+
+假宿主红灯日志 `target-harness/feat004-expiry-red.log` SHA-256 `8AF7FC0C27C917E7E04DDE03C48F9392E43AD3F0DC939ECC0F34FB7E8B9BD6AA`；修复后 resident 生命周期、通道交接与逐项确认共 30 项定向测试通过，日志 `target-harness/feat004-expiry-green-final.log` SHA-256 `28978B981B0DC1442BA5DF09FCBA04B5D74F57314B471CF586250C87AF19C94C`。GitNexus 基于 `E:/stella/Caligo-feat-004` 起点 `b10cf2f`：`ack_result_notice` 上游 HIGH、到期接口与 submit 为 UNKNOWN；索引存在过程截断，源码补核正式 worker ACK 调用及到期接口调用方，不将空图视作零影响。最终 5 文件变更图 MEDIUM（不抵消 ACK 上游 HIGH）；Windows MSVC 串行 `init.ps1 -Mode all` 的普通及 research 全仓测试通过，日志 `target-harness/feat004-expiry-all.log` SHA-256 `5C4E482A1B224312D33347F282905477C8D679BB7E1631C4B05378662829F786`；文档检查通过。未接 QQ、未发送，feat-004 in-progress。
+
 2026-11-17 feat-004 worker 结果 ACK 类型防护（起点 `c784de2`）：先前 `SendResultAck` 仅按 request_id 移除 worker outbox 中的首个结果，并先无条件调用 resident 槽位 ACK。现仅当同请求结果的中间/终态类型与 ACK 的 `terminal` 一致、且该项已在当前连接代次发送时移除，随后才通知 resident 释放对应槽位；不匹配 ACK 保留 outbox 和槽位。daemon 对 `AcceptedUnconfirmed` 返回非终态，其他结果返回终态；协议未变。合成旧匹配逻辑在旧类型 ACK 和同请求两类结果时错误移除，两个定向负例先失败后通过，并覆盖未发送、旧代次与重复确认；不证明真实 daemon 曾发送重复或错误 ACK。
 
 此防护并不解决同请求两个同类终态（例如 unknown 后迟到 success）的旧 ACK 混淆：wire 没有版本号；也不保留 worker 退出后 outbox 或通道内正文，不提供持久确认、worker 重建、宿主退出恢复或 QQ 现场验收。真实 ACK 顺序、会话代次的跨 daemon 重启唯一性仍需独立验证。下步继续设计有界 resident 副本与版本绑定 ACK，结果未知不重发。

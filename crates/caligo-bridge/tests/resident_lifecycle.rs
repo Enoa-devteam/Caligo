@@ -664,6 +664,42 @@ fn unknown_correction_slot_expires_and_unblocks_new_dispatch() {
 }
 
 #[test]
+fn unacked_unknown_keeps_capacity_after_correction_window_expires() {
+    let outcomes = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let resident = Resident::new(
+        LateReceiptHost { owner: OWNER, outcomes: outcomes.clone() },
+        ResidentLimits { results_max: 2, ..ResidentLimits::default() },
+    );
+    resident.bootstrap().unwrap();
+    let request = |id: &str| OwnedRequest::SendText {
+        request_id: id.into(), wire_seq: 1, timeout_ms: 1, chat_type: 2,
+        peer_uid: "123".into(), text: "x".into(),
+    };
+    assert_eq!(resident.submit(request("unacked")), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    resident.take_results();
+    assert!(resident.ack_notice("unacked", true));
+    outcomes.lock().unwrap().push_back(("unacked".into(), SendOutcome::Unknown {
+        request_id: "unacked".into(), reason: Some("timeout".into()), late_receipt_possible: true,
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    let unknown = resident.take_results();
+    assert_eq!(unknown.len(), 1);
+    let after = std::time::Instant::now() + std::time::Duration::from_millis(caligo_model::LATE_RECEIPT_GRACE_MS + 1);
+    assert_eq!(resident.expire_late_receipts(after), 1);
+    assert_eq!(resident.expire_late_receipts(after), 0);
+    outcomes.lock().unwrap().push_back(("unacked".into(), SendOutcome::Success {
+        request_id: "unacked".into(), native_id: "too-late".into(),
+    }));
+    assert_eq!(resident.drain_send_responses(), 0);
+    assert!(resident.take_results().is_empty());
+    assert_eq!(resident.submit(request("blocked")), SubmitVerdict::QueueFull, "expiry is not a durable ACK");
+    assert!(resident.ack_result_notice("unacked", true));
+    assert!(!resident.ack_result_notice("unacked", true));
+    assert_eq!(resident.submit(request("blocked")), SubmitVerdict::Accepted);
+}
+
+#[test]
 fn original_request_id_survives_async_response_correlation() {
     let pending = Arc::new(std::sync::Mutex::new(None));
     let resident = Resident::new(
