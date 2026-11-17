@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-17 feat-004 零发送现场已准备：源码 `3bbd3ce` 普通/research release 与脚本已固定，证据和限制见 [progress](progress.md#current-state)。当前旧 QQ 根 `38060` 当次仍映射 bridge；先请用户正常重启并登录，再重新核验新进程、固定 hash、backend、唯一 Environment，之后仅做零发送登录与正常停止；不重发、不卸载。
+
 2026-11-17 feat-004 单 worker lease：同 resident 并发 worker 拒绝，正常退出在会话/接收端关闭后释放，unwind panic 则隔离该代次；自建并发和真实管道回归见 [progress](progress.md#current-state)。不证明不同 resident、abort、原生回调/宿主退出；无自动重启或通道替换。当前测试 QQ 根 `38060` 当次仍映射 bridge，现场须重启登录并重新准入；unknown 不重发，未证寿命不卸载。
 
 2026-11-17 feat-004 满额背压恢复：正式 owner/research pump 在派发前重试后缀；满额暂停并在 ACK 释放空间后恢复 FIFO，通道拒收/序号耗尽仍硬停。假宿主与受控真实管道对照见 [progress](progress.md#current-state)。长时间暂停下的队列、自动重启/并发排他、跨宿主恢复、stop/drain 与 QQ 现场仍未证；unknown 不重发，未证寿命不卸载。

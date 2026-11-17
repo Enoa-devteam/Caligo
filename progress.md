@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-17 feat-004 零发送现场准备（源码 `3bbd3cead3b8b7846e2c50321c05c7b5a565ebf9`）：普通及 research Windows x64 release 构建通过；EXE/bridge SHA-256 分别为普通 `8CBE0B4C4CB3D692DABEDDBB071C3F1521DF286DF9737017F3C6398A215B56E4` / `18198A138771BEAEDB52A3257F05F1B2C28B65A26E83AA1F6812857C14520372`，research `D1D613D71C34CED44F21BE0A89271C3C9DFF29F8117A6C1EB08B987629411102` / `1C0DA5CECCD696E517CF0EF54893C47B7EAC91D4D70CBF4E2E12D5909AF2A9EB`。构建日志 `target-harness/feat004-exclusive-default-build.log` / `target-harness/feat004-exclusive-research-build.log` SHA-256 `2331DCF4B814EBE9EF8A5F24602D31A5B0EEA21A2D831E91405120ADC9F9AA0D` / `3EDA4E73F972430F85ABF5C07F54F2D081C08DEB1A4F29AD5B0663B77CAC51B0`。首次哈希命令漏写目标三元组目录而失败；构建本身成功，随后对实际路径重新计算上述 hash。
+
+已在 ignored `E:/stella/Caligo/local-evidence/feat004-worker-lease-zero-20261117-3bbd3ce/` 准备固定源码与二进制的只读准入、一次零发送接入/登录、正常停止及独立审计脚本；PowerShell/Python 语法检查和审计器一项合成正例、三项负例通过，runner 的三个 HTTP POST 仅对应账号启动、登录核验和管理器停止。脚本 `preflight.ps1` / `host-op.ps1` / `run-field.py` / `audit-field.py` SHA-256 依次为 `17AE47956E0F59CC59E7442B422A5804BD79E22F8ADFE3F90D938676B9F6A57D` / `4D40CE9A979C83D7DE9CD49A023EFBA1AADB7387F2B37D192A2F0ED8FB422206` / `E7665154860EBD1640AF0C195D8E9A48A76E1AAB41E69874212DDC71D3B8F152` / `81231F75A05C626A55573AEB103A90CC8BB583D59DAA70FCEA7B254468E20382`；产物与脚本 pin 见同目录 `preparation.json`。这些只是准备和合成核验，现场脚本尚未执行。
+
+当次只读核验中上次测试 QQ 根 `38060` 仍映射 bridge，不能再接入。下一步需用户正常退出并重启该测试 QQ、登录，重新按创建时间选定实例并检查固定模块 hash、后台冲突和唯一 Environment；现场仅零发送、登录及正常停止，结果未知不重发，未证寿命不卸载。若该仅文档准备提交改变 HEAD，现场源码仍明确绑定 `3bbd3ce`，后续须核对两者仅文档差异；实际 QQ 兼容、真实回调线程及 drain 均未验。
+
 2026-11-17 feat-004 resident 单 worker 与异常隔离（起点 `5139445`）：`run_worker` 在快照、计数发布和连接之前，为同一个 resident 原子获取独占 lease；第二个 worker 返回 `WorkerAlreadyRunning`，不连接或发送。正常退出时先完成内部会话和通道接收端的释放，再释放 lease，允许在同一 resident 上重新启动；线程 panic 展开时将该 resident 代次永久标为 `WorkerQuarantined`，后续 worker 不连接，等待独立恢复方案。正式入口对 lease 拒绝写固定诊断，research 入口按独立退出原因报告失败；不改变 QQ 原生回调寿命或自动重启。
 
 自建 16 线程屏障对照只允许一个 lease、正常释放后可再取得；真实 Windows 命名管道测试覆盖在首 worker 已接入时拒绝第二 worker、首 worker 健康及停止后释放，另在实际 worker 会话退出路径注入 panic，验证后续同 resident worker 隔离且零连接。同一 resident 的正常退出后通知重建回归继续通过。panic 隔离依赖 Rust unwind；abort、进程死亡、持有者内存破坏、不同 resident、QQ callback quiescence 和跨宿主恢复不在该门的证明范围。若误将原 worker 通道接收端交给被拒绝的另一调用，该接收端仍会在拒绝返回时被丢弃；调用方须保证通道所有权。
