@@ -13,6 +13,8 @@ use caligo_model::ipc_v3::{BridgeMsg, CoreToBridgeMsg, CAPABILITY_QUERY_REVISION
 use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::WrapperBinding;
 use serde_json::{json, Value};
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const PNG_HEX: &str = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63105432fe0f000214016604e0de7f0000000049454e44ae426082";
@@ -61,10 +63,15 @@ const mixed=record(1,'u_friend','20002');mixed.elements.push({elementType:1,text
 listener.onRecvMsg([bad,mixed,record(1,'u_friend','20002'),record(2,'30003','30003')]);
 const result=eval(poll);assert.ok(!result.includes('private-'));process.stdout.write(result);
 "#;
-    let out = std::process::Command::new("node")
-        .args(["--unhandled-rejections=strict", "-e", &script])
-        .output()
+    let mut child = Command::new("node")
+        .args(["--unhandled-rejections=strict", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
     assert!(
         out.status.success(),
         "{}",

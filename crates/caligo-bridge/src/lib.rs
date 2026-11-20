@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 
 /// bridge C ABI 版本。导出函数集合或签名变化时递增。
-pub const BRIDGE_ABI_VERSION: u32 = 1;
+pub const BRIDGE_ABI_VERSION: u32 = 2;
 /// bridge 侧 IPC 协议版本,须与 `caligo-core::ipc::PROTOCOL_VERSION` 一致
 /// (由 caligo-cli 的测试交叉断言)。
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -74,6 +74,8 @@ mod query_diagnostics;
 mod receive_diagnostics;
 pub mod register;
 pub mod resident;
+#[cfg(feature = "research")]
+pub mod stop_observation;
 #[cfg(feature = "research")]
 pub mod uid_map_probe;
 #[cfg(feature = "research")]
@@ -634,6 +636,17 @@ pub mod qq_entry_code {
     pub const ERR_SHUTDOWN_NOT_READY: u32 = 0x20;
     /// 关闭协议:超时(句柄保留,不冒充成功)。
     pub const ERR_SHUTDOWN_TIMEOUT: u32 = 0x21;
+    /// Pump closed, but worker teardown or result acknowledgement is incomplete.
+    /// Resident memory remains retained; this does not establish native drain.
+    pub const ERR_SHUTDOWN_PENDING_RESULTS: u32 = 0x22;
+    /// Owner hook unwound or its mutex was poisoned. Roots remain quarantined;
+    /// no further hook/native cleanup is attempted in this host generation.
+    pub const ERR_OWNER_HOOK_FAULT: u32 = 0x23;
+    /// Formal owner cleanup returned Err; roots remain retained until host exit.
+    /// Cleanup is not retried, and this is distinct from hook unwind/poison.
+    pub const ERR_OWNER_CLEANUP_FAILED: u32 = 0x24;
+    /// Research observation failed; owner and snapshot roots stay quarantined.
+    pub const ERR_STOP_OBSERVATION_FAILED: u32 = 0x25;
 }
 
 /// 首入参数块(加载器写入;指针字段位于本进程)。
@@ -716,6 +729,10 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
             EntryError::UvInitFailed { .. } => qq_entry_code::ERR_UV_INIT,
             EntryError::Timeout => qq_entry_code::ERR_TIMEOUT,
             EntryError::AlreadyBootstrapped => qq_entry_code::ERR_ALREADY,
+            EntryError::PendingResults => qq_entry_code::ERR_SHUTDOWN_PENDING_RESULTS,
+            EntryError::OwnerHookFault => qq_entry_code::ERR_OWNER_HOOK_FAULT,
+            EntryError::OwnerCleanupFailed => qq_entry_code::ERR_OWNER_CLEANUP_FAILED,
+            EntryError::StopObservationFailed => qq_entry_code::ERR_STOP_OBSERVATION_FAILED,
         },
     }
 }
@@ -777,20 +794,66 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
 #[no_mangle]
 pub extern "system" fn caligo_qq_entry_shutdown(wait_ms: u32) -> u32 {
     use qq_entry::EntryError;
-    // 先停 daemon worker(若已启动):关闭协议不与管道循环竞争。
-    if let Some(startup) = qq_entry::peek_daemon_startup() {
-        startup
-            .stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    match qq_entry::shutdown(wait_ms) {
+    match qq_entry::shutdown_managed(wait_ms) {
         Ok(()) => {
             qq_entry::append_stage_simple("shutdown", true, "closed via owner pump");
             qq_entry_code::OK
         }
         Err(EntryError::AlreadyBootstrapped) => qq_entry_code::ERR_SHUTDOWN_NOT_READY,
         Err(EntryError::Timeout) => qq_entry_code::ERR_SHUTDOWN_TIMEOUT,
+        Err(EntryError::PendingResults) => qq_entry_code::ERR_SHUTDOWN_PENDING_RESULTS,
+        Err(EntryError::OwnerHookFault) => qq_entry_code::ERR_OWNER_HOOK_FAULT,
+        Err(EntryError::OwnerCleanupFailed) => qq_entry_code::ERR_OWNER_CLEANUP_FAILED,
+        Err(EntryError::StopObservationFailed) => qq_entry_code::ERR_STOP_OBSERVATION_FAILED,
         Err(_) => qq_entry_code::ERR_SHUTDOWN_TIMEOUT,
+    }
+}
+
+/// Validate the timing contract shared by the CLI and the observation export.
+pub fn validate_stop_observation_config(duration_ms: u32, wait_ms: u32) -> bool {
+    (1..=5_000).contains(&duration_ms) && wait_ms <= 30_000 && wait_ms >= duration_ms + 250
+}
+
+/// Opt in to observation while stopping the current formal bridge session.
+/// On Windows x64, `packed` holds duration_ms in the low 32 bits and wait_ms
+/// in the high 32 bits. The caller only reads cached identity metadata. Native
+/// samples run on the owner pump. Default builds reject the request immediately.
+#[no_mangle]
+pub extern "system" fn caligo_qq_entry_shutdown_observe(packed: usize) -> u32 {
+    #[cfg(not(feature = "research"))]
+    {
+        let _ = packed;
+        gate::ERR_RESEARCH_DISABLED
+    }
+    #[cfg(feature = "research")]
+    {
+        use qq_entry_code::{ERR_SHUTDOWN_NOT_READY, ERR_STOP_OBSERVATION_FAILED};
+
+        let packed = packed as u64;
+        let duration_ms = packed as u32;
+        let wait_ms = (packed >> 32) as u32;
+        if !validate_stop_observation_config(duration_ms, wait_ms) {
+            return ERR_STOP_OBSERVATION_FAILED;
+        }
+        let account = {
+            let Ok(config) = DAEMON_CFG.lock() else {
+                return ERR_STOP_OBSERVATION_FAILED;
+            };
+            let Some(startup) = config.as_ref() else {
+                return ERR_SHUTDOWN_NOT_READY;
+            };
+            startup.account.clone()
+        };
+        let host_nonce = daemon_client::host_instance_nonce();
+        let Some(identity) = qq_v8::stop_observation_identity(&account, host_nonce) else {
+            return ERR_STOP_OBSERVATION_FAILED;
+        };
+        if qq_entry::arm_stop_observation_with_result_drain(
+            identity, duration_ms.into(), wait_ms.into(),
+        ).is_err() {
+            return ERR_STOP_OBSERVATION_FAILED;
+        }
+        caligo_qq_entry_shutdown(wait_ms)
     }
 }
 
@@ -804,9 +867,14 @@ pub mod daemon_client_code {
     pub const ERR_SPAWN: u32 = 5;
 }
 
-/// daemon client 的 JSON 配置(caligo-cli 写入):
-/// `{"pipe_name":"...","auth_token":"...","session_generation":1,"account":"...","module_baseline":"..."}`
-static DAEMON_CFG: std::sync::Mutex<Option<qq_entry::DaemonStartup>> = std::sync::Mutex::new(None);
+struct DaemonStartupConfig {
+    _startup: qq_entry::DaemonStartup,
+    #[cfg(feature = "research")]
+    account: String,
+}
+
+/// Set only after the formal daemon worker has spawned successfully.
+static DAEMON_CFG: std::sync::Mutex<Option<DaemonStartupConfig>> = std::sync::Mutex::new(None);
 
 /// 启动常驻 daemon 客户端(bootstrap 成功后调用;每代次一次)。
 /// worker:自有线程,只做管道 I/O + resident 提交(计划 §3.1);
@@ -907,7 +975,26 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         QqOwnerAdapter::new(handle, account.clone()),
         ResidentLimits::default(),
     ));
+    let worker_finished = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel::<resident::RetainedNotice>();
+    #[cfg(not(feature = "research"))]
+    qq_entry::retain_daemon_until_settled(resident.clone(), worker_finished.clone());
+    #[cfg(not(feature = "research"))]
+    let notice_handoff = resident::ResultHandoffGate::default();
+    #[cfg(feature = "research")]
+    let notice_handoff = Arc::new(resident::ResultHandoffGate::default());
+    #[cfg(feature = "research")]
+    {
+        qq_entry::retain_daemon_for_result_drain(
+            resident.clone(), worker_finished.clone(), stop.clone(), notice_handoff.clone(), tx.clone(),
+        );
+        let observed_account = account.clone();
+        let observed_nonce = daemon_client::host_instance_nonce();
+        if qq_entry::install_stop_observation_driver(
+            Box::new(move || qq_v8::stop_observation_identity(&observed_account, observed_nonce)),
+            Box::new(qq_v8::sample_stopped_observations),
+        ).is_err() { return c::ERR_BAD_CFG; }
+    }
     let (etx, erx) = std::sync::mpsc::channel::<resident::OwnedEvent>();
     // resident 初始化必须在 owner 线程执行(计划 §5.1:宿主 API 前的
     // owner 检查不是形式 —— 远程线程调用会被正确拒绝,D7-b 现场实证)。
@@ -927,15 +1014,9 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
             std::sync::Mutex::new(None);
         // Full retention pauses dispatch; closed channel or exhausted IDs latch.
-        let notice_handoff = resident::ResultHandoffGate::default();
         qq_entry::install_drain_hook(Box::new(move || {
-            if owner_stop.load(Ordering::Acquire) {
-                r.set_bridge_scope(None);
-                r.drain_queries();
-                if let Err(error) = r.close() {
-                    qq_entry::append_stage_simple("daemon_owner_close", false, &format!("{error:?}"));
-                }
-                return 0;
+            if owner_stop.load(Ordering::Acquire) || qq_entry::owner_stop_requested() {
+                return qq_entry::close_daemon_owner(&r);
             }
             if notice_handoff.is_closed() { return 0; }
             // Flush the existing suffix before new work or JS acknowledgements.
@@ -1071,6 +1152,11 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             0
         }));
     }
+    let startup = DaemonStartupConfig {
+        _startup: qq_entry::DaemonStartup { stop: stop.clone() },
+        #[cfg(feature = "research")]
+        account: account.clone(),
+    };
     let cfg = daemon_client::DaemonClientConfig {
         pipe_name,
         auth_token,
@@ -1092,11 +1178,14 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             if matches!(exit, daemon_client::WorkerExit::WorkerAlreadyRunning | daemon_client::WorkerExit::WorkerQuarantined) {
                 qq_entry::append_stage_simple("daemon_worker", false, "worker_lease_rejected");
             }
+            // Published only after run_worker has dropped receivers, outbox and
+            // its lease; a missing completion does not prove safe release.
+            worker_finished.store(true, Ordering::Release);
         });
     if spawned.is_err() {
         return c::ERR_SPAWN;
     }
-    *guard = Some(qq_entry::DaemonStartup { stop });
+    *guard = Some(startup);
     c::OK
 }
 

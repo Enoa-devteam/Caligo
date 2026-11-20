@@ -14,6 +14,9 @@ use core::ffi::c_void;
 
 use crate::qq_entry::append_stage;
 
+#[cfg(feature = "research")]
+mod callback_threads;
+
 const NAME_HANDLE_SCOPE_CTOR: &str = "??0HandleScope@v8@@QEAA@PEAVIsolate@1@@Z";
 const NAME_HANDLE_SCOPE_DTOR: &str = "??1HandleScope@v8@@QEAA@XZ";
 const NAME_ISOLATE_GETCURRENT: &str = "?GetCurrent@Isolate@v8@@SAPEAV12@XZ";
@@ -405,6 +408,97 @@ pub const D8_START_JS: &str = r"
         }
       } catch (_) { traceGeneration = 0; }
     }
+    // The JS order belongs to this listener only. Polling never resets it.
+    var observationOrder = 0, observationPhase = 'active';
+    var currentTid = null;
+    if (traceText && typeof caligoTidGetterReady !== 'undefined' && caligoTidGetterReady === true) {
+      try {
+        var installedTidGetter = G.__caligo_current_tid;
+        if (typeof installedTidGetter === 'function') currentTid = installedTidGetter;
+      } catch (_) {}
+    }
+    var observeCallback = function(kind, association, key, pending) {
+      try {
+        if (!traceText || R.syntheticStopProbe) return;
+        var seq = pending ? pending.traceSeq : 0;
+        if (!traceGeneration || observationOrder >= 128 ||
+            (pending && (!Number.isSafeInteger(seq) || seq < 1 || seq > 2147483647))) {
+          R.callbackObservationsOverflow = true;
+          return;
+        }
+        var callbackTid = null;
+        try {
+          var sampledTid = currentTid ? currentTid() : null;
+          if (Number.isInteger(sampledTid) && sampledTid > 0 && sampledTid <= 4294967295) callbackTid = sampledTid;
+        } catch (_) {}
+        var row = {generation:traceGeneration, order:++observationOrder,
+          seq:seq, kind:kind, phase:observationPhase, association:association,
+          current:pending ? R.sends[key] === pending : null, callback_tid:callbackTid};
+        R.callbackObservations.push(row);
+        return row;
+      } catch (_) { try { R.callbackObservationsOverflow = true; } catch (_) {} }
+    };
+    // Capture only the text closure's business fields. References and values
+    // stay in this invocation; the observation row stores a fixed label only.
+    var captureTextClosureState = function(key, pending) {
+      if (R.stopped !== true || G.__caligo_d8 !== R || !R.sends || !R.sendResults ||
+          !Array.isArray(R.recv) || !Array.isArray(R.imageShapes)) return null;
+      var result = R.sendResults[key], readback = pending.readback;
+      return [R.sends, R.sends[key], R.sendResults, result,
+        result && result.status, result && result.msgId, result && result.reason,
+        pending.promiseDone, pending.promiseStatus, pending.unknownReason, pending.failed,
+        pending.timedOut, pending.done, pending.addId, pending.updateId, pending.readbackStarted,
+        readback, readback && readback.status, readback && readback.msgId, readback && readback.reason,
+        R.recv, R.recv.length, R.recvBytes, R.rejected, R.overflow, R.imageShapes, R.imageShapes.length];
+    };
+    var beginTextClosureObservation = function(kind, key, pending) {
+      var row = observeCallback(kind, 'closure', key, pending);
+      if (!row || row.phase !== 'stopped') return null;
+      row.text_state = 'unverified';
+      try {
+        var before = captureTextClosureState(key, pending);
+        if (!before) return null;
+        return function () {
+          try {
+            var after = captureTextClosureState(key, pending);
+            if (after) row.text_state = before.every(function(value, index) {
+              return Object.is(value, after[index]);
+            }) ? 'unchanged' : 'changed';
+          } catch (_) {}
+        };
+      } catch (_) { return null; }
+    };
+    if (traceText) {
+      R.beginTextClosureObservation = beginTextClosureObservation;
+      R.callbackObservations = [];
+      R.callbackObservationsOverflow = traceGeneration === 0;
+      R.observeCallback = observeCallback;
+      R.observeStopPhase = function(phase, kind) {
+        observationPhase = phase;
+        observeCallback(kind, 'none');
+      };
+    }
+    // Capture the observers once per listener generation. The native no-argument
+    // functions only record the current OS thread; their return value is ignored.
+    var threadObservers = null;
+    if (traceText && typeof caligoThreadObserversReady !== 'undefined' && caligoThreadObserversReady === true) {
+      try {
+        var candidates = {
+          recv:G.__caligo_thread_recv, add:G.__caligo_thread_add,
+          update:G.__caligo_thread_update, promise:G.__caligo_thread_promise,
+          readback:G.__caligo_thread_readback
+        };
+        if (Object.keys(candidates).every(function(k) { return typeof candidates[k] === 'function'; }))
+          threadObservers = candidates;
+      } catch (_) {}
+    }
+    var noteCallbackThread = R.noteCallbackThread = function(kind) {
+      try {
+        if (R.syntheticStopProbe || !threadObservers) return;
+        var observer = threadObservers[kind];
+        if (typeof observer === 'function') observer();
+      } catch (_) {}
+    };
     R.textTraceGeneration = traceGeneration;
     R.textTraceSequence = 0;
     R.textTraceOverflow = traceText && traceGeneration === 0;
@@ -435,7 +529,8 @@ pub const D8_START_JS: &str = r"
     };
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
-      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (R.stopped || !pending || R.sends[key] !== pending || pending.done ||
+          !pending.promiseDone || !pending.readback) return;
       if (!pending.voice && !pending.image) R.noteTextSend('settled', pending.traceSeq);
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
@@ -586,7 +681,10 @@ pub const D8_START_JS: &str = r"
             ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
               !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
-          if (!send.voice && !send.image) R.noteTextSend('matched_add', send.traceSeq);
+          if (!send.voice && !send.image) {
+            if (traceText) observeCallback('matched_add', 'matched', key, send);
+            R.noteTextSend('matched_add', send.traceSeq);
+          }
           if (send.addId && (send.addId !== m.msgId ||
               ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
@@ -600,51 +698,70 @@ pub const D8_START_JS: &str = r"
         }
         if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
             (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
-          if (!send.voice && !send.image) R.noteTextSend('matched_update', send.traceSeq);
+          if (!send.voice && !send.image) {
+            if (traceText) observeCallback('matched_update', 'matched', key, send);
+            R.noteTextSend('matched_update', send.traceSeq);
+          }
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
+            var queryEntered = false;
             Promise.resolve().then(function () {
-              if (R.stopped) return null;
+              if (R.stopped || R.sends[key] !== pending) return null;
+              queryEntered = true;
               return service.getMsgsByMsgId({chatType:pending.chat, peerUid:pending.peer,
                 guildId:pending.cookie}, [pending.updateId]);
             }).then(function (response) {
-              if (R.stopped) return;
-              var list = response && response.msgList;
-              if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
-                pending.readback = {status:'unknown', reason:'exact_query_miss'};
-              } else {
-                var record = list[0];
-                var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
-                  record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
-                  record.sendStatus === 2 && matchesSendElement(record, pending) &&
-                  (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
-                    record.elements[0].elementId === pending.addElementId));
-                var owned;
-                if (matched && (pending.voice || pending.image)) {
-                  owned = {};
-                  var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
-                    'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
-                  for (var f = 0; f < fields.length; f++) {
-                    var value = record[fields[f]];
-                    if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+              noteCallbackThread('readback');
+              var finishObservation = traceText && queryEntered && !pending.voice && !pending.image
+                ? beginTextClosureObservation('readback_fulfilled', key, pending) : null;
+              try {
+                if (R.stopped || R.sends[key] !== pending) return;
+                var list = response && response.msgList;
+                if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
+                  pending.readback = {status:'unknown', reason:'exact_query_miss'};
+                } else {
+                  var record = list[0];
+                  var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
+                    record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
+                    record.sendStatus === 2 && matchesSendElement(record, pending) &&
+                    (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
+                      record.elements[0].elementId === pending.addElementId));
+                  var owned;
+                  if (matched && (pending.voice || pending.image)) {
+                    owned = {};
+                    var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
+                      'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
+                    for (var f = 0; f < fields.length; f++) {
+                      var value = record[fields[f]];
+                      if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+                    }
+                    owned.elements = pending.image
+                      ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
+                        md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
+                        picType:record.elements[0].picElement.picType,picSubType:0}}]
+                      : [{elementType:4, elementId:pending.addElementId,
+                        pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
                   }
-                  owned.elements = pending.image
-                    ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
-                      md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
-                      picType:record.elements[0].picElement.picType,picSubType:0}}]
-                    : [{elementType:4, elementId:pending.addElementId,
-                      pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
+                  pending.readback = matched
+                      ? {status:'readback', msgId:record.msgId, record:owned}
+                      : {status:'unknown', reason:'exact_query_identity_mismatch'};
+                  if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch', pending.traceSeq);
                 }
-                pending.readback = matched
-                    ? {status:'readback', msgId:record.msgId, record:owned}
-                    : {status:'unknown', reason:'exact_query_identity_mismatch'};
-                if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch', pending.traceSeq);
+                settleSendResult(R, key, pending);
+              } finally {
+                if (finishObservation) finishObservation();
               }
-              settleSendResult(R, key, pending);
             }, function () {
-              if (R.stopped) return;
-              pending.readback = {status:'unknown', reason:'exact_query_rejected'};
-              settleSendResult(R, key, pending);
+              noteCallbackThread('readback');
+              var finishObservation = traceText && queryEntered && !pending.voice && !pending.image
+                ? beginTextClosureObservation('readback_rejected', key, pending) : null;
+              try {
+                if (R.stopped || R.sends[key] !== pending) return;
+                pending.readback = {status:'unknown', reason:'exact_query_rejected'};
+                settleSendResult(R, key, pending);
+              } finally {
+                if (finishObservation) finishObservation();
+              }
             });
           })(key, send, R.ms);
         }
@@ -656,9 +773,21 @@ pub const D8_START_JS: &str = r"
       for (var i = 0; i < a.length; i++) push(src, a[i]);
     };
     R.listener = {
-      onRecvMsg: function (a) { if (!R.stopped) pushList('recv', a); },
-      onMsgInfoListUpdate: function (a) { if (!R.stopped) pushList('update', a); },
-      onAddSendMsg: function (m) { if (!R.stopped) push('add_send', m); },
+      onRecvMsg: function (a) {
+        noteCallbackThread('recv');
+        if (traceText) observeCallback('recv', 'none');
+        if (!R.stopped) pushList('recv', a);
+      },
+      onMsgInfoListUpdate: function (a) {
+        noteCallbackThread('update');
+        if (traceText) observeCallback('update', 'none');
+        if (!R.stopped) pushList('update', a);
+      },
+      onAddSendMsg: function (m) {
+        noteCallbackThread('add');
+        if (traceText) observeCallback('add', 'none');
+        if (!R.stopped) push('add_send', m);
+      },
       // A late media completion can still release an owned temporary file.
       onRichMediaDownloadComplete: function (result) {
         if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
@@ -809,15 +938,22 @@ pub const D8_STOP_JS: &str = r"
     var R = G.__caligo_res;
     var r = 'no-listener';
     R.stopped = true;
+    var noteStopPhase = function(phase, kind) {
+      try { if (R.observeStopPhase) R.observeStopPhase(phase, kind); } catch (_) {}
+    };
+    noteStopPhase('stopping', 'stop_begin');
     // Research-only, synchronous synthetic callbacks. No QQ API or message data.
     var probe = '';
     if (typeof caligoStopProbe !== 'undefined' && caligoStopProbe === true) {
       try {
         var before = [R.recv, R.recv.length, R.recvBytes, R.rejected, R.overflow,
           R.imageShapes, R.imageShapes.length];
-        R.listener.onRecvMsg(null);
-        R.listener.onMsgInfoListUpdate(null);
-        R.listener.onAddSendMsg(null);
+        R.syntheticStopProbe = true;
+        try {
+          R.listener.onRecvMsg(null);
+          R.listener.onMsgInfoListUpdate(null);
+          R.listener.onAddSendMsg(null);
+        } finally { R.syntheticStopProbe = false; }
         var unchanged = R.recv === before[0] && R.recv.length === before[1] &&
           R.recvBytes === before[2] && R.rejected === before[3] && R.overflow === before[4] &&
           R.imageShapes === before[5] && R.imageShapes.length === before[6];
@@ -825,13 +961,63 @@ pub const D8_STOP_JS: &str = r"
       } catch (_) { probe = ' stop_probe=error'; }
     }
     try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); }
-    catch (_) { return 'ERR:listener_remove_failed' + probe; }
+    catch (_) {
+      noteStopPhase('remove_failed', 'stop_remove_failed');
+      return 'ERR:listener_remove_failed' + probe;
+    }
+    noteStopPhase('stopped', 'stop_end');
     var sid = R.sid;
     delete G.__caligo_res;
     return 'STOPPED sid=' + sid + ' remove=' + r + probe;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 ";
+
+/// Read the retained listener's metadata without clearing any queue. The owner
+/// binds both fields at acquisition, including for the immediate post-STOP read.
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub fn build_callback_observations_js(session: &str, generation: u32) -> Option<String> {
+    if session.is_empty() || session.len() > 128 || generation > 2_147_483_647 {
+        return None;
+    }
+    let sid = serde_json::to_string(session).ok()?;
+    Some(format!(r#"(function(sid, generation) {{
+      try {{
+        var R = globalThis.__caligo_d8;
+        if (!R || R.sid !== sid || R.textTraceGeneration !== generation ||
+            !Array.isArray(R.callbackObservations) || typeof R.callbackObservationsOverflow !== 'boolean')
+          return 'UNAVAILABLE';
+        var rows = R.callbackObservations, events = [];
+        var kinds = ['recv','add','update','matched_add','matched_update','promise_fulfilled',
+          'promise_rejected','readback_fulfilled','readback_rejected','stop_begin','stop_end','stop_remove_failed'];
+        var phases = ['active','stopping','stopped','remove_failed'];
+        var associations = ['none','matched','closure'];
+        var overflow = R.callbackObservationsOverflow || rows.length > 128;
+        for (var i = 0; i < Math.min(rows.length, 129); i++) {{
+          var e = rows[i];
+          if (!e) {{ overflow = true; continue; }}
+          var g = e.generation, order = e.order, seq = e.seq, kind = e.kind,
+            phase = e.phase, association = e.association, current = e.current, callbackTid = e.callback_tid;
+          if (g !== generation || !Number.isInteger(order) || order < 1 || order > 128 ||
+              !Number.isInteger(seq) || seq < 0 || seq > 2147483647 || !kinds.includes(kind) ||
+              !phases.includes(phase) || !associations.includes(association) ||
+              (current !== null && typeof current !== 'boolean') ||
+              (callbackTid !== null && (!Number.isInteger(callbackTid) || callbackTid < 1 || callbackTid > 4294967295))) {{ overflow = true; continue; }}
+          var row = {{generation:g, order:order, seq:seq, kind:kind, phase:phase,
+            association:association, current:current, callback_tid:callbackTid}};
+          if (e.text_state !== undefined) {{
+            if (phase !== 'stopped' || association !== 'closure' ||
+                !['unchanged','changed','unverified'].includes(e.text_state)) {{ overflow = true; continue; }}
+            row.text_state = e.text_state;
+          }}
+          events.push(row);
+        }}
+        var json = JSON.stringify({{generation:generation, overflow:overflow, events:events}});
+        return json.length <= 24576 ? json : 'UNAVAILABLE';
+      }} catch (_) {{ return 'UNAVAILABLE'; }}
+    }})({sid}, {generation})"#))
+}
 
 /// Build a read-only, session-bound aggregate of the result table. No result
 /// key, message content, reason, generation or account is returned.
@@ -1039,6 +1225,8 @@ pub fn poll_listener_bound_json(session: &str) -> Result<String, V8Error> {
 }
 
 fn poll_listener_script(source: &str) -> Result<String, V8Error> {
+    #[cfg(feature = "research")]
+    callback_threads::drain();
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
@@ -1067,7 +1255,112 @@ fn poll_listener_script(source: &str) -> Result<String, V8Error> {
             crate::qq_entry::append_stage_simple("text_send_trace", true, &detail);
         }
     }
+    #[cfg(feature = "research")]
+    report_callback_observations(&syms);
     Ok(output)
+}
+
+#[cfg(feature = "research")]
+#[derive(Default)]
+struct CallbackObservationReport {
+    source: Option<String>,
+    generation: u32,
+    previous: Option<String>,
+    reports: u8,
+}
+
+#[cfg(feature = "research")]
+static CALLBACK_OBSERVATION_REPORT: std::sync::Mutex<CallbackObservationReport> =
+    std::sync::Mutex::new(CallbackObservationReport {
+        source: None,
+        generation: 0,
+        previous: None,
+        reports: 0,
+    });
+
+#[cfg(feature = "research")]
+fn report_callback_observations(syms: &V8Symbols) {
+    let (source, generation) = {
+        let Ok(report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
+        if report.reports >= 32 { return; }
+        let Some(source) = report.source.clone() else { return; };
+        (source, report.generation)
+    };
+    // SAFETY: same owner and context checks as the preceding poll or STOP.
+    let snapshot = unsafe { exec_script(syms, isolate_addr(), &source) }.unwrap_or_default();
+    let detail = crate::receive_diagnostics::sanitize_callback_observations(&snapshot, generation);
+    let Ok(mut report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
+    if report.reports >= 32 || report.generation != generation ||
+        report.source.as_deref() != Some(source.as_str()) || report.previous.as_ref() == Some(&detail) {
+        return;
+    }
+    report.reports += 1;
+    if report.reports == 32 {
+        crate::qq_entry::append_stage_simple("js_callback_observation", false,
+            r#"{"incomplete":true,"reason":"report_budget_exhausted"}"#);
+    } else {
+        crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
+        report.previous = Some(detail);
+    }
+}
+
+/// Cached binding only: safe to read before scheduling work on the owner.
+#[cfg(feature = "research")]
+pub fn stop_observation_identity(account: &str, host_nonce: u64) -> Option<crate::stop_observation::StopIdentity> {
+    if account.is_empty() || account.len() > 128 || !account.bytes().all(|b| b.is_ascii_digit())
+        || host_nonce == 0 || host_nonce != crate::daemon_client::host_instance_nonce() { return None; }
+    let session = listener_session()?;
+    let report = CALLBACK_OBSERVATION_REPORT.lock().ok()?;
+    if report.source.is_none() || !(1..=i32::MAX as u32).contains(&report.generation) { return None; }
+    Some(crate::stop_observation::StopIdentity {
+        account:account.to_owned(), host_nonce, wrapper_session:session,
+        listener_generation:report.generation,
+    })
+}
+
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub fn build_stopped_observation_js(identity: &crate::stop_observation::StopIdentity) -> Option<String> {
+    if identity.host_nonce == 0 || identity.account.is_empty() || identity.account.len() > 128
+        || !identity.account.bytes().all(|b| b.is_ascii_digit()) || identity.listener_generation == 0 { return None; }
+    let source = build_callback_observations_js(&identity.wrapper_session, identity.listener_generation)?;
+    let account = serde_json::to_string(&identity.account).ok()?;
+    Some(format!(r#"(function(account) {{
+      try {{
+        var R = globalThis.__caligo_d8;
+        if (!R || R.voiceAccount !== account || R.stopped !== true) return 'UNAVAILABLE';
+        return ({source});
+      }} catch (_) {{ return 'UNAVAILABLE'; }}
+    }})({account})"#))
+}
+
+/// Called only by the admitted owner driver; never dispatches or polls messages.
+#[cfg(feature = "research")]
+pub fn sample_stopped_observations(identity: &crate::stop_observation::StopIdentity) -> Result<crate::stop_observation::Sample, &'static str> {
+    if stop_observation_identity(&identity.account, identity.host_nonce).as_ref() != Some(identity) {
+        return Err("observation_binding_changed");
+    }
+    let source = build_stopped_observation_js(identity).ok_or("observation_binding_invalid")?;
+    let syms = symbols().ok_or("observation_symbols_unavailable")?;
+    // SAFETY: owner/context admission is checked by the driver and V8 ladder.
+    let snapshot = unsafe { exec_script(&syms, isolate_addr(), &source) }.map_err(|_| "observation_v8_failed")?;
+    let detail = crate::receive_diagnostics::sanitize_callback_observations(&snapshot, identity.listener_generation);
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "observation_shape")?;
+    if parsed.get("incomplete").and_then(|v| v.as_bool()) != Some(false) { return Err("observation_incomplete"); }
+    let count = parsed.get("events").and_then(|v| v.as_array()).ok_or("observation_shape")?.len();
+    let mut report = CALLBACK_OBSERVATION_REPORT.lock().map_err(|_| "observation_report_poisoned")?;
+    if report.generation != identity.listener_generation || report.reports >= 32 { return Err("observation_report_budget"); }
+    if report.previous.as_ref() != Some(&detail) {
+        report.reports += 1;
+        if report.reports == 32 {
+            crate::qq_entry::append_stage_simple("js_callback_observation", false,
+                r#"{"incomplete":true,"reason":"report_budget_exhausted"}"#);
+            return Err("observation_report_budget");
+        }
+        crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
+        report.previous = Some(detail);
+    }
+    Ok(crate::stop_observation::Sample { callbacks_seen:count as u64 })
 }
 
 static D8_SESSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -1086,17 +1379,59 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
-    // SAFETY: 同上。
-    let source = account.map(listener_script_with_account).unwrap_or_else(|| {
+    #[cfg(feature = "research")]
+    let observers_ready = account.is_some() && unsafe { callback_threads::install(&syms, isolate_addr()) };
+    #[cfg(not(feature = "research"))]
+    let observers_ready = false;
+    #[cfg(feature = "research")]
+    if account.is_some() {
+        crate::qq_entry::append_stage_simple("js_callback_thread_install", observers_ready,
+            if observers_ready { "exact_runtime_observers_ready" } else { "observation_unavailable" });
+    }
+    let listener = account.map(listener_script_with_account).unwrap_or_else(|| {
         format!("(function(caligoSendTrace) {{ return ({}); }})(false)", D8_START_JS)
     });
+    #[cfg(feature = "research")]
+    let getter_ready = observers_ready && callback_threads::getter_installed();
+    #[cfg(not(feature = "research"))]
+    let getter_ready = false;
+    let source = format!("(function(caligoThreadObserversReady, caligoTidGetterReady) {{ return ({listener}); }})({observers_ready}, {getter_ready})");
+    #[cfg(feature = "research")]
+    let source = if account.is_some() {
+        format!(r#"(function() {{
+          var result = ({source});
+          try {{
+            if (result.startsWith('ARMED sid=')) {{
+              var generation = globalThis.__caligo_d8.textTraceGeneration;
+              if (Number.isInteger(generation) && generation >= 0 && generation <= 2147483647)
+                return generation + ' ' + result;
+            }}
+          }} catch (_) {{}}
+          return result;
+        }})()"#)
+    } else { source };
+    // SAFETY: 同上。
     let result = unsafe { exec_script(&syms, isolate_addr(), &source) }?;
+    #[cfg(feature = "research")]
+    let (generation, result) = match result.split_once(' ') {
+        Some((prefix, rest)) if rest.starts_with("ARMED sid=") => match prefix.parse::<u32>() {
+            Ok(generation @ 0..=2_147_483_647) => (generation, rest.to_owned()),
+            _ => (0, result),
+        },
+        _ => (0, result),
+    };
     if let Some(session) = result
         .strip_prefix("ARMED sid=")
         .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))
     {
         if let Ok(mut bound) = D8_SESSION.lock() {
             *bound = Some(session.to_owned());
+        }
+        #[cfg(feature = "research")]
+        if let Ok(mut report) = CALLBACK_OBSERVATION_REPORT.lock() {
+            report.source = account.and_then(|_| build_callback_observations_js(session, generation));
+            report.generation = generation;
+            report.previous = None;
         }
     }
     Ok(result)
@@ -1121,7 +1456,12 @@ pub fn stop_listener() -> Result<String, V8Error> {
     #[cfg(not(feature = "research"))]
     let source = format!("(function(caligoStopProbe) {{ return ({}); }})(false)", D8_STOP_JS);
     // SAFETY: 同上。
-    let output = unsafe { exec_script(&syms, isolate_addr(), &source) }?;
+    let output = unsafe { exec_script(&syms, isolate_addr(), &source) };
+    #[cfg(feature = "research")]
+    report_callback_observations(&syms);
+    let output = output?;
+    #[cfg(feature = "research")]
+    callback_threads::drain();
     #[cfg(feature = "research")]
     if output.starts_with("STOPPED ") || output.starts_with("ERR:listener_remove_failed ") {
         if let Some(label) = output.rsplit_once(" stop_probe=").map(|(_, label)| label) {
@@ -2833,11 +3173,23 @@ pub fn build_send_js(
     js.push_str("      if (status !== 'accepted') pending.failed=true;\n");
     js.push_str("    }\n");
     js.push_str("    function unknown(reason) { result('unknown', {status:'unknown', reason:typeof reason === 'string' ? reason : 'text_submit_unknown'}); }\n");
+    js.push_str("    function observePromise(kind) {\n");
+    js.push_str("      try { if (R.beginTextClosureObservation) return R.beginTextClosureObservation(kind, key, pending); if (R.observeCallback) R.observeCallback(kind, 'closure', key, pending); } catch (_) {}\n");
+    js.push_str("      return null;\n");
+    js.push_str("    }\n");
     js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter', pending.traceSeq); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return', pending.traceSeq); Promise.resolve(pr).then(function (res) {\n");
-    js.push_str("      if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
-    js.push_str("      else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
-    js.push_str("      else unknown();\n");
-    js.push_str("    }, function () { unknown(); }); } catch (e) { unknown(); }\n");
+    js.push_str("      try { if (R.noteCallbackThread) R.noteCallbackThread('promise'); } catch (_) {}\n");
+    js.push_str("      var finishObservation = observePromise('promise_fulfilled');\n");
+    js.push_str("      try {\n");
+    js.push_str("        if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
+    js.push_str("        else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
+    js.push_str("        else unknown();\n");
+    js.push_str("      } finally { try { if (finishObservation) finishObservation(); } catch (_) {} }\n");
+    js.push_str("    }, function () {\n");
+    js.push_str("      try { if (R.noteCallbackThread) R.noteCallbackThread('promise'); } catch (_) {}\n");
+    js.push_str("      var finishObservation = observePromise('promise_rejected');\n");
+    js.push_str("      try { unknown(); } finally { try { if (finishObservation) finishObservation(); } catch (_) {} }\n");
+    js.push_str("    }); } catch (e) { unknown(); }\n");
     js.push_str("    return JSON.stringify({fired:true, mid:key});\n");
     js.push_str("  } catch (e) { return JSON.stringify({ err: String(e).slice(0, 300) }); }\n");
     js.push_str("})()\n");

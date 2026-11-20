@@ -33,6 +33,82 @@ pub(crate) fn sanitize_text_send_trace(input: &str) -> Option<String> {
     }).to_string())
 }
 
+/// Accept only listener-scoped metadata. Invalid or missing rows describe an
+/// incomplete observation, independent of the business result.
+#[cfg(feature = "research")]
+pub(crate) fn sanitize_callback_observations(input: &str, generation: u32) -> String {
+    let sanitize = || -> Option<Value> {
+        if input.len() > 24_576 || generation > 2_147_483_647 {
+            return None;
+        }
+        let batch: Value = serde_json::from_str(input).ok()?;
+        if batch.get("generation")?.as_u64()? != u64::from(generation) {
+            return None;
+        }
+        let rows = batch.get("events")?.as_array()?;
+        let mut incomplete = generation == 0 || batch.get("overflow")?.as_bool()? || rows.len() > 128;
+        let mut events = Vec::new();
+        let mut previous = 0;
+        for row in rows.iter().take(129) {
+            let event = (|| {
+                let order = row.get("order")?.as_u64()?;
+                let seq = row.get("seq")?.as_u64()?;
+                let phase = row.get("phase")?.as_str()?;
+                let kind = row.get("kind")?.as_str()?;
+                let association = row.get("association")?.as_str()?;
+                let current = row.get("current")?;
+                let callback_tid = row.get("callback_tid");
+                let text_state = row.get("text_state");
+                if text_state.is_some_and(|value| phase != "stopped" || association != "closure"
+                    || !matches!(value.as_str(), Some("unchanged" | "changed" | "unverified")))
+                {
+                    return None;
+                }
+                if callback_tid.is_some_and(|tid| !tid.is_null() && !tid.as_u64().is_some_and(|tid| (1..=u64::from(u32::MAX)).contains(&tid))) {
+                    return None;
+                }
+                if generation == 0 || row.get("generation")?.as_u64()? != u64::from(generation)
+                    || !((previous + 1)..=128).contains(&order)
+                    || !matches!(phase, "active" | "stopping" | "stopped" | "remove_failed")
+                {
+                    return None;
+                }
+                let valid = match kind {
+                    "recv" | "add" | "update" => association == "none",
+                    "stop_begin" => association == "none" && phase == "stopping",
+                    "stop_end" => association == "none" && phase == "stopped",
+                    "stop_remove_failed" => association == "none" && phase == "remove_failed",
+                    "matched_add" | "matched_update" => association == "matched" && phase == "active" && current == true,
+                    "promise_fulfilled" | "promise_rejected" | "readback_fulfilled" | "readback_rejected" => association == "closure",
+                    _ => false,
+                } && if association == "none" {
+                    seq == 0 && current.is_null()
+                } else {
+                    (1..=2_147_483_647).contains(&seq) && current.is_boolean()
+                };
+                valid.then(|| {
+                    let mut event = json!({"generation":generation,"order":order,"seq":seq,
+                        "kind":kind,"phase":phase,"association":association,"current":current});
+                    // Absent preserves older sanitized fixtures; null means the
+                    // synchronous getter was unavailable for this observation.
+                    if let Some(tid) = callback_tid { event["callback_tid"] = tid.clone(); }
+                    if let Some(state) = text_state { event["text_state"] = state.clone(); }
+                    (order, event)
+                })
+            })();
+            if let Some((order, event)) = event {
+                incomplete |= order != previous + 1;
+                previous = order;
+                events.push(event);
+            } else {
+                incomplete = true;
+            }
+        }
+        Some(json!({"generation":generation,"events":events,"incomplete":incomplete}))
+    };
+    sanitize().unwrap_or_else(|| json!({"generation":generation,"events":[],"incomplete":true})).to_string()
+}
+
 pub(crate) fn sanitize_media_download(input: &str) -> Option<String> {
     if input.len() > 524_288 {
         return None;
@@ -201,6 +277,70 @@ mod tests {
         let missing_generation = json!({"textSendTrace":[],"textSendTraceOverflow":false}).to_string();
         assert_eq!(sanitize_text_send_trace(&missing_generation),None);
         assert_eq!(sanitize_text_send_trace(&" ".repeat(524_289)),None);
+    }
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn callback_observations_reject_gaps_duplicates_and_foreign_metadata() {
+        let row = |order| json!({"generation":3,"order":order,"seq":2,
+            "kind":"promise_fulfilled","phase":"stopped","association":"closure","current":false});
+        let mut first = row(1);
+        first["body"] = json!("PRIVATE");
+        let mut unknown = row(2);
+        unknown["kind"] = json!("PRIVATE");
+        let mut foreign = row(4);
+        foreign["generation"] = json!(4);
+        let mut bad_seq = row(5);
+        bad_seq["seq"] = json!(0);
+        let mut bad_current = row(6);
+        bad_current["current"] = json!("false");
+        let input = json!({"generation":3,"overflow":false,"events":[first,
+            unknown,row(1),row(3),foreign,bad_seq,bad_current],"cookie":"PRIVATE"});
+        let output = sanitize_callback_observations(&input.to_string(), 3);
+        assert!(!output.contains("PRIVATE"));
+        assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), json!({
+            "generation":3,"events":[row(1),row(3)],"incomplete":true
+        }));
+        let oversized = json!({"generation":3,"overflow":false,
+            "events":(1..=140).map(row).collect::<Vec<_>>()});
+        let output: Value = serde_json::from_str(&sanitize_callback_observations(&oversized.to_string(), 3)).unwrap();
+        assert_eq!(output["events"].as_array().unwrap().len(), 128);
+        assert_eq!(output["incomplete"], true);
+        for (input, generation) in [("UNAVAILABLE", 3), ("{}", 3),
+            (r#"{"generation":3,"overflow":false,"events":[]}"#, 4),
+            (r#"{"generation":0,"overflow":false,"events":[]}"#, 0)] {
+            let output = sanitize_callback_observations(input, generation);
+            assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), json!({
+                "generation":generation,"events":[],"incomplete":true
+            }));
+        }
+    }
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn callback_text_state_requires_a_stopped_closure_and_a_fixed_label() {
+        let row = json!({"generation":1,"order":1,"seq":7,
+            "kind":"readback_fulfilled","phase":"stopped","association":"closure","current":true});
+        let sanitize = |event| {
+            let input = json!({"generation":1,"overflow":false,"events":[event]});
+            serde_json::from_str::<Value>(&sanitize_callback_observations(&input.to_string(), 1)).unwrap()
+        };
+        for label in ["unchanged", "changed", "unverified"] {
+            let mut observed = row.clone();
+            observed["text_state"] = json!(label);
+            observed["secret"] = json!("PRIVATE_SENTINEL");
+            let result = sanitize(observed);
+            assert_eq!(result["events"][0]["text_state"], label);
+            assert_eq!(result["incomplete"], false);
+            assert!(!result.to_string().contains("PRIVATE_SENTINEL"));
+        }
+        let mut invalid = row.clone();
+        invalid["text_state"] = json!("PRIVATE_SENTINEL");
+        assert_eq!(sanitize(invalid), json!({"generation":1,"events":[],"incomplete":true}));
+        let mut active = row;
+        active["phase"] = json!("active");
+        active["text_state"] = json!("unchanged");
+        assert_eq!(sanitize(active)["incomplete"], true);
     }
 
     #[test]

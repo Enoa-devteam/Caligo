@@ -474,6 +474,144 @@ fn dispatch_roundtrip_through_real_worker() {
     assert_eq!(counters.bootstraps_attempted, 0);
 }
 
+#[test]
+fn manager_shutdown_before_inflight_notice_ack_preserves_bridge_reservations() {
+    use caligo_bridge::resident::ResultHandoffGate;
+    use caligo_core::account_manager::{AccountManager, AccountSpec, ManagerConfig, PortConfig};
+    use caligo_core::ipc::ControlMsg;
+    use caligo_core::journal::{Journal, JournalRecord, SyncMode};
+
+    struct PendingHost(Arc<AtomicU64>);
+    impl HostAdapter for PendingHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(
+            &mut self,
+            op: HostOp,
+        ) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            Ok(match op {
+                HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
+                HostOp::SendText { request_id, .. } => {
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                    HostOpResult::SendFired { mid: request_id }
+                }
+                _ => panic!("unexpected fake host operation"),
+            })
+        }
+    }
+
+    let _serial = TEST_SERIAL.lock().unwrap();
+    let wait_until = |predicate: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !predicate() {
+            assert!(Instant::now() < deadline, "fixture condition was not met");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let scenarios = [
+        (false, false),
+        (true, false),
+        #[cfg(feature = "research")]
+        (false, true),
+    ];
+    for (settle_before_stop, staged_close) in scenarios {
+        let tag = format!("caligo-inflight-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let root = std::env::temp_dir().join(&tag);
+        let config = ManagerConfig {
+            version: 1,
+            accounts: vec![AccountSpec {
+                account: 10001, data_dir: "A".into(), pipe_prefix: tag.clone(),
+                module_baseline: "qq-9.9.33-52230".into(),
+                expect_client_pid: std::process::id(), ports: PortConfig::default(),
+            }],
+        };
+        config.save_atomic(&root).unwrap();
+        let mut manager = AccountManager::new(&root, config).unwrap();
+        let daemon = manager.start(10001).unwrap();
+        let auth = daemon.auth_token();
+        let sends = Arc::new(AtomicU64::new(0));
+        let resident = Arc::new(Resident::new(PendingHost(sends.clone()), ResidentLimits::default()));
+        resident.bootstrap().unwrap();
+        let worker_stop = Arc::new(AtomicBool::new(false));
+        let (notice_tx, notice_rx) = mpsc::channel();
+        let (worker_done_tx, worker_done_rx) = mpsc::channel();
+        let worker = {
+            let cfg = worker_config(&tag, &auth);
+            let resident = resident.clone();
+            let stop = worker_stop.clone();
+            std::thread::spawn(move || {
+                let result = run_worker(cfg, resident, &wake_true, notice_rx, _ev_placeholder(), stop);
+                let _ = worker_done_tx.send(result);
+            })
+        };
+
+        let mut control = None;
+        wait_until(&mut || {
+            if daemon.connection_epoch() < 2 || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+                return false;
+            }
+            control = ControlClient::connect(&daemon.pipe_names().1, &auth, "inflight-stop-lab").ok();
+            control.is_some()
+        });
+        let mut control = control.unwrap();
+        let request_id = "inflight-stop";
+        let accepted = control.request(ControlMsg::SendText {
+            request_id: request_id.into(),
+            target: serde_json::json!({"account":"10001","kind":"private","peer":"20002"}),
+            text: "synthetic stop order".into(),
+            deadline_ms: 30_000,
+        }).unwrap();
+        assert!(matches!(accepted, CoreToControlMsg::SendAccepted { .. }), "fixture dispatch rejected: {accepted:?}");
+        wait_until(&mut || resident.pending_ingress() == 1);
+        resident.drain().unwrap();
+        assert_eq!(resident.request_state(request_id), Some("send_pending"));
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
+
+        if settle_before_stop {
+            assert_eq!(resident.complete_sends(&[(request_id.into(), "synthetic-native".into())], &[], &[]), vec![request_id]);
+            ResultHandoffGate::default().forward(&resident, &notice_tx).unwrap();
+            wait_until(&mut || !resident.has_unacked_results());
+        }
+        #[cfg(feature = "research")]
+        if staged_close {
+            assert_eq!(resident.close_for_result_drain().unwrap().marked_unknown, 1);
+            assert_eq!(ResultHandoffGate::default().forward(&resident, &notice_tx), Ok(2));
+            wait_until(&mut || !resident.has_unacked_results());
+            assert_eq!(resident.request_state(request_id), Some("delivery_unknown"));
+        }
+        drop(control);
+        manager.shutdown().unwrap();
+        worker_stop.store(true, Ordering::Release);
+        let (worker_counts, exit) = worker_done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+        assert!(matches!(exit, WorkerExit::CoreStopped | WorkerExit::LocalStop));
+        caligo_bridge::qq_entry::close_daemon_owner(&resident);
+        let unacked = resident.has_unacked_results();
+        assert_eq!(unacked, !settle_before_stop && !staged_close);
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
+        assert_eq!(worker_counts.results_sent, u64::from(settle_before_stop || staged_close));
+
+        drop(daemon);
+        let (_, history) = Journal::open(root.join("A/journal.jsonl"), 1024 * 1024, SyncMode::Always).unwrap();
+        let states: Vec<_> = history.records.iter().filter_map(|record| match record {
+            JournalRecord::Request(request) if request.request_id == request_id => Some(request.state.as_str()),
+            _ => None,
+        }).collect();
+        let expected: &[&str] = if settle_before_stop {
+            &["Queued", "DispatchIntent", "NativeStarted", "ConfirmedSuccess"]
+        } else if staged_close {
+            &["Queued", "DispatchIntent", "NativeStarted", "DeliveryUnknown"]
+        } else {
+            &["Queued", "DispatchIntent", "DeliveryUnknown"]
+        };
+        assert_eq!(states, expected);
+        println!("normal result ACK={settle_before_stop}, staged close={staged_close}, worker={exit:?}, unacked={unacked}, journal={states:?}, native calls=1");
+    }
+}
+
 /// Native invocation must not be repeated when the core durably applies the
 /// receipt and drops the pipe before its ACK reaches the bridge.
 #[test]

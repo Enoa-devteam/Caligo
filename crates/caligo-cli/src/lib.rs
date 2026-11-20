@@ -197,6 +197,48 @@ fn sha256_file(path: &Path) -> Result<(String, u64), String> {
 
 /// 核对 manifest;返回 true 表示全部 hash_checked 模块匹配。
 fn verify_manifest(path: &Path) -> Result<bool, String> {
+    verify_manifest_with_hash_schedule(path, false)
+}
+
+type ModuleHash = Result<(String, u64), String>;
+
+fn parallel_module_hashes(modules: &[ManifestModule]) -> Result<Vec<Option<ModuleHash>>, String> {
+    let mut tasks: Vec<_> = modules.iter().enumerate().filter(|(_, m)| m.hash_checked).collect();
+    let mut hashes = vec![None; modules.len()];
+    let worker_count = tasks.len().min(4).min(
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+    );
+    if worker_count <= 1 {
+        for (index, module) in tasks {
+            hashes[index] = Some(sha256_file(Path::new(&module.path)));
+        }
+        return Ok(hashes);
+    }
+
+    // Start the largest files first. Results are reported in manifest order.
+    tasks.sort_unstable_by_key(|(_, module)| std::cmp::Reverse(module.size_bytes));
+    std::thread::scope(|scope| {
+        let tasks = &tasks;
+        let workers = (0..worker_count)
+            .map(|worker| {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
+                    tasks.iter().skip(worker).step_by(worker_count).map(|(index, module)| {
+                        (*index, sha256_file(Path::new(&module.path)))
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("start manifest hash worker: {error}"))?;
+        for worker in workers {
+            for (index, result) in worker.join().map_err(|_| "manifest hash worker panicked")? {
+                hashes[index] = Some(result);
+            }
+        }
+        Ok(hashes)
+    })
+}
+
+fn verify_manifest_with_hash_schedule(path: &Path, parallel: bool) -> Result<bool, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let manifest: Manifest =
         serde_json::from_str(&raw).map_err(|e| format!("parse manifest: {e}"))?;
@@ -216,13 +258,18 @@ fn verify_manifest(path: &Path) -> Result<bool, String> {
             policy.auto_multi_version.unwrap_or(false)
         );
     }
+    let mut hashes = if parallel { Some(parallel_module_hashes(&manifest.modules)?) } else { None };
     let mut all_ok = true;
-    for m in &manifest.modules {
+    for (index, m) in manifest.modules.iter().enumerate() {
         if !m.hash_checked {
             println!("[SKIP   ] {} ({})", m.path, m.role);
             continue;
         }
-        match sha256_file(Path::new(&m.path)) {
+        let result = match &mut hashes {
+            Some(hashes) => hashes[index].take().ok_or("manifest module hash missing")?,
+            None => sha256_file(Path::new(&m.path)),
+        };
+        match result {
             Ok((hex, size)) => {
                 let hash_ok = hex.eq_ignore_ascii_case(&m.sha256);
                 let size_ok = size == m.size_bytes;

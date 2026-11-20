@@ -981,6 +981,11 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             Err(_) => return SessionEnd::Broken,
         }
     };
+    // A fresh pipe always requires replay: a restarted core can reuse the same
+    // numeric epoch. Keep notice identities, but forget the old pipe's sends.
+    for pending in result_outbox.iter_mut() {
+        pending.sent_epoch = None;
+    }
     let query_scope = caligo_model::capability::QueryScope {
         account: cfg.account.clone(),
         host_nonce: cfg.host_nonce,

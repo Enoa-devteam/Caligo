@@ -1016,6 +1016,11 @@ impl<A: HostAdapter> Resident<A> {
         unknown: &[(String, String)],
     ) -> Vec<String> {
         let mut c = self.core.lock().unwrap();
+        // Closing freezes send results, even if an ACKed unknown still has
+        // time left in its correction window.
+        if c.state != ResidentState::Ready {
+            return Vec::new();
+        }
         let mut outcomes = Vec::new();
         let mut updates = Vec::new();
         let mut accepted = Vec::new();
@@ -1191,6 +1196,11 @@ impl<A: HostAdapter> Resident<A> {
     /// 排空异步发送响应消费槽(adapter → 账本终局 → core 结果通道)。
     /// 泵线程每拍调用;request 状态 SendPending → Done。
     pub fn drain_send_responses(&self) -> usize {
+        // Release the core guard before taking the adapter lock. A stop
+        // already underway leaves response slots to the shutdown path.
+        if self.core.lock().unwrap().state != ResidentState::Ready {
+            return 0;
+        }
         // 锁序合同(adapter → core):先取 adapter 结果,再进 core。
         let done = {
             let mut adapter = self.adapter.lock().unwrap();
@@ -1200,6 +1210,11 @@ impl<A: HostAdapter> Resident<A> {
             return 0;
         }
         let mut c = self.core.lock().unwrap();
+        // An already admitted drain may return after close began. Do not
+        // publish its outcomes or change the stopped request state.
+        if c.state != ResidentState::Ready {
+            return 0;
+        }
         let mut accepted = 0usize;
         for (request_id, outcome) in done {
             let outcome_id = send_outcome_request_id(&outcome);
@@ -1303,9 +1318,36 @@ impl<A: HostAdapter> Resident<A> {
         self.core.lock().unwrap().ingress.len()
     }
 
+    /// Shutdown must retain the resident until every result and reservation is
+    /// acknowledged. Empty transport queues alone do not prove settlement.
+    pub fn has_unacked_results(&self) -> bool {
+        let Ok(c) = self.core.lock() else { return true };
+        if !c.results_out.is_empty() || !c.retained_notices.is_empty() { return true; }
+        // Closed residents cannot accept another send or observe a late
+        // correction. An ACKed unknown's grace reservation is not an unACKed
+        // result; every other reserved bit still requires preservation.
+        let acked_grace_slots = if c.state == ResidentState::Closed {
+            c.requests.values().filter(|rec| {
+                rec.state == ReqState::DeliveryUnknown && rec.unknown_acked
+                    && rec.unacked_notice_mask == 0b10
+            }).count()
+        } else { 0 };
+        c.pending_notice_slots > acked_grace_slots
+    }
+
     /// 正常关闭(owner 线程):取消未执行、显式化在途、对称移除监听器。
     /// double close 幂等。
     pub fn close(&self) -> Result<CloseReport, HostError> {
+        self.close_inner(false)
+    }
+
+    #[cfg(feature = "research")]
+    #[doc(hidden)]
+    pub fn close_for_result_drain(&self) -> Result<CloseReport, HostError> {
+        self.close_inner(true)
+    }
+
+    fn close_inner(&self, publish_final_outcomes: bool) -> Result<CloseReport, HostError> {
         let mut c = self.core.lock().unwrap();
         let mut report = CloseReport {
             already_closed: matches!(c.state, ResidentState::Closed),
@@ -1327,6 +1369,14 @@ impl<A: HostAdapter> Resident<A> {
                         rec.state = ReqState::CancelledUnsent;
                         report.cancelled_unsent += 1;
                         c.counters.cancelled_unsent += 1;
+                        if publish_final_outcomes {
+                            // A queued request never produced NativeStarted.
+                            release_notice_slot(&mut c, request_id, 0b01);
+                            c.results_out.push_back(ResidentNotice::Outcome(SendOutcome::Failure {
+                                request_id: request_id.clone(),
+                                reason: "owner_stopped_before_native_dispatch".into(),
+                            }));
+                        }
                     }
                 }
             } else {
@@ -1336,13 +1386,21 @@ impl<A: HostAdapter> Resident<A> {
         // 2) 在途(native 已开始/fired 未回执)→ 显式 unknown;不宣称未发送。
         // **含 SendPending**(C7:fired 未回执在关闭时同样不可证明已送达)。
         let mut unknown_now: u64 = 0;
-        for rec in c.requests.values_mut() {
+        let Core { requests, results_out, .. } = &mut *c;
+        for (request_id, rec) in requests {
             if matches!(
                 rec.state,
                 ReqState::NativeStarted | ReqState::SendPending | ReqState::IdentityPending
             ) {
                 rec.state = ReqState::DeliveryUnknown;
                 unknown_now += 1;
+                if publish_final_outcomes {
+                    results_out.push_back(ResidentNotice::Outcome(SendOutcome::Unknown {
+                        request_id: request_id.clone(),
+                        reason: Some("owner_stopped_with_send_inflight".into()),
+                        late_receipt_possible: false,
+                    }));
+                }
             }
         }
         report.marked_unknown = unknown_now as usize;

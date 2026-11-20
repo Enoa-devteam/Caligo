@@ -286,6 +286,8 @@ fn now_ms() -> u64 {
 /// 账号 actor(计划 §6.2 状态机的 owner)。
 pub struct AccountActor {
     pub(crate) phase: Phase,
+    #[cfg(feature = "research")]
+    send_admission_closed: bool,
     session: Option<SessionIdentity>,
     conn: Option<ConnectionIdentity>,
     journal: Journal,
@@ -342,6 +344,8 @@ impl AccountActor {
                 .map_err(OpenError::Journal)?;
         let mut actor = Self {
             phase: Phase::Detached,
+            #[cfg(feature = "research")]
+            send_admission_closed: false,
             session: None,
             conn: None,
             journal,
@@ -611,9 +615,20 @@ impl AccountActor {
 
     // ---- 动作面 ----
 
+    /// Keep the transport available for receipts while closing new admissions
+    /// for this actor, including after a bridge reconnect.
+    #[cfg(feature = "research")]
+    pub(crate) fn close_send_admission(&mut self) {
+        self.send_admission_closed = true;
+    }
+
     /// 提交发送(两层准入的第一层)。相同 id + 相同 payload → 查询语义,
     /// 返回当前状态,不重复执行;相同 id + 不同 payload → 冲突拒绝。
     pub fn submit_send(&mut self, req: SendTextRequest) -> Result<ActionState, RejectReason> {
+        #[cfg(feature = "research")]
+        if self.send_admission_closed {
+            return Err(RejectReason::SendAdmissionClosed);
+        }
         if self.phase != Phase::Active {
             return Err(RejectReason::NotActive { phase: self.phase });
         }

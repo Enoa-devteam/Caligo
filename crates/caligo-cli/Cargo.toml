@@ -6,7 +6,7 @@ default-run = "caligo-cli"
 
 [features]
 default = []
-research = ["caligo-bridge/research"]
+research = ["caligo-bridge/research", "caligo-core/research"]
 
 [dependencies]
 caligo-model = { workspace = true }

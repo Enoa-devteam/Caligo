@@ -672,6 +672,107 @@ const run=s=>vm.runInContext(s,context);
 }
 
 #[test]
+fn exact_readback_cannot_resurrect_retired_or_replace_current_results() {
+    let send=build_send_js(1,"20002","hello","10001","request",42,5_000);
+    let fixture=r#"
+const assert=require('node:assert/strict'),vm=require('node:vm');
+const start=__START__,stop=__STOP__,poll=__POLL__,send=__SEND__;
+let now=1000,listener,resolveQuery,rejectQuery,queries=0;
+const record=status=>({msgId:'native-old',msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId:'cookie',
+  chatType:1,msgType:2,subMsgType:0,peerUid:'u_peer',peerUin:'20002',senderUid:'u_self',senderUin:'10001',sendStatus:status,
+  elements:[{elementType:1,textElement:{content:'hello',atType:0}}]});
+const service={generateMsgUniqueId:()=> 'cookie',addKernelMsgListener(l){listener=l;return 7},removeKernelMsgListener(){},
+  sendMsg(){listener.onAddSendMsg(record(1));listener.onMsgInfoListUpdate([record(2)]);return Promise.resolve({result:0})},
+  getMsgsByMsgId(){queries++;return new Promise((resolve,reject)=>{resolveQuery=resolve;rejectQuery=reject})}};
+const session={getSessionId:()=>1,getMsgService:()=>service,getMSFService:()=>({getServerTime:()=> 'time'}),
+  getProfileService:()=>({getUidByUin:()=>new Map([['20002','u_peer']])})};
+const fresh=()=>{const c={Buffer,Promise,Map,JSON,String,Object,Array,Number,Date:{now:()=>now},
+  process:{_linkedBinding:()=>({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}})}};vm.createContext(c);return c};
+const tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ for(const mode of ['replace-success','replace-reject','retire-success','retire-reject','stop-success','valid-success','valid-late']){
+  now=1000;queries=0;const c=fresh(),run=s=>vm.runInContext(s,c);
+  assert.match(run(start),/^ARMED/);assert.equal(JSON.parse(run(send)).fired,true);await tick();assert.equal(queries,1);
+  const R=c.__caligo_res,old=R.sends.request;
+  let replacement,result;
+  if(mode.startsWith('replace')){
+   replacement={done:false,promiseDone:false};result={status:'pending',sentinel:'new'};
+   R.sends.request=replacement;R.sendResults.request=result;
+  }else if(mode.startsWith('retire')){
+   now=old.deadline+30000;run(poll);assert.equal(R.sends.request,undefined);assert.equal(R.sendResults.request,undefined);
+  }else if(mode==='stop-success'){run(stop);result=R.sendResults.request;}
+  else if(mode==='valid-late'){
+   now=old.deadline+1;assert.equal(JSON.parse(run(poll)).sendResults.request.status,'unknown');
+   assert.equal(R.sends.request,old);
+  }
+  if(mode.endsWith('reject')) rejectQuery(Error('private'));else resolveQuery({result:0,msgList:[record(2)]});
+  await tick();await tick();
+  if(mode.startsWith('replace')){assert.equal(R.sends.request,replacement);assert.equal(R.sendResults.request,result,mode)}
+  else if(mode.startsWith('retire')){assert.equal(R.sends.request,undefined);assert.equal(R.sendResults.request,undefined,mode)}
+  else if(mode==='stop-success'){assert.equal(R.sendResults.request,result);assert.notEqual(old.done,true)}
+  else{assert.equal(R.sendResults.request.status,'done');assert.equal(R.sendResults.request.msgId,'native-old')}
+ }
+ // Exercise shared settlement independently from its caller-side guards.
+ for(const mode of ['replaced','stopped','done']){
+  const c=fresh(),run=s=>vm.runInContext(s,c);run(start);const R=c.__caligo_res;
+  const pending={promiseDone:true,promiseStatus:'accepted',readback:{status:'readback',msgId:'stale'},done:mode==='done'};
+  const result={status:'pending',sentinel:'keep'};R.sends.request=mode==='replaced'?{}:pending;R.sendResults.request=result;
+  R.stopped=mode==='stopped';R.settleSendResult(R,'request',pending);assert.equal(R.sendResults.request,result,mode);
+ }
+ // Retire between callback dispatch and the queued query launch: no host query may run.
+ now=1000;queries=0;const c=fresh(),run=s=>vm.runInContext(s,c);run(start);run(send);
+ const R=c.__caligo_res;delete R.sends.request;await tick();assert.equal(queries,0);
+})().catch(e=>{console.error(e);process.exitCode=1});
+"#.replace("__START__",&serde_json::to_string(D8_START_JS).unwrap())
+        .replace("__STOP__",&serde_json::to_string(D8_STOP_JS).unwrap())
+        .replace("__POLL__",&serde_json::to_string(D8_POLL_JS).unwrap())
+        .replace("__SEND__",&serde_json::to_string(&send).unwrap());
+    use std::io::Write;
+    let mut child=std::process::Command::new("node").arg("--unhandled-rejections=strict")
+        .stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn().expect("Node.js is required for exact readback lifecycle contracts");
+    child.stdin.take().unwrap().write_all(fixture.as_bytes()).unwrap();
+    let output=child.wait_with_output().unwrap();
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn callback_observation_is_gated_and_synthetic_stop_is_excluded() {
+    let fixture = r#"
+const assert=require('node:assert/strict'), vm=require('node:vm');
+const start=__START__,stop=__STOP__;
+let listener, observed=[];
+const service={sendMsg(){},addKernelMsgListener(l){listener=l;return 7},removeKernelMsgListener(){return true}};
+const session={getSessionId:()=>1,getMsgService:()=>service};
+const c={Buffer,Promise,Date,Map,JSON,String,Object,Array,Number,caligoSendTrace:true,
+  process:{_linkedBinding:()=>({NodeIQQNTWrapperSession:{getNTWrapperSession:()=>session}})}};
+for(const k of ['recv','add','update','promise','readback']) c['__caligo_thread_'+k]=()=>observed.push(k);
+vm.createContext(c);const run=s=>vm.runInContext(s,c);
+assert.match(run(start),/^ARMED/);listener.onRecvMsg(null);assert.deepEqual(observed,[]);
+assert.match(run(stop),/^STOPPED/);
+c.caligoThreadObserversReady=true;delete c.__caligo_thread_add;
+assert.match(run(start),/^ARMED/);listener.onRecvMsg(null);assert.deepEqual(observed,[]);
+assert.match(run(stop),/^STOPPED/);c.__caligo_thread_add=()=>observed.push('add');
+assert.match(run(start),/^ARMED/);let old=listener;
+listener.onRecvMsg(null);listener.onAddSendMsg(null);listener.onMsgInfoListUpdate(null);
+assert.deepEqual(observed,['recv','add','update']);
+c.__caligo_thread_recv=()=>{throw Error('private')};
+listener.onRecvMsg(null);assert.equal(observed.at(-1),'recv');
+const before=observed.length;
+assert.match(run(`(function(caligoStopProbe){return (${stop})})(true)`),/stop_probe=pass$/);
+assert.equal(observed.length,before);
+old.onRecvMsg(null);assert.equal(observed.at(-1),'recv');
+assert.match(run(start),/^ARMED/);const rejected=c.__caligo_res.rejected;
+listener.onRecvMsg(null);assert.equal(c.__caligo_res.rejected,rejected+1);
+assert.match(run(stop),/^STOPPED/);
+"#.replace("__START__", &serde_json::to_string(D8_START_JS).unwrap())
+        .replace("__STOP__", &serde_json::to_string(D8_STOP_JS).unwrap());
+    let output=std::process::Command::new("node").args(["--unhandled-rejections=strict","-e",&fixture])
+        .output().expect("Node.js is required for callback observation contracts");
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
 fn stopped_listener_probe_is_scoped_and_does_not_change_stop_outcome() {
     let fixture = format!(r#"
 const assert = require('node:assert/strict'), vm = require('node:vm');

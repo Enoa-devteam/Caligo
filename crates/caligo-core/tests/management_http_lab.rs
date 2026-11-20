@@ -15,6 +15,11 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "research")]
+#[allow(dead_code)]
+#[path = "../../caligo-bridge/tests/support/owner_fixture.rs"]
+mod owner_fixture;
+
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 struct Lab {
     server: ManagementHttpServer,
@@ -204,6 +209,292 @@ fn selected_account_logs_follow_durable_messages_and_login_verifies_actual_resul
     assert_eq!(lab.api("POST", &start, Some(&eq)).0, 200);
     assert_eq!(lab.api("GET", &messages, None).1, snapshot, "the log replays the account ledger");
     assert!(lab.api("GET", accounts, None).1["accounts"][0]["connection_id"].is_null());
+}
+
+#[cfg(feature = "research")]
+#[test]
+fn quiesced_account_rejects_new_sends_and_acks_inflight_result_across_reconnect() {
+    use caligo_core::daemon::ControlClient;
+    use caligo_core::ipc::{ControlMsg, CoreToControlMsg};
+    use caligo_core::journal::{Journal, JournalRecord, SyncMode};
+    use caligo_model::ipc_v3::OutcomePayload;
+    use caligo_model::{SessionKey, SessionKind};
+
+    let lab = Lab::new();
+    let quiesce = "/v1/accounts/10001/quiesce-sends";
+    assert_eq!(lab.api("POST", "/v1/accounts/10001/start", Some(&json!({}))).0, 200);
+    let daemon = lab.manager.lock().unwrap().daemon(10001).unwrap();
+    let (bridge_pipe, control_pipe) = daemon.pipe_names();
+    let auth = daemon.auth_token();
+    let connect_bridge = || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match BridgeClient::connect(
+                &bridge_pipe, &auth, "quiesce-lab", 1, "10001",
+                "offline-http-lab", 22, "2026-11-15T00:00:00Z",
+            ) {
+                Ok(bridge) => break bridge,
+                Err(error) => {
+                    assert!(Instant::now() < deadline, "bridge connection failed: {error}");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+    };
+    let mut bridge = connect_bridge();
+    let connection = || lab.api("GET", "/v1/accounts", None).1["accounts"][0]["connection_id"].clone();
+    let first = connection();
+    assert!(first.is_string());
+    assert_eq!(lab.api("POST", quiesce, Some(&json!({}))).0, 400);
+    assert_eq!(lab.api("POST", quiesce, Some(&json!({"connection_id":"stale"}))).0, 409);
+
+    let mut control = ControlClient::connect(&control_pipe, &auth, "quiesce-lab").unwrap();
+    let send = |request_id: &str| ControlMsg::SendText {
+        request_id: request_id.into(),
+        target: json!({"account":"10001","kind":"private","peer":"20002"}),
+        text: "synthetic quiesce sample".into(),
+        deadline_ms: 30000,
+    };
+    assert!(matches!(control.request(send("already-dispatched")).unwrap(),
+        CoreToControlMsg::SendAccepted { .. }));
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::Dispatch { request_id, wire_seq: 1, .. }
+        if request_id == "already-dispatched"));
+
+    let fence = json!({"connection_id":first});
+    let address = lab.server.local_addr();
+    let text = fence.to_string();
+    assert_eq!(lab.raw(&format!("POST {quiesce} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{text}", text.len())).0, 401);
+    for _ in 0..2 {
+        let (code, body) = lab.api("POST", quiesce, Some(&fence));
+        assert_eq!(code, 200);
+        assert_eq!(body["status"], "send_admission_closed");
+        assert_eq!(body["connection_id"], first);
+    }
+    let assert_rejected = |control: &mut ControlClient, request_id| {
+        assert!(matches!(control.request(send(request_id)).unwrap(), CoreToControlMsg::Reject { reason }
+            if reason == "SendAdmissionClosed"));
+    };
+    assert_rejected(&mut control, "after-fence");
+    let target = SessionKey::new("10001", SessionKind::Private, "20002");
+    assert!(daemon.submit_onebot_text(target, "blocked OneBot sample".into(), 30000)
+        .unwrap_err().contains("SendAdmissionClosed"));
+    bridge.send(&BridgeMsg::NativeStarted { request_id: "already-dispatched".into() }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { request_id }
+        if request_id == "already-dispatched"));
+
+    drop(bridge);
+    let mut bridge = connect_bridge();
+    let second = connection();
+    assert!(second.is_string());
+    assert_ne!(first, second);
+    assert_eq!(lab.api("POST", quiesce, Some(&fence)).0, 409);
+    assert_rejected(&mut control, "after-reconnect");
+    bridge.send(&BridgeMsg::SendResult {
+        request_id: "already-dispatched".into(),
+        notice_id: 7,
+        outcome: OutcomePayload::Success { native_id: "synthetic-native".into() },
+    }).unwrap();
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { request_id, notice_id: 7, terminal: true }
+        if request_id == "already-dispatched"));
+    assert_eq!(lab.api("POST", "/v1/accounts/10001/stop", Some(&json!({}))).0, 200);
+
+    let (_, history) = Journal::open(lab.root.join("account-10001/journal.jsonl"), 1024 * 1024, SyncMode::Always).unwrap();
+    let requests: Vec<_> = history.records.iter().filter_map(|record| match record {
+        JournalRecord::Request(request) => Some((request.request_id.as_str(), request.state.as_str())),
+        _ => None,
+    }).collect();
+    assert_eq!(requests, [
+        ("already-dispatched", "Queued"),
+        ("already-dispatched", "DispatchIntent"),
+        ("already-dispatched", "NativeStarted"),
+        ("already-dispatched", "ConfirmedSuccess"),
+    ]);
+
+    drop(bridge);
+    drop(control);
+    assert_eq!(lab.api("POST", "/v1/accounts/10001/start", Some(&json!({}))).0, 200);
+    let _new_bridge = connect_bridge();
+    let new_actor_connection = connection();
+    assert!(new_actor_connection.is_string());
+    assert_ne!(second, new_actor_connection);
+    assert_eq!(lab.api("POST", quiesce, Some(&json!({"connection_id": second}))).0, 409);
+}
+
+#[cfg(feature = "research")]
+#[test]
+fn staged_stop_keeps_the_managed_pipe_open_until_owner_and_result_ack_complete() {
+    use caligo_bridge::daemon_client::{run_worker, DaemonClientConfig, WorkerExit};
+    use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};
+    use caligo_bridge::qq_entry::{
+        append_stage_simple, arm_stop_observation_with_result_drain, bootstrap, close_daemon_owner,
+        install_stop_observation_driver, retain_daemon_for_result_drain, wake_owner_pump, EntryConfig,
+    };
+    use caligo_bridge::resident::{Resident, ResidentLimits, ResultHandoffGate};
+    use caligo_bridge::stop_observation::{Sample, StopIdentity};
+    use caligo_core::daemon::ControlClient;
+    use caligo_core::ipc::{ControlMsg, CoreToControlMsg};
+    use owner_fixture::{close_once, fake_symbols, lab_reset, pump_once, FakeQq, FAKE_CLOSE_CALLS, LAB_WAIT, WAKE_NOTICE};
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::sync::mpsc;
+
+    struct FiredHost {
+        owner: std::thread::ThreadId,
+        sends: Arc<AtomicUsize>,
+    }
+    impl HostAdapter for FiredHost {
+        fn owner_thread_id(&self) -> u64 { 1 }
+        fn current_thread_id(&self) -> u64 {
+            if std::thread::current().id() == self.owner { 1 } else { 2 }
+        }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, HostError> {
+            Ok(match op {
+                HostOp::ListenerAdd => HostOpResult::ListenerAdded { token: 7 },
+                HostOp::ListenerRemove { token: 7 } => HostOpResult::ListenerRemoved,
+                HostOp::SendText { request_id, .. } => {
+                    self.sends.fetch_add(1, Ordering::Relaxed);
+                    HostOpResult::SendFired { mid: request_id }
+                }
+                _ => panic!("unexpected fixture host call"),
+            })
+        }
+    }
+
+    lab_reset();
+    let lab = Lab::new();
+    let empty = json!({});
+    assert_eq!(lab.api("POST", "/v1/accounts/10001/start", Some(&empty)).0, 200);
+    let daemon = lab.manager.lock().unwrap().daemon(10001).unwrap();
+    let (pipe_name, control_pipe) = daemon.pipe_names();
+    let auth = daemon.auth_token();
+    let cfg = DaemonClientConfig {
+        pipe_name, auth_token: auth.clone(), account: "10001".into(),
+        module_baseline: "offline-http-lab".into(), session_generation: 1,
+        ..DaemonClientConfig::default()
+    };
+    let identity = StopIdentity {
+        account: cfg.account.clone(), host_nonce: cfg.host_nonce, listener_generation: 1,
+        wrapper_session: "nt_fixture".into(),
+    };
+    let report = lab.root.join("owner-entry.jsonl");
+    let (_fake, qqnt_base, env, _) = FakeQq::new();
+    let handle = bootstrap(&EntryConfig {
+        qqnt_base, env, report_path: report.to_str().unwrap().into(),
+    }, &fake_symbols()).unwrap();
+    let sends = Arc::new(AtomicUsize::new(0));
+    let resident = Arc::new(Resident::new(FiredHost {
+        owner: std::thread::current().id(), sends: sends.clone(),
+    }, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = handle.daemon_stop_flag();
+    stop.store(false, Ordering::Release);
+    let worker_finished = Arc::new(AtomicBool::new(false));
+    let (notice_tx, notice_rx) = mpsc::channel();
+    let (_events_tx, events_rx) = mpsc::channel();
+    retain_daemon_for_result_drain(
+        resident.clone(), worker_finished.clone(), stop.clone(),
+        Arc::new(ResultHandoffGate::default()), notice_tx,
+    );
+    let owner = resident.clone();
+    handle.set_drain_hook(Box::new(move || close_daemon_owner(&owner)));
+    let worker = {
+        let r = resident.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let result = run_worker(cfg, r, &wake_owner_pump, notice_rx, events_rx, stop);
+            worker_finished.store(true, Ordering::Release);
+            result
+        })
+    };
+
+    let deadline = Instant::now() + LAB_WAIT;
+    let connection_id = loop {
+        let (_, accounts) = lab.api("GET", "/v1/accounts", None);
+        if let Some(id) = accounts["accounts"][0]["connection_id"].as_str() {
+            break id.to_string();
+        }
+        assert!(Instant::now() < deadline, "worker never bound to the account");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut control = ControlClient::connect(&control_pipe, &auth, "staged-owner-lab").unwrap();
+    let send = |id: &str| ControlMsg::SendText {
+        request_id: id.into(), text: "synthetic staged stop".into(),
+        target: json!({"account":"10001","kind":"private","peer":"20002"}), deadline_ms: 10000,
+    };
+    assert!(matches!(control.request(send("staged")).unwrap(), CoreToControlMsg::SendAccepted { .. }));
+    let deadline = Instant::now() + LAB_WAIT;
+    while resident.pending_ingress() == 0 {
+        assert!(Instant::now() < deadline, "dispatch did not reach resident");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    resident.drain().unwrap();
+    assert_eq!(sends.load(Ordering::Relaxed), 1);
+    append_stage_simple("text_send_trace", true, r#"{"events":[{"seq":1,"stage":"registered"},{"seq":1,"stage":"submit_enter"},{"seq":1,"stage":"submit_return"}],"generation":1,"incomplete":false}"#);
+    let (code, response) = lab.api("POST", "/v1/accounts/10001/quiesce-sends", Some(&json!({"connection_id":connection_id})));
+    assert_eq!(code, 200);
+    assert_eq!(response["status"], "send_admission_closed");
+    assert!(matches!(control.request(send("after-quiesce")).unwrap(),
+        CoreToControlMsg::Reject { reason } if reason == "SendAdmissionClosed"));
+
+    let journal = lab.root.join("account-10001/journal.jsonl");
+    let before = lab.root.join("before-stop.bin");
+    let after = lab.root.join("after-stop.bin");
+    std::fs::copy(&journal, &before).unwrap();
+    let observed = identity.clone();
+    install_stop_observation_driver(Box::new(move || Some(observed.clone())), Box::new(|_| {
+        // Synthetic active callback metadata. Actual STOP and sample timing
+        // come from the driver. The fixture has no late callback.
+        append_stage_simple("js_callback_observation", true, &json!({"events":[
+            {"association":"matched","current":true,"generation":1,"kind":"matched_add","order":1,"phase":"active","seq":1},
+            {"association":"none","current":null,"generation":1,"kind":"stop_begin","order":2,"phase":"stopping","seq":0},
+            {"association":"none","current":null,"generation":1,"kind":"stop_end","order":3,"phase":"stopped","seq":0}
+        ],"generation":1,"incomplete":false}).to_string());
+        Ok(Sample { callbacks_seen: 3 })
+    })).unwrap();
+    arm_stop_observation_with_result_drain(identity, 1000, 5000).unwrap();
+    let (wake_tx, wake_rx) = mpsc::channel();
+    *WAKE_NOTICE.lock().unwrap() = Some(wake_tx);
+    let closer = std::thread::spawn(|| caligo_bridge::caligo_qq_entry_shutdown(5000));
+    wake_rx.recv_timeout(LAB_WAIT).unwrap();
+    assert!(!stop.load(Ordering::Acquire));
+    pump_once();
+    while FAKE_CLOSE_CALLS.load(Ordering::Acquire) == 0 {
+        wake_rx.recv_timeout(LAB_WAIT).unwrap();
+        pump_once();
+    }
+    close_once();
+    assert_eq!(closer.join().unwrap(), 0);
+    *WAKE_NOTICE.lock().unwrap() = None;
+    let (counts, exit) = worker.join().unwrap();
+    assert_eq!(exit, WorkerExit::LocalStop);
+    assert_eq!(counts.results_sent, 1);
+    assert_eq!(resident.request_state("staged"), Some("delivery_unknown"));
+    assert_eq!(resident.counters().listener_removes, 1);
+    assert_eq!(FAKE_CLOSE_CALLS.load(Ordering::Acquire), 1);
+    assert_eq!(sends.load(Ordering::Relaxed), 1);
+    assert!(!resident.has_unacked_results());
+    assert!(lab.manager.lock().unwrap().running_accounts().contains(&10001));
+    std::fs::copy(&journal, &after).unwrap();
+
+    let log = std::fs::read_to_string(&report).unwrap();
+    let rows: Vec<Value> = log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let at = |label| rows.iter().find(|r| r["stage"] == "stop_observation" && r["detail"] == label)
+        .unwrap()["ts"].as_u64().unwrap();
+    let elapsed = at("final_snapshot") - at("listener_stopped");
+    assert!(elapsed >= 1000);
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/analyze-text-stop-evidence.mjs");
+    let analysis = std::process::Command::new("node")
+        .arg(script).arg("--staged").arg(&report).arg(&after).arg(&before).output().unwrap();
+    assert_eq!(analysis.status.code(), Some(2));
+    let result: Value = serde_json::from_slice(&analysis.stdout).unwrap();
+    assert_eq!(result["journal"], "staged_close", "{result}");
+    assert_eq!(result["request_state"], "DeliveryUnknown");
+    assert_eq!(result["reason"], "missing_late_closure");
+    assert_eq!(lab.api("POST", "/v1/shutdown", Some(&empty)).0, 200);
+    assert!(lab.manager.lock().unwrap().running_accounts().is_empty());
+    assert_eq!(std::fs::read(&journal).unwrap(), std::fs::read(&after).unwrap());
+    println!("fixture: manager quiesced, owner observed {elapsed} ms, one submission, worker ACKed staged_close, manager stopped last; late callback unknown");
 }
 
 #[test]

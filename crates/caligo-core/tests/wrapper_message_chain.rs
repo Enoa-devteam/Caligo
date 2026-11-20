@@ -14,7 +14,9 @@ use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::WrapperBinding;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,6 +110,18 @@ fn offline_voice_tools(dir: &Path) -> MediaTool {
     .unwrap()
 }
 
+fn run_node(script: &str) -> Output {
+    let mut child = Command::new("node")
+        .args(["--unhandled-rejections=strict", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn script_batch() -> String {
     let start = serde_json::to_string(caligo_bridge::qq_v8::D8_START_JS).unwrap();
     let poll = serde_json::to_string(caligo_bridge::qq_v8::D8_POLL_JS).unwrap();
@@ -152,10 +166,7 @@ const full=JSON.parse(eval(poll)); assert.equal(full.items.length,128); assert.e
 process.stdout.write(JSON.stringify(first));
 "#;
     let script = format!("const start={start}, poll={poll};\n{fixture}");
-    let out = std::process::Command::new("node")
-        .args(["--unhandled-rejections=strict", "-e", &script])
-        .output()
-        .unwrap();
+    let out = run_node(&script);
     assert!(
         out.status.success(),
         "{}",
@@ -191,10 +202,7 @@ listener.onRecvMsg([
 process.stdout.write(eval(poll));
 "#;
     let script = format!("const start={start}, poll={poll};\n{fixture}");
-    let out = std::process::Command::new("node")
-        .args(["--unhandled-rejections=strict", "-e", &script])
-        .output()
-        .unwrap();
+    let out = run_node(&script);
     assert!(
         out.status.success(),
         "{}",

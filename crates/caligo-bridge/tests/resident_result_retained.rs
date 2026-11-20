@@ -1,9 +1,21 @@
 use caligo_bridge::host_adapter::{HostAdapter, HostError, HostOp, HostOpResult};
 use caligo_bridge::resident::{OwnedRequest, Resident, ResidentLimits, ResidentNotice, ResultHandoffGate, HandoffError, SendOutcome, SubmitVerdict};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
-struct Host { calls: Arc<AtomicUsize>, async_send: bool }
+#[derive(Default)]
+struct Responses {
+    pending: Mutex<Vec<(String, SendOutcome)>>,
+    drains: AtomicUsize,
+    drain_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+}
+
+struct Host {
+    calls: Arc<AtomicUsize>,
+    async_send: bool,
+    responses: Arc<Responses>,
+}
 impl HostAdapter for Host {
     fn owner_thread_id(&self) -> u64 { 1 }
     fn current_thread_id(&self) -> u64 { 1 }
@@ -21,10 +33,21 @@ impl HostAdapter for Host {
             _ => panic!("unexpected host operation"),
         }
     }
+    fn drain_send_responses(&mut self) -> Vec<(String, SendOutcome)> {
+        self.responses.drains.fetch_add(1, Ordering::Relaxed);
+        if let Some((entered, release)) = self.responses.drain_pause.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        std::mem::take(&mut *self.responses.pending.lock().unwrap())
+    }
 }
 fn setup(async_send: bool) -> (Resident<Host>, Arc<AtomicUsize>) {
+    setup_with_responses(async_send, Arc::new(Responses::default()))
+}
+fn setup_with_responses(async_send: bool, responses: Arc<Responses>) -> (Resident<Host>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
-    let r = Resident::new(Host { calls: calls.clone(), async_send }, ResidentLimits { results_max: 2, ..ResidentLimits::default() });
+    let r = Resident::new(Host { calls: calls.clone(), async_send, responses }, ResidentLimits { results_max: 2, ..ResidentLimits::default() });
     r.bootstrap().unwrap();
     assert_eq!(r.submit(request("r")), SubmitVerdict::Accepted);
     assert_eq!(r.drain().unwrap(), 1);
@@ -120,6 +143,100 @@ fn full_preflight_pauses_dispatch_until_ack_frees_capacity() {
     assert_eq!(gate.forward(&r, &tx), Ok(0));
     assert_eq!(r.drain().unwrap(), 1);
     assert_eq!(r.pending_ingress(), 0);
+}
+
+#[test]
+fn acknowledged_unknown_grace_is_settled_after_close() {
+    let (r, calls) = setup(true);
+    let gate = ResultHandoffGate::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert_eq!(gate.forward(&r, &tx), Ok(1));
+    assert!(r.ack_retained_notice(&rx.recv().unwrap()));
+    r.complete_sends(&[], &[], &[("r".into(), "unknown".into())]);
+    assert_eq!(gate.forward(&r, &tx), Ok(1));
+    let unknown = rx.recv().unwrap();
+    assert!(r.ack_retained_notice(&unknown));
+    assert!(r.retained_notices().is_empty());
+    assert!(r.has_unacked_results(), "open resident still reserves the late correction slot");
+    r.close().unwrap();
+    assert!(!r.has_unacked_results(), "ACKed grace capacity alone must not fail closed-resident shutdown");
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn closed_resident_rejects_late_wrapper_completion_after_acked_unknown() {
+    let (r, calls) = setup(true);
+    acknowledge_unknown(&r);
+    r.close().unwrap();
+    assert!(!r.has_unacked_results());
+
+    assert!(r.complete_sends(&[("r".into(), "late-native".into())], &[], &[]).is_empty());
+    assert_eq!(r.request_state("r"), Some("delivery_unknown"));
+    assert!(!r.has_unacked_results());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn adapter_late_completion_is_applied_while_ready_and_left_undrained_after_close() {
+    for closed in [false, true] {
+        let responses = Arc::new(Responses::default());
+        let (r, calls) = setup_with_responses(true, responses.clone());
+        acknowledge_unknown(&r);
+        if closed {
+            r.close().unwrap();
+        }
+        responses.pending.lock().unwrap().push(("r".into(), SendOutcome::Success {
+            request_id: "r".into(), native_id: "late-native".into(),
+        }));
+
+        if closed {
+            assert_eq!(r.drain_send_responses(), 0);
+            assert_eq!(responses.drains.load(Ordering::Relaxed), 0);
+            assert_eq!(responses.pending.lock().unwrap().len(), 1);
+            assert_eq!(r.request_state("r"), Some("delivery_unknown"));
+            assert!(!r.has_unacked_results());
+        } else {
+            assert_eq!(r.drain_send_responses(), 1);
+            assert_eq!(responses.drains.load(Ordering::Relaxed), 1);
+            assert_eq!(r.request_state("r"), Some("done"));
+            assert!(r.has_unacked_results());
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+fn an_adapter_result_already_in_flight_cannot_commit_after_close() {
+    let responses = Arc::new(Responses::default());
+    let (r, calls) = setup_with_responses(true, responses.clone());
+    acknowledge_unknown(&r);
+    responses.pending.lock().unwrap().push(("r".into(), SendOutcome::Success {
+        request_id: "r".into(), native_id: "late-native".into(),
+    }));
+    let (entered, wait_entered) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel();
+    *responses.drain_pause.lock().unwrap() = Some((entered, wait_release));
+    std::thread::scope(|scope| {
+        let drain = scope.spawn(|| r.drain_send_responses());
+        wait_entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        r.close().unwrap();
+        release.send(()).unwrap();
+        assert_eq!(drain.join().unwrap(), 0);
+    });
+    assert_eq!(r.request_state("r"), Some("delivery_unknown"));
+    assert!(!r.has_unacked_results());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+fn acknowledge_unknown(r: &Resident<Host>) {
+    let gate = ResultHandoffGate::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert_eq!(gate.forward(r, &tx), Ok(1));
+    assert!(r.ack_retained_notice(&rx.recv().unwrap()));
+    assert_eq!(r.complete_sends(&[], &[], &[("r".into(), "unknown".into())]), ["r"]);
+    assert_eq!(gate.forward(r, &tx), Ok(1));
+    assert!(r.ack_retained_notice(&rx.recv().unwrap()));
+    assert!(r.has_unacked_results());
 }
 
 #[test]
