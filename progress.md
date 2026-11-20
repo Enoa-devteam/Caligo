@@ -2,6 +2,328 @@
 
 ## Current State
 
+2026-11-21 feat-004 阶段累积证据提交。此前各离线工作块与现场记录一直留在共享工作树；本轮按代码/测试/工具与文档分两个提交归档，并补上两个新分析器的 CI 入口。提交前在 Windows x64 重跑适用门：`node scripts/check-docs.mjs` PASS（15 live docs、600 links、38 historical、10 features），`cargo check --workspace --all-targets` 无错误，default 全仓 496 项、research 全仓 542 项均 0 failed，7 个 Node 工具套件 65 项通过、2 项可选项 skip。GitNexus `detect-changes --scope all` 覆盖 28 文件/274 符号/79 流程，risk critical 且未标记 partial；该等级来自共享 V8、停止与账本路径，本轮只抽查其中停止驱动与观察元数据，未逐符号复核，图映射不作为安全或现场通过证明。本轮未接入 QQ、未发送消息、未重载或卸载任何 bridge。feat-004 仍 in-progress：PR #12 保留的 native 持有者、最终释放与全局 drain 仍无现场证据。
+
+2026-11-20 feat-004 核对固定镜像中的异常清理。共享归还正常路径和异常清理使用同一解锁函数，按节点归还还可能临时解锁。已核对的库存计数均可反向变化，所查路径未证实独立移交凭据。 [异常清理与移交凭据](docs/acceptance/2026-11-15-feat-004-observation.md#固定镜像的异常清理与移交凭据)
+
+复跑 `python -B -E target-harness/feat004-unwind-evidence/verify_evidence.py`。77 项断言、67 份自建宿主归档复核、16 对同记录歧义对照通过。报告 `target-harness/feat004-unwind-evidence/evidence.json` SHA-256 为 `7BD7355AE9F805FF9DCD5764AE4440CA00C0E28202DA88D025EE265A3D0CE297`。同一调用的真实退出和独立移交回执仍待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 自建四槽宿主验证同类重入和 Windows 异常退出。同一续点的内层返回通过栈指针拒绝串帧。不同续点时轮换会漏掉内层入口与返回，独立提交序号仍能揭示缺口。提交后异常仍缺正常返回，保留 unknown。 [四槽重入与异常退出证据](docs/acceptance/2026-11-15-feat-004-observation.md#四槽轮换中的同类重入与异常退出)
+
+复跑 `target-harness/feat004-reentry-unwind/run-lab.cmd`。56 组开关对照、7 种缺证回放及 16 次展开后同槽复用的独立正常调用通过。报告 `target-harness/feat004-reentry-unwind/evidence.json` SHA-256 为 `1F089AC78C9D3C437D83B56436576CEF7D55AFFE621E4EB1F18987C21D40C0F5`。真实 QQ 的等价边界、独立移交及运行覆盖仍待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 在固定 QQ 镜像核对共享子调用之后的桶级冲刷记账、补充接链及缓存清理的正常完成候选点。27 份缺证对照中，丢失内层返回、外层返回或独立移交序号均使目标代次保持 unknown。真实 QQ 的外层运行回执及独立代次移交仍待证。 [共享分配器子调用与外层完成](docs/acceptance/2026-11-15-feat-004-observation.md#共享分配器子调用与外层完成的栈帧证据)
+
+复跑 `target-harness/feat004-outer-completion/run-lab.cmd`。275 项固定镜像断言、36 组自建宿主观察开关对照、144 条同槽尾调用返回、9 种错误尾调用回放和 45 份先前轨迹复核通过。报告 `target-harness/feat004-outer-completion/evidence.json` SHA-256 为 `85E0EFE8A6AEFE7E0AB31CEB27C580E96EA23793E0F887EE5625002EF0524BC1`。本轮离线，未接入 QQ 或重发，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 固定镜像新增 83 项静态断言，确认 15 个直接或有条件间接续点，并核对补充、清理及共享归还的尾调用边界。自建混合四槽实测在移交等待期间仍覆盖同线程和其他线程的实际接收者及弱零分支。冲刷返回缺失、独立序号缺失和实际类型不匹配均按证据保留 unknown。 [调用续点与混合四槽](docs/acceptance/2026-11-15-feat-004-observation.md#固定构建调用续点与四槽并行取证)
+
+复跑 `target-harness/feat004-continuations/run-lab.cmd`。36 组开关对照、7 个错误回放和 4 个错误静态预期通过。报告 `target-harness/feat004-continuations/evidence.json` SHA-256 为 `3F898BF763F3F40DADA9382F33534FBC24FF9F317A0DA950D39AC13E3F5DF36B`。固定 QQ 的共享入口续点只覆盖选定子调用，实际目标、完整跨线程覆盖及独立移交证据仍待证，本轮未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 在自建宿主验证不依赖线程角色的每线程四槽轮换。入口命中后只切换当前线程，按栈帧复核返回。验证了清理内的嵌套冲刷、其他线程同时直接共享归还和跨线程补充。已构造并检出物理布局回退、独立移交序号缺失和真实未采集往返，受影响的代次保持 unknown。 [按实际入口轮换的验收](docs/acceptance/2026-11-15-feat-004-observation.md#按实际移交入口进行的四槽轮换)
+
+复跑 `target-harness/feat004-roleless-rotation/run-lab.cmd`。45 组开关对照、归档回放与 8 个错误记录均通过。报告 `target-harness/feat004-roleless-rotation/evidence.json` SHA-256 为 `0B160239B605E89F61CFF20866C667397CBD35FAE29E6D8FD6EC6D03D2E3CEE0`。上一轮固定镜像 96 项及 63 组归档亦复验。实际 QQ 的入口续点、接收者及弱释放并行覆盖和独立移交仍待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 对固定构建追加 96 项静态核对。冲刷和补充定位到各自的同线程阶段点，另有清理冲刷和直接共享归还绕过局部入链点。共享线程跳板及按需 TLS 缓存无法前置证明专用移交角色，分配器现有计数可逆，未找到独立漏采凭据。 [固定构建阶段与恢复后证据](docs/acceptance/2026-11-15-feat-004-observation.md#固定构建的轮换阶段与恢复后证据)
+
+复跑 `target-harness/feat004-rotation-eligibility/check_native_phases.py`，保存同目录 `fixed.json` 后执行 `replay_coverage.py`。既有 63 组轨迹只读回放，27 组完整、36 组 unknown。5 个新增变体均保持缺证 unknown，含布局先回退再恢复及两端正常。4 个错误静态预期被拒绝。报告 `target-harness/feat004-rotation-eligibility/evidence.json` SHA-256 为 `A6FB85AC56B6D69F2EDB2291712FA7146D73968C947E5E3C4BEE67D0C8E1668F`。实际连续覆盖和固定位点准入未证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 自建宿主验证每线程四槽动态轮换。已就绪移交线程、在自身就绪点重装和按角色给新移交线程布点均采齐主链，窗口内新建的无关线程仍覆盖真实接收者及弱零分支。启动交错、只重装命中线程、晚重装或全局切换各有实测漏采，缺证保持 unknown。 [动态轮换证据](docs/acceptance/2026-11-15-feat-004-observation.md#自建宿主的四槽动态轮换与覆盖缺口)
+
+复跑 `target-harness/feat004-rotating-observer/run-lab.cmd`。7 种对照 9 轮共 63 组实际开关配对，8 个坏记录均保留 unknown。启动交错跨线程重装样本中，8/9 次立即回读成功后读到旧布局，另 1 次移交线程错过初始布点；9 轮移交均 unknown。报告 `target-harness/feat004-rotating-observer/evidence.json` SHA-256 为 `F0DE64D2917B6AFDCD5719532261CA01BB496DEF84E33832A74AD51E8EA28251`。固定 QQ 的可靠阶段信号、角色分工及覆盖闭环仍待证，本轮未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 核对固定构建的每线程四槽预算。44 项静态断言及 35 种固定四点组合显示，选定缓存路径的六种取证角色无法同时覆盖。四个硬件断点的自建对照实际漏采了冲刷和补充，分配器序号缺口使移交保留 unknown。没有独立序号时，两种边界记录相同。 [预算与弱释放换序](docs/acceptance/2026-11-15-feat-004-observation.md#四槽观测预算与停顿导致的弱释放换序)
+
+复跑 `target-harness/feat004-hardware-budget/run-lab.cmd`。12 组三路对照中，无断点及 15–47 ms 停顿均由 B 读零终止，422–438 ms 停顿全部改由 A 原子旧值为零终止，暂停期间同进程心跳无变化。报告 `target-harness/feat004-hardware-budget/evidence.json` SHA-256 为 `50B7B4817659B7728E7AFC739BDB00024A8D88A297BF3CE307C7FFD1F6D54DC5`。固定 QQ 的线程分工、动态布点覆盖和调度扰动仍待证。本轮未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 在自建 Windows x64 子进程用硬件执行断点取得真实虚调用接收者、弱零分支和同槽代次移交。两条执行线程实测命中，启动及各命中时的四段代码核对一致，没有修改调用点。4 组采集开关对照、32 组追加对照和 13 个坏记录通过。故意漏采真实冲刷及补充时，即使边界地址和记录序号正常，分配器移交保持 unknown。 [硬件执行断点验收](docs/acceptance/2026-11-15-feat-004-observation.md#自建子进程的硬件执行断点观测)
+
+复跑 `target-harness/feat004-hardware-observer/run-lab.cmd`。报告 `target-harness/feat004-hardware-observer/evidence.json` SHA-256 为 `C9AFA38D59C05B61A355060A3AE1182C06224C34904968E40836DAC7DCB08310`。结果限于自建宿主、四个监视点、单槽模型和已排序线程。真实 QQ 的观测位预算、调度扰动和失采覆盖仍待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 对固定镜像的候选诊断出口做了 81 项静态断言。内置分配器通知只提供分配后地址及大小、实际归还前地址，无法提供同代实际接收者、弱零分支和回收移交。判定同址缓存往返漏采对照时保留 unknown。新增 2 组开关采集对照及 7 个失采或错误转移负例，既有 9 组重验，32 次复跑共 352 组轨迹一致。4 个错误静态预期被拒绝。 [固定构建入口与冲刷漏采](docs/acceptance/2026-11-15-feat-004-observation.md#固定构建诊断出口与冲刷往返漏采)
+
+复跑 `target-harness/feat004-observer-entrances/run-lab.cmd`，将同目录 `check_native_entrances.py` 输出保存为 `fixed.json`，再运行 `check_roundtrip.py`。报告 `target-harness/feat004-observer-entrances/evidence.json` SHA-256 为 `77D791DEC6C72EF6DDDFADB4BDBEA6955D2E3AFAE51476294E1EF29B351D3E63`。固定构建现有核对范围内无已验证可用的等价采集。动态解析及其他模块诊断仍未知，未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 自建 Windows x64 宿主验证源码观测点能绑定实际接收者、弱计数零值快路径和分配器移交。用夹具 PE/链接映射复核同一虚表槽位的实际间接调用。9 组开关采集对照的引用及宿主行为相同。完整冲刷或旧日志晚到可关联，漏采冲刷、缺失终止或回收、传输丢失和类型不匹配时，完整链保留 unknown。13 个坏记录、32 次复跑共 288 组轨迹通过。 [接收者与分配器观测](docs/acceptance/2026-11-15-feat-004-observation.md#自建宿主的接收者弱释放和分配器观测)
+
+复跑 `target-harness/feat004-host-observer/run-lab.cmd`，再运行 `python -B -E target-harness/feat004-host-observer/check_observer.py`。报告 `target-harness/feat004-host-observer/evidence.json` SHA-256 为 `1B6C3DB3C9A1FA7C86BC72C5311B5B515623E3F0D2C5746B35EE20859581BBF2`。既有固定镜像 128 项和弱释放夹具重验通过。新结果依赖夹具自有观测点、分配器移交序号和单槽模型。真实 QQ 可用的非持有式观测、调度影响和同代回执待证。未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 离线核对固定构建的接收者链、分配器候选和两条最终弱释放路径。固定位点 128 项断言通过。弱计数零值快路径直接分派回收且无需写 -1，初读非零的慢路径仍可能以原子旧值 0 触发回收。5 组非持有采集开关对照相同，128 次自由竞争和 8 次追加复跑中的 1,024 次竞争通过，拒绝 10 个坏记录和 4 个错误静态预期。 [弱计数与代次移交证据](docs/acceptance/2026-11-15-feat-004-observation.md#固定构建的弱计数零值快路径与代次移交)
+
+复跑 `target-harness/feat004-weak-release/run-lab.cmd`，将同目录 `check_fixed_weak_paths.py` 的输出保存为 `fixed.json` 再运行 `check_weak_run.py`。报告 `target-harness/feat004-weak-release/evidence.json` SHA-256 为 `71FDD898C999EB4F8142333B2BDB5825D48C64B13A872D9EDD62BBB0C7D53448`。既有 182 项固定镜像断言和并发夹具记录重验通过。当前桥的采集无法提供原生实例、分配器实际移交和弱计数终止的同代回执。本轮未接入 QQ，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 离线并发夹具通过同一分配代次的因果重建。旧代次首次强弱减量和回收回执均可晚于同址新代次的回收记录。采集器只接收标量，按分配器前驱和实际引用及释放来源重建有向边。4 组开关对照逐事件一致，128 组自由竞争和 8 次独立复跑共 1,024 组追加自由竞争通过，10 个坏记录及溢出按 unknown 拒绝确认。 [并发与复用验收记录](docs/acceptance/2026-11-15-feat-004-observation.md#线程交错和地址复用下的分配因果链)
+
+复跑 `target-harness/feat004-concurrent-release/run-lab.cmd`，再执行 `python -B -E target-harness/feat004-concurrent-release/check_causality.py`。报告 `target-harness/feat004-concurrent-release/evidence.json` SHA-256 为 `056939047433AA1F477C2DE08EFDD3697A0535C7CEC19F279E366E50A6971510`，含首轮样例拓扑序、自由竞争统计与原始轨迹指纹。既有非持有式采集 6 组及 7 个坏记录、固定镜像 182 项断言重跑通过。生产源码未改。QQ 的实际观测点与完成证据继续待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 自建 Windows x64 C++ 夹具验证同一分配代次的登记、快照复制、析构返回与控制块回收。采集器只接收标量，不持有或读取原生对象。6 组开关采集的引用减量及寿命回执逐项一致，含原位地址和登记键复用、额外强持有、跨线程迟后弱释放、回收失败与满缓冲。7 个坏记录对照阻止错误关联，50 次复跑轨迹一致。 [非持有式观测对照](docs/acceptance/2026-11-15-feat-004-observation.md#同一分配代次的非持有式观测对照)
+
+复跑 `target-harness/feat004-nonowning-release/run-lab.cmd`，再执行 `python -B -E target-harness/feat004-nonowning-release/check_capture.py`。报告 `target-harness/feat004-nonowning-release/evidence.json` 的 SHA-256 为 `03E38366661613FE2D8ED8862F4584C471F822CBAB5959BDC86837D8BBE162E7`，包含原始脱敏夹具轨迹及前一轮固定镜像报告的指纹。固定镜像 182 项和既有 19 个规范化判据重跑通过。结果限于夹具操作顺序及所测调度，现场接收者、实际观察方式和释放回执仍待证，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 固定镜像离线确认登记绑定创建 `NodeIKernelMsgListener` 及其同块控制对象，核实强计数的 `0 → -1` 对应逻辑最后强引用，弱计数的终止分支另有原始零值快路径。已解析两个终止虚调用，区分同一对象 C++ 析构返回、可能延迟的 N-API 引用清理，以及控制块归还实际分配器。service/adapter 的候选类型和登记传递路径已定位，现场实际接收者、分配器分支及完成回执仍待证。 [固定构建类型与终止调用](docs/acceptance/2026-11-15-feat-004-observation.md#固定构建的监听器类型与终止调用)
+
+`python -B -E target-harness/feat004-typed-listener-release/check_typed_release.py` 新增 182 项固定镜像断言，4 个改错期望负例均被拒绝。登记与快照镜像断言 39 项、历史 MSVC 夹具 5 例及规范化证据 19 例重跑通过。新报告 `target-harness/feat004-typed-listener-release/evidence.json` 的 SHA-256 为 `96A5F375827BB20BCFFA41AEE5926FA54A5AA812B2305FB16FBBD06A8CD869D2`。目前尚缺同时绑定终止调用、返回和分配器效果的运行采集，本轮未接入 QQ 或发送，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 已离线验证登记项 → 快照引用 → 控制块的关联判据。固定 `wrapper.node` 新增 39 项指令断言，核对登记节点的对象指针和控制块指针同时复制到快照槽、同一快照被派发并清理，以及摘除登记与清理快照共用的引用释放入口。当前现场日志仅可关联同一 JS pending，实际原生登记项、快照和控制块仍为 unknown。 [关联和最后释放判据](docs/acceptance/2026-11-15-feat-004-observation.md#登记项快照与最后释放的证据判据)
+
+MSVC 自建 `shared_ptr` LAB 5 项通过，实证登记删除与对象析构分离、弱引用延后分配回收，以及相同登记键或地址的误关联。离线证据判定器 19 项通过，缺少同一释放调用的逻辑终止计数及实际对象析构回执时保留 unknown，控制块回收单独确认。索引 `target-harness/feat004-listener-identity/evidence.json` SHA-256 为 `92C914C1AFD73458B10BA4BA5002F5F4AEF53B571B09BBB88C9A686EA56B6873`。当前缺可在实际 receiver 上验证类型和释放回执的采集路径，未接入 QQ 或发送，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 已离线复核自有关闭根、V8 可达性与 QQ 原生候选持有链。复验固定 `wrapper.node` 的两份静态断言，匹配历史输出。选定监听器登记项和已复制快照分别释放引用，候选控制块释放还受两个字段的条件分支控制。复核 77 项现场归档，新确认 `47760` 的 stopped Promise 回调仍对应原 JS pending，前后状态对照使用同一保留的 `R`，该回调记录的 OS TID 与 owner 相同。实际原生快照、控制块类型、最终调用者与全局排空仍为 unknown。 [持有与释放对照](docs/acceptance/2026-11-15-feat-004-observation.md#固定样本的对象持有与释放复核)
+
+补强实际停止导出的 LAB，测试在关闭前放弃自己持有的强引用。发出 `uv_close` 后且 `close_cb` 未到时，两份生产根仍在，未交接结果。精确 ACK 后也须等 worker 退出才释放两根，未收齐 ACK 或交接通道关闭则保留。普通定向 16 项、research 定向 25 项通过，生产源码及固定 EXE/bridge 指纹一致。复核索引 `target-harness/feat004-native-ownership-evidence.json` SHA-256 为 `42D68E67622614A23021D8B758778AC86AEAECF32C32568B35795419D05F3F14`。本轮无 QQ 接入或发送，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 当前固定研究版的正常发送、本端回读及独立对端确认通过。指定 QQ `35000` 通过只读准入和登记登录，只向好友 B 发起一次私聊。发送返回稳定 OneBot ID，一次 `get_msg` 按同 ID 核对私聊、正文与发送者。CRC 账本仅一条请求且终态为 `ConfirmedSuccess`，持久投影的稳定原生身份与终态相符。好友 B 侧确认仅收到一条且内容一致。该轮与上一条真实迟到证据的 EXE 和 bridge 指纹均一致。owner 与管理器正常退出。 [固定构建正常回读现场](docs/acceptance/2026-11-15-feat-004-observation.md#当前固定构建的正常发送与持久回读)
+
+37 项本机技术材料的索引 SHA-256 为 `1B62A4F25F4519F2A318E8F1A2D443126E2BC63E61EBC6E830AAB921977A49D9`。独立对端回执 `recipient-confirmation.private.json` 已绑定该索引，SHA-256 为 `2E67768FA0AB19768CC0A705BB8A82E8B6713B27852F2188A555C2DC26B3B31A`，均位于 `local-evidence/feat004-final-normal-20261120-35000/`。QQ 原生对象的持有与最终释放继续独立待证。旧请求未重发，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 的清单计时解析已离线修复。解析器兼容独立计时行和现场已见的 `RESULT: PASS` 拼接行，拼接形式要求后续清单门 PASS，拒绝重复、歧义、非法值及超过 CLI 区间的计时。用本轮原始日志先复现漏读，再读出 124.472 ms。26 项格式及边界对照、3 项真实材料副本的隔离反例、36 项 Node 和准备包回归通过。原现场 40 项文件与索引指纹一致，重新审计只有清单计时由 unknown 变为 observed。 [回放与验收复核](docs/acceptance/2026-11-15-feat-004-observation.md#清单计时修复与完成门复核)
+
+同请求真实迟到隔离及 ACK 收尾证据复核通过，前置 feat-002 已完成。该轮也核对了旧构建的正常回读与对端确认，两份发布产物 SHA 与当前固定构建不同。修复版采集脚本只在未绑定模板，运行产物未重建。审查索引 `target-harness/feat004-manifest-timing-acceptance-review.json` SHA-256 为 `E133FF6422CD93285BC208CC6DB6C3579A17EE69F69B43560D6ED340BB18257B`。
+
+2026-11-20 feat-004 并行清单校验现场在同一请求上取得真实迟到隔离证据。指定 QQ `47760` 一次原生提交，对当前连接停发并采集两份账本，同一 owner 观察 1002 ms。同一 `wire_seq=1` 的一条 `promise_fulfilled` 在 `stop_end` 之后，状态对照为 `unchanged`，停止账本审计与 ACK 收尾均为 `corroborated`。该回调首次在 listener 停止后 53 ms 的采样中写出。 [现场记录](docs/acceptance/2026-11-15-feat-004-observation.md#并行清单校验与真实迟到隔离现场)
+
+清单校验 124.472 ms，CLI 调用至 listener 停止 151 ms，较上一独立样本 259 ms 少 108 ms。提交报告至 listener 停止为 220 ms，上一样本 333 ms。固定审计器因日志行拼接将清单计时保留 unknown，核对唯一原始标记后另存只读计时补录。OneBot 1501、无消息 ID，送达仍为 unknown，未重发。管理器正常退出，原 QQ 仍响应且保留 bridge。40 项本机材料的索引 SHA-256 为 `BA81DFBE9E57DEBADAD82F4D78F490688F407FD710975F6165CCAC6D27D197A1`，路径 `local-evidence/feat004-natural-late-parallel-20261120-47760/evidence-index.json`。feat-004 保持 in-progress。
+
+2026-11-20 feat-004 已离线定位预启动助手现场中 CLI 至 listener 停止 259 ms 的主要开销。原发布 CLI 对固定清单的 5 个文件串行计算 SHA-256 和实际字节数，共 476,826,416 字节。原 CLI 沿同一停止入口在确认门前终止，10 轮中位数 255.963 ms。新研究版仅对托管停止观察入口使用最多 4 个工作线程并行完成原有检查，逐项结果按清单原序输出。新入口的 10 轮中位数 129.389 ms，其中清单门 116.980 ms。该对照只测到确认门，现场端到端耗时待实测。 [归因与候选](docs/acceptance/2026-11-15-feat-004-observation.md#停止清单校验并行化准备)
+
+普通 496 项、research 542 项和新 MSVC research release 构建通过。清单正反例核对与串行一致，异常大小、摘要及缺失文件均在实例确认和进程访问前拒绝。新单次准备包保留预启动助手、原准入、两份账本、1 秒窗口、ACK 与迟到的独立判定，并新增清单门计时。清单 `target-harness/feat004-parallel-stop-evidence.json` 的 SHA-256 为 `6CCEF8ABF8A2376E6C3F36FA9345E6C0BBFF647186FE3B017D8117B6F3E8771A`。本轮无 QQ 接入或发送，下一步需新鲜指定 QQ 和新正文授权。
+
+2026-11-20 feat-004 预启动停止助手的单次现场通过计时与同请求 ACK 收尾核验。指定 QQ `66188` 一次提交，助手就绪先于发送，对当前连接停发和取得前账本后只释放一次。首次 `submit_return` 报告到 listener 停止间隔 333 ms，较旧样本 839 ms 少 506 ms。其中助手释放至 CLI 调用 38 ms，CLI 调用至 listener 停止 259 ms。相同 owner 完成 1046 ms 观察。 [预启动现场](docs/acceptance/2026-11-15-feat-004-observation.md#预启动停止助手现场)
+
+观察前账本 445 字节，观察后 1107 字节，原前缀完整保留，追加同请求 `NativeStarted`、固定原因审计和 `DeliveryUnknown`。四条关联回调仍均在停止前，真实迟到隔离保留 unknown。OneBot 1501、无消息 ID，送达保持 unknown，未重发。管理器在核验后正常退出，QQ 同代仍响应并保留 bridge。39 项本机材料见 `local-evidence/feat004-natural-late-warm-20261120-66188/`，索引 SHA-256 为 `B12CF8341FC3404B5E009AF31668E1E43E131C58FB93D21D4372394C0631E3A4`。feat-004 保持 in-progress。
+
+2026-11-20 feat-004 四条 active 回调的离线时间线已复核。以 `submit_return` 首次写入报告为零点，`armed` 在 +838 ms，listener 停止在 +839 ms，最终采样在 +1881 ms。四条回调已在 JS 的停止边界前执行，首次随停止快照批量写出。报告无单个回调时间。runner 从识别提交到调用停止约 21.54 ms，旧停止调用此后才启动 PowerShell 并校验清单。这些阶段提供了缩短停止前等待的机会，现有现场记录无法给每段开销归因。 [时间线与取证方案](docs/acceptance/2026-11-15-feat-004-observation.md#自然迟到回调的时间线与取证准备)
+
+下一轮的本机准备包在发送前预启动仅执行停止的 PowerShell，核对并以共享只读句柄持有固定文件，对同一连接停发和采集前账本后只释放一次。仍走原固定 CLI 清单、进程代次与映射检查，并记录释放、CLI 调用和 owner 边界。5 项 PowerShell 假宿主对照、4 项派发对照、15 项时间测量判据、既有 ACK 与迟到对照及 36 项 Node 测试通过。清单 `target-harness/feat004-natural-late-warm-evidence.json` 的 SHA-256 为 `C71BA1045B3366EDBA919F87585BA0A3F336122D59DC7B8296E9C1A455E6468A`。本轮无 QQ 接入或发送，真实迟到隔离仍为 unknown。
+
+2026-11-20 feat-004 单次在途现场已核实同请求结果 ACK 收尾。指定 QQ `58112` 通过准入与登记登录，授权文本一次提交，对应 `wire_seq=1`。core 对当前连接停发，前账本含 `Queued → DispatchIntent`。同一 owner 观察 1042 ms 后正常停止，后账本追加同请求的 `NativeStarted`、固定原因审计与 `DeliveryUnknown`。管理器在线时核验账本及固定构建收尾门，此后正常退出，独立审计结果一致。 [单次在途现场](docs/acceptance/2026-11-15-feat-004-observation.md#分阶段停止单次在途现场)
+
+四条关联回调都在停止前，真实迟到隔离仍为 unknown。OneBot 返回 1501、echo 匹配且无消息 ID，业务送达保持 unknown，未重发。QQ 同代仍响应并保留 bridge，HTTP/SSE 已关闭。37 项本机证据在 `local-evidence/feat004-composed-single-20261120-58112/`，清单 SHA-256 `43855A63ACB5D5A96AE5AFE0380A8F5BE440A139D7BA6E549CBD4D38BD5898F4`。feat-004 保持 in-progress。
+
+2026-11-20 feat-004 单次在途验证的离线准备已完成。准备包复用通过零发送现场的固定研究版，覆盖提交、绑定连接停发、观察前后账本、1 秒 owner 观察及管理器最后退出。审计判定同一请求的持久结果与 ACK 收尾门，以及自然发生的迟到回调和逐条状态。 [单次现场验证准备](docs/acceptance/2026-11-15-feat-004-observation.md#分阶段停止单次在途验证准备)
+
+MSVC 管理器及实际命名管道 LAB 复跑通过，假宿主观察 1008 ms。Node 分析器 36 项通过，独立离线准备验证覆盖授权门、停止顺序、两个回环 HTTP 样本、ACK 对照及有、无、状态变化三种迟到样本。历史 `0x22` 样本只读回放保留 unknown。离线清单 `target-harness/feat004-composed-single-evidence.json` 的 SHA-256 为 `013C678A73AD20B4B998216416441EEDDEE7A60F70EE4B5196035DA1BCA31808`。本轮无 QQ 接入或发送，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 分阶段停止的零发送现场验证通过。新鲜指定 QQ `59384` 的固定模块、PE/backend 审计、唯一 Environment 和登记登录均通过。core 绑定当前连接停发，先采集独立账本，再由同一 owner 完成 1043 ms 停止观察及最终采样。owner 停止返回 0 后管理器仍在线并负责该账号，采集第二份账本后才正常退出。两份账本和管理器退出后的实账本均为空，HTTP/SSE 已关闭。QQ 同代仍响应，bridge 保持映射。全程零发送，旧请求未重发。 [现场记录](docs/acceptance/2026-11-15-feat-004-observation.md#分阶段停止零发送现场验证)
+
+独立审计拒绝缺最终采样、owner 线程不符及观察时间异常三种对照。26 项证据保存在本机 `local-evidence/feat004-composed-zero-20261120/`，`evidence-index.json` SHA-256 为 `675E46145076735A84B99AA8D93A2B53175FBC8A9CDD63A38E7760E230CB86A7`。真实在途结果 ACK 与真实迟到隔离仍待现场证据，feat-004 保持 in-progress。
+
+2026-11-20 feat-004 已通过分阶段停止的离线串联验证。以真实管理 HTTP、Windows 命名管道和 worker 连接假宿主，core 先关闭当前账号的发送准入，owner 完成 1052 ms 停止观察，worker 收到同一请求的结果 ACK 后退出，管理器最后正常退出。两份独立账本确认仅有一次宿主提交，审计识别同一请求合法追加的 `DeliveryUnknown`。样本没有关联迟到回调，隔离结论仍为 unknown。 [分阶段停止与账本审计](docs/acceptance/2026-11-15-feat-004-observation.md#分阶段停止串联与账本审计)
+
+该轮 MSVC 普通 496 项、research 541 项和 Node 审计 36 项通过，两份旧样本回放结论与输入指纹一致。已复核上一轮四份 release 产物和 14 个生产源文件指纹。离线清单 `target-harness/feat004-composed-stop-evidence.json` 的 SHA-256 为 `20D8343319E7002146B92012DA6AD7CC244659D6CC560014A99DD3DFA8A5BF74`，包含零发送包的离线校验。
+
+2026-11-20 feat-004 研究观察的 bridge 结果收尾已接线。研究观察停止保留 worker 至 ACK，owner 冻结入站与结果，停止 listener。在途请求生成同请求的 `DeliveryUnknown`，明确未执行的队列项生成原因固定的终态通知。完成最终采样及 owner 关闭后，经原保留队列交接已拥有结果，等待 core ACK 与 worker 退出两项齐备，才释放关闭根。缺 ACK 或接收端关闭返回 `0x22` 并保留证据。普通停止沿用原顺序。 [分阶段停止合同](docs/acceptance/2026-11-15-feat-004-observation.md#研究观察后交接结果再停止-worker)
+
+假宿主入口覆盖 ACK 齐备、超时、交接通道关闭和停止后拒绝强回执，均只有一次宿主发送和一次 pump 关闭。真实管理器、命名管道和 worker 的离线对照验证 owner 收尾通知持久化为 `Queued → DispatchIntent → NativeStarted → DeliveryUnknown`，ACK 清空保留状态后 manager 正常退出。后续先离线串起 core 停发、研究观察及最后 manager 退出，并更新账本审计以识别预期收尾增量。本轮未接入 QQ 或发送，真实迟到隔离仍待证，feat-004 保持 in-progress。 [入口 LAB](crates/caligo-bridge/tests/qq_entry_lab.rs) · [管道 LAB](crates/caligo-core/tests/daemon_client_lab.rs)
+
+MSVC `init.ps1 -Mode all` 普通 496 项、research 540 项通过，两套 release 通过。源码、测试日志及四份发布产物指纹见 `target-harness/feat004-staged-result-evidence.json`，SHA-256 `815F594CC234BE71647C1FDB6B98DDC37AB93C6CDB05A456C7DFB521EE0B5399`。上轮 22 项现场证据再次核验一致。
+
+2026-11-19 feat-004 分阶段停止的 core 停发已接通。研究版管理接口按当前账号与 `connection_id` 在 actor 锁内关闭新发送准入。core 仍通过同一账本和管道处理既有请求的启动与结果 ACK。同一 actor 重连后仍停发，跨连接或跨 actor 的旧标识返回 409。普通构建沿用原管理入口。实际管理 HTTP 和命名管道的离线红绿对照通过，验证无凭据拒绝、旧连接拒绝、重复停发幂等、IPC 与 OneBot 提交入口拒发、在途请求跨重连持久化与 ACK，以及正常关闭后仅有一条请求记录链。 [停发入口及证据边界](docs/acceptance/2026-11-15-feat-004-observation.md#研究版先关闭发送准入)
+
+首轮实际 EXE 冒烟发现 CLI 的 `research` 未转发给 core。补齐 feature 接线后，两套发布构建及 EXE 冒烟通过，无凭据均 401，已认证的未运行账号在普通版为 405、研究版为 409，管理进程均正常退出。MSVC `init.ps1 -Mode all` 普通 496 项、research 539 项通过。源码、日志和构建指纹的清单为 `target-harness/feat004-quiesce-evidence.json`，SHA-256 `93312B47941970848CF9706D19D209FFC64288E95A5F997121F3F4522BC4139F`。
+
+下一步在离线验证 owner 最终交接、worker 等待 ACK 与关闭的顺序。现有 owner 关闭入口仍先设置 worker 停止标识，本次仅接通 core 停发阶段。真实迟到隔离仍待证，feat-004 保持 in-progress。本轮无 QQ 接入或发送。
+
+2026-11-19 feat-004 管理器先退出的结果收尾顺序已离线复现。现场确认 manager 退出后才停 listener，最终采样成功，再过 8989 ms 结果收尾门超时。管理器关闭管道和 core actor，后者把在途项持久化为 `DeliveryUnknown`。bridge 停止入口先设置 worker 停止标识，owner 随后关闭 resident。其释放门要求 worker 完成且无待 ACK 的通知或保留槽。此顺序可能在 ACK 到达前撤销结果通道，导致 `0x22 ShutdownPendingResults`。现场通用日志未细分当时的未确认项及 worker 完成位。 [停止时序证据](docs/acceptance/2026-11-15-feat-004-observation.md#在途请求的管理器退出顺序)
+
+新增 [真实管理器离线对照](crates/caligo-core/tests/daemon_client_lab.rs) 使用实际桥接 worker 与命名管道，宿主发送为合成操作。先退 manager 复现同一账本路径，worker 已退出而 resident 仍有未确认状态。先等 core 持久化结果及 ACK 再退 manager，终态为 `ConfirmedSuccess`，resident 正常收尾。每组恰好一次假宿主提交。入口 LAB 两条对照分别覆盖未 ACK 结果和空 resident 的未退出 worker，确认实际 FFI 返回码和保留语义。实现范围为测试与诊断记录，真实迟到隔离仍待证，feat-004 保持 in-progress。
+
+管理器对照重复 5 次通过，FFI 定向 2 项通过，MSVC `init.ps1 -Mode all` 普通 496 项、research 538 项通过。证据清单 `target-harness/feat004-inflight-diagnosis-evidence.json` SHA-256 `85BBD6C31399187B00021EF5302557F8370E9475BF6D385BEC7166BD172001F3`。原 22 项现场证据重新校验一致。
+
+2026-11-19 feat-004 单次在途停止现场。新鲜指定 QQ `44116` 经固定模块及唯一 Environment 准入，登记登录核验通过。按授权向好友 B 发起一次私聊文本，观测到唯一提交轨迹后开始正常停止。OneBot 返回 `1501` 且无持久消息 ID，core 唯一请求的记录为 `Queued → DispatchIntent → DeliveryUnknown`，`wire_seq=1`。没有再次发送。
+
+同一 owner 完成 1000 ms 观察及最终快照，墙钟差 1011 ms。四条同请求回调均早于 `stop_begin`，停止后窗口未观察到关联回调，真实迟到隔离仍为 unknown。manager 正常退出且 HTTP/SSE 端口关闭。整体 owner 停止随后返回 `0x22 ShutdownPendingResults` 并保留 resident，QQ 同代仍响应且保留 bridge。观察开始前和停止失败返回后的两次独立账本采集逐字节一致；第二份标记为停止尝试后记录。只读核对器返回 `unknown/invalid_stop_window`，正常关闭验收未通过。
+
+22 项现场证据在 ignored `E:/stella/Caligo/local-evidence/feat004-late-state-single-20261119-44116/`，索引 SHA-256 `B6CF9A36728E4B03C9D5261CD51377D51F7FEFBBAB7BD7AA9A59E19402ECA01D`。后续先离线核对在途提交、manager 退出与 worker 结果收尾之间的交错。feat-004 保持 in-progress。 [验收记录](docs/acceptance/2026-11-15-feat-004-observation.md#同一请求的独立核对)
+
+2026-11-19 feat-004 同一请求的迟到隔离证据核对已接通离线工具。复用两份白名单分析器，以 core 二进制账本的唯一 `wire_seq` 对应同 listener 代次的文本提交和回调，排除重复提交、损坏账本、最终采样之后追加的快照和序号漂移。隔离佐证需要实际停止后回调、`text_state=unchanged` 及两份独立采集的等字节账本。输入文件的运行身份和采集时间仍由现场审计提供。 [核对入口和判据](docs/acceptance/2026-11-15-feat-004-observation.md#同一请求的独立核对)
+
+`node --test scripts/analyze-text-stop-evidence.test.mjs scripts/analyze-text-send-trace.test.mjs scripts/analyze-callback-observation.test.mjs` 共 33 项通过。归档的单次私聊可核对 seq 1 和一组提交轨迹，回调均在停止前，结果为 `missing_late_closure`。上一轮零发送为 `missing_associated_callback`。原始输入指纹均保持一致。日志 `target-harness/feat004-text-stop-evidence-tests.log`，回放 `target-harness/feat004-text-stop-evidence-replay.json`。本轮只改只读工具、测试和文档，可沿用已经验证的研究版。本轮未接入 QQ，真实迟到与全局 drain 待证，feat-004 保持 in-progress。
+
+2026-11-19 feat-004 文本回调状态对照研究版零发送现场通过。指定 QQ `63120`（创建 `2026-11-19T14:51:26.4606557Z`）通过新鲜代次、固定模块、PE/backend 与唯一 Environment 准入。研究版 EXE 和 bridge 与下方离线构建指纹一致。仅接入一次，登记账号登录核验通过。
+
+1000 ms 停止窗口在同一 owner 完成 listener 停止与最终采样，报告墙钟差 1010 ms，最终采样先于关闭。独立审计核实零发送、请求账本为空、manager 与 owner 停止 CLI 正常退出、HTTP/SSE 端口关闭。两份累计快照只含 `stop_begin` 与 `stop_end`，分析器返回 `unknown/no_callbacks` 并保留两条停止边界。QQ 同代仍响应，按寿命合同保留固定 bridge。此轮验证了新构建的零发送停止路径，真实迟到隔离与全局 drain 继续待证，feat-004 保持 in-progress。
+
+19 项证据在 ignored `E:/stella/Caligo/local-evidence/feat004-late-state-zero-20261119/`。`evidence-index.json` SHA-256 `D5128E5DE8EB9750FF8D6659256C2ECB36BD967940FA53495398EEC761E3517B`。独立审计对缺最终采样、错误采样线程、错误采样时间的对照均拒绝。
+
+2026-11-19 feat-004 停止后文本回调状态对照已完成离线准备。研究版按原请求序号记录停止后文本提交 Promise 和精确读回回调，对照该回调业务处理前后的请求槽、发送结果、读回状态与接收队列形状。净化和分析只接受 `unchanged`、`changed`、`unverified` 三种标签。历史两份现场日志只读回放与归档摘要完全一致，真实迟到仍为 unknown。单条对照不能独立证明 core 请求账本隔离或 QQ 原生对象寿命。现场证据判据见 [观察合同](docs/acceptance/2026-11-15-feat-004-observation.md#停止后文本回调的状态对照)。
+
+实际嵌入脚本夹具命中状态相同、变化和不可比较三种结果，净化与分析器回归通过，Node 分析器 21 项通过。首次全仓运行发现 Windows Node 命令行长度限制，图片与文本链夹具改为从标准输入读脚本。修正后 MSVC `init.ps1 -Mode all` 普通 495 项、research 537 项通过，两种 release 构建通过。源码叠加、日志及产物见 `target-harness/feat004-late-state-evidence.json`，清单 SHA-256 `01F69353E6AA56FCB47B46C4B2871AD471D34E275EA83A2D8AC1B599A6C37CE5`。
+
+新构建零发送准入包在 ignored `E:/stella/Caligo/local-evidence/feat004-late-state-zero-20261119/`，未绑定进程的准备清单 SHA-256 `FE373DBD14E229473C10D91027414AC9DA54917CA0CFCB91D4591B7ECFFE640B`。脚本语法和审计正反回放通过，未接入 QQ。本块止于新鲜指定 QQ 的零发送、登录、1000 ms 最终采样及正常停止现场门。实际迟到仍需同请求的现场回调和独立账本对照，feat-004 保持 in-progress。共享工作树改动仍在本地。
+
+2026-11-19 feat-004 resident 结果隔离修复版零发送现场。用户重启并登录指定测试 QQ。选择新主进程 `67792`（创建 `2026-11-19T14:33:16.8846282Z`），未映射 bridge、固定模块 hash、PE/backend、唯一 Environment 和响应状态检查通过。源码叠加及产物指纹清单 SHA-256 `525F11B863EBF1F5F5E3851584B02986FDEA8D0FACCABDC3000D2047062531F6`。research EXE / bridge SHA-256 分别为 `426693AFA451C889E0AF18DD0958379E9927119883B6FAB2580066E8551ACF97` / `B3C5B7FAD6A04F9143BD698A45792070BD6882B40EDB7800944051E21CB2D4B7`。
+
+一次接入与登记账号登录核验通过。1000 ms 停止观察在同一 owner 执行 listener 停止及最终采样，日志墙钟差 1009 ms，最终采样先于关闭。独立审计确认零发送、请求账本为空、manager/owner/停止 CLI 均退出 0、HTTP/SSE 端口关闭。三条累计快照中有一条 active 阶段未关联的接收回调，停止边界为 order 2、3，停止后无可关联迟到，结论仍为 unknown。QQ 同一代次仍响应并映射固定 bridge，后续现场须新鲜指定进程。修复版正常路径获得现场证据，停止后回执隔离的故障对照仍来自下述离线测试。原生对象寿命、真实迟到和全局 drain 继续待验，feat-004 保持 in-progress。
+
+原始资料在 ignored `E:/stella/Caligo/local-evidence/feat004-closed-correction-zero-20261119/`。`evidence-index.json` SHA-256 `3B6D17B55BC51FF0109F17ACC8F701A96C826D69F7CDFA08CDA1C9D2D3350210`，记录固定进程准备清单、准入、runner、独立审计、观察日志、分析器摘要、空账本及停后健康指纹。缺最终采样、错误线程及错误时间三项审计负例均拒绝，保留共享工作树未提交内容。
+
+2026-11-19 feat-004 resident 停止后的结果隔离。已 ACK 的 unknown 在宽限期内仍可由强回执纠正。此前正式 `complete_sends` 与研究 `drain_send_responses` 未检查 resident 生命周期，合成回执可在 close 后改写该状态并重建未确认结果。现只有 `Ready` 可应用回执。适配器路径先检查生命周期，已经开始的读取返回后在提交结果前再次检查。关闭前的强身份纠正仍可用，关闭后的请求保留 unknown。
+
+新增三项定向回归覆盖正式入口关后迟到、假适配器在关闭前可纠正且关闭后不再取结果、关闭发生在取结果与提交之间。修复前 3 项失败，修复后 retained 组 9 项通过，Windows MSVC `init.ps1 -Mode all` 普通与 research 全仓通过。两种 release 构建通过。分析器仍依据实际样本判读真实迟到。本轮未取得新的现场回调或 native drain 证据。全仓日志 `target-harness/feat004-closed-correction-all.log` SHA-256 `1452FFD65402F0F79C92974CCE9A082FC77C303CFF9BA3B37A87094C5F18EF49`。
+
+源码、产物、红绿灯和变更图指纹见 `target-harness/feat004-closed-correction-evidence.json`，SHA-256 `525F11B863EBF1F5F5E3851584B02986FDEA8D0FACCABDC3000D2047062531F6`。GitNexus 对两入口为 UNKNOWN，经源码核对正式 wrapper 与研究 pump 两调用，整工作树变更图 CRITICAL。共享工作树保留现有未提交内容。
+
+已准备修复版正常路径的零发送停止观察，窗口 1000 ms。ignored `E:/stella/Caligo/local-evidence/feat004-closed-correction-zero-20261119/` 的 `preparation.json` SHA-256 `88300DCE7F5A9F5334253FAA76EB4E87E1FC20BD9DF42901D9B765842C60F78C`，审计回放与缺最终样本、错误线程两负例通过，日志 SHA-256 `275BDEE5B56322FF6BD2186B1757D9BAD820FCE0968D1E46DFC5E39B923FC024`。当前 `38316` 仍映射旧 bridge，下一次须新鲜指定 QQ 代次和固定模块准入。真实迟到与 native 寿命仍待验，feat-004 in-progress。
+
+2026-11-19 feat-004 停止边界分析补强。`analyze-callback-observation.mjs` 先核对完整累计快照和阶段顺序，再判断是否记录到回调。只有停止标记的合法快照现在保留 `stop_begin`、`stop_end` 或 `stop_remove_failed` 的实际边界，回调仍返回 `unknown/no_callbacks` 和退出码 2。矛盾或无锚点的标记序列返回 `invalid_phase_order`，边界均保留 unknown。新三项回归修复前失败，修复后分析器全组 20 项通过。
+
+只读回放零发送现场原日志，分析器独立确认开始与结束 order 1、2。单次发送现场分析输出与当时记录一致，关联迟到仍为 unknown，两份原日志 hash 保持一致。原分析器副本 `analyzer.original.mjs` 随单次现场证据保留，可复核当次构建与工具 pin。红灯/绿灯日志 `target-harness/feat004-stop-markers-red.log` / `feat004-stop-markers-green.log` SHA-256 分别为 `3998953D9DB68DBDE980D4ADC38FD2FD92AF938DE65DE7BF435937B05F64A3E4` / `1F94A7FE757031757FA547A99A23C0CC74882621FDE8531FD75CF0ADD747392A`。回放摘要 `target-harness/feat004-stop-markers-replay.json` SHA-256 `9879E6246A013A2E530AD92FA08274ECCAF79B41D2C25FBB42CD02D14A28761C`。GitNexus 对分析器函数上游为 LOW，直接调用 1 个。本轮为工具与状态记录，实际迟到、原生对象寿命与全局 drain 仍待证，feat-004 保持 in-progress。
+
+2026-11-19 feat-004 单次私聊与停止观察组合现场。用户重启登录并授权向登记好友 B 单次发送 `CALIGO-004-STOP-9AB42E71`。固定 research 构建在新 QQ 主进程 `38316`（创建 `2026-11-19T13:58:30.2674540Z`）通过只读模块、backend 与唯一 Environment 准入。一次接入及账号登录核验通过。独占保留后单次发送成功，一次 `get_msg` 返回同一稳定消息的正文与发送者。CRC 校验后的请求账本仅一个请求，顺序为 Queued、DispatchIntent、NativeStarted、ConfirmedSuccess。好友 B 已确认仅收到一条，正文相符。确认记录 `recipient-confirmation.private.json` SHA-256 `809675941CDAE696333C279F808DD3A3DACE1D46C26876D3987AF232961053AD`，与下述技术证据索引绑定。
+
+停止观察设 1000 ms，独立审计核对同一 owner 执行 listener 停止和最终采样，日志墙钟差 1022 ms，最终采样先于关闭。三条累计快照含同一代次、同一请求序号。四条关联 JS 回调均在 active 阶段，记录 TID 均等于 owner；未观察到关联迟到，结论为 unknown。manager、owner 与停止 CLI 均退出 0，端口关闭。QQ 同代仍响应并保留固定 bridge，后续须新鲜进程。原生对象寿命、全局 drain 和真实迟到时的状态隔离仍待证，feat-004 保持 in-progress。
+
+原审计误将一条消息限定为一个投影行，现场有 version 1 和 version 2 各一行。复核按 MessageStore 回放规则校验相同消息 ID、账号、会话和原生身份，第二行仅更新 `time`。修正版审计验证一条逻辑消息，并拒绝重复创建、孤立修订、错身份与错 ID 四个负例。初次失败日志、复核脚本及摘要均保留。原始资料在 ignored `E:/stella/Caligo/local-evidence/feat004-stop-window-single-20261119-9AB42E71/`。技术证据索引 `evidence-index.json` SHA-256 `2FA2949E70047F714528663EADD18AEBF7DA8E9AA7C457C729DBFA3F881E3F46`，包含进程绑定准备清单、准入、授权、发送、回读、账本、两次审计及停后健康指纹。单次发送机会已消耗，保留共享工作树未提交改动。
+
+2026-11-19 feat-004 单次私聊与停止观察组合准备。复用已完成零发送现场的 research 源码和产物指纹，拟在新鲜指定 QQ 上向登记好友 B 单次发送 `CALIGO-004-STOP-9AB42E71`，核对稳定消息 ID 和一次账本 `get_msg`，随后关闭管理端并进入一次 1000 ms 停止观察。只采自然回调，未见关联迟到时结果仍为 unknown。独立审计分别确认单请求持久结果、观察与关闭顺序、代次/请求序号关联和对端确认。现场执行须新的指定进程、固定准入及与目标、样本和进程代次完全匹配的单次授权。实际发送前独占保留，失败或结果未知时保留现场，不重发。
+
+本机 ignored `E:/stella/Caligo/local-evidence/feat004-stop-window-single-20261119-9AB42E71/` 保存准备清单和脚本。准备清单 SHA-256 `0AFC3644BF1CE243FAC655D84CA0625A1190150125EEB26B4B1E5425101B1124`。检查缺授权、错正文、错 PID、错创建时间、非布尔许可和重复保留均在启动管理器之前拒绝，正确授权的合成对照到达缺现场状态处停止。审计用此前零发送与单次私聊日志分别回放阶段和关联，代次不符拒绝，合成的已停止后关联 closure 可识别。两份本机日志 `target-harness/feat004-stop-window-single-preparation.log` / `target-harness/feat004-stop-window-single-audit-preparation.log` SHA-256 `75E9D9BF1285B7A4B74B47E0076715C4D69B50AB698151AFBA8725305EAA0E40` / `BD156C06A84482B24A30E6DAF927A566B913643EA863ECB6D17ACF930D37099B`。组合审计另外通过完整合成正例、合成迟到匹配、缺最终样本和第二个请求四项对照。日志 `target-harness/feat004-stop-window-single-combined-selftest.log` SHA-256 `220F4141AB4AF68A9008DC6B1C497E20A8DDBEE46D598D2341AF90CD2FF0BA40`。准备时旧 `7776` 仍映射 bridge。等待用户重启登录及此次单次发送授权，尚无新接入或发送。feat-004 保持 in-progress。
+
+2026-11-19 feat-004 研究版零发送停止观察现场通过。用户重启并登录指定测试 QQ 后，本轮选择最新主进程 `7776`，创建时间 `2026-11-19T13:47:33.8216294Z`。只读准入核对响应状态、未加载 bridge、固定模块 hash、PE/backend 和唯一 Environment，随后一次接入并核验登记账号登录。构建绑定 `9fe721f` 与本地源码叠加清单 SHA-256 `6E5B6C619D110EB27456EB9B24016F6A4FF73CFE52F1CD802F515C60CAAAB683`。research EXE/bridge SHA-256 为 `474692BBB70A3D4D424F2CA93230F9168185B91D72DC26B6E95094F7F13DE8E5` / `54532E3543276CD0675FFC45D9EC952A87DFE036F4ED9E3D60276067114BD3BC`。
+
+一次停止观察设 1000 ms 窗口和 10000 ms 等待上限。独立审计确认 `armed → listener_stopped → final_snapshot → close_permitted → shutdown` 顺序，停止和最终采样在同一 owner TID，listener 停止至最终采样的日志墙钟差为 1017 ms。两条去重快照属于同一代次，后者含 `stop_begin`、`stop_end`，两条均完整。没有请求回调记录，关联迟到结果仍为 unknown，观察窗口不证明全局 drain 或原生对象寿命。空请求账本、manager/owner/CLI 退出 0、端口关闭经独立核对。同一 QQ 进程仍响应，保留指定 bridge，后续不复用或热卸载该代次。
+
+原始资料留在 ignored `E:/stella/Caligo/local-evidence/feat004-stop-window-zero-20261119-p7776/`。`evidence-index.json` SHA-256 `9EB6DDE0BE10AD047FC10D970083CE34E7168C2ABFC976F414B41AE818F7E30F`，记录准入、runner、独立审计、观察日志、分析器及停后健康指纹。独立审计的缺失最终采样、错误线程和时间错误三个负例均被拒绝。分析器返回 `unknown/no_callbacks`，停止阶段由独立审计确认。首个健康核对脚本的日期类型转换引发字符串比较失败，按原始 JSON 字符串重新核对 PID、创建时间和 bridge hash 通过。共享源码仍是未提交工作树，feat-004 保持 in-progress。
+
+2026-11-19 feat-004 停止观察等待超时。接手时本地已有研究版 CLI/FFI 激活入口与准入负例，详见 [观察合同](docs/acceptance/2026-11-15-feat-004-observation.md)。其改动仍在以 `9fe721f` 为基线的共享工作树，下面早期交接描述的是仅有 Rust 接口的阶段。
+
+假 QQNT pump 让 owner 持锁等待释放信号。修复前配置 500 ms 等待，采样保持阻塞两秒后仍未收到停止结果。现等待线程用原子标志读取窗口激活状态，定时唤醒仍经 `WAKE_GATE`，等待与超时检查不再获取采样持有的锁。超时返回 `0x25` 并隔离同代次。采样返回后 owner 发现隔离即退出，回归确认 `uv_close` 调用为零且资源根仍存活。
+
+Windows MSVC `init.ps1 -Mode all` 普通与 research 全仓通过，回调分析器 17 项通过，两种 release 构建完成。红绿日志、21 个本地变更源文件和四个产物指纹记录于 `target-harness/feat004-window-timeout-evidence.json`，SHA-256 `6E5B6C619D110EB27456EB9B24016F6A4FF73CFE52F1CD802F515C60CAAAB683`。GitNexus 对观察唤醒与超时各解析到 shutdown 一个直接调用，arm 和 cancel 的缺边由源码核对。共享变更图为 CRITICAL，CLI 输出仅列出部分明细。当前 PR 仍在此前已通过 Windows CI 的提交，本轮保留既有未提交改动及本次修复。下一验收门为新鲜 QQ 实例上的研究版零发送观察窗口。真实迟到、native 对象寿命及全局 drain 仍待现场证据，feat-004 保持 in-progress。
+
+2026-11-19 feat-004 research停止观察接实际owner：新增 `qq_entry/stop_driver.rs` 复用既有控制器，经research Rust opt-in arm后在close_req分支驱动StopListener/Observe/ClosePump。正式research启动登记缓存身份读取及只读snapshot闭包，未arm与默认构建原停止路径不变。首tick只运行一次原cleanup hook，窗口后续tick不调业务drain；shutdown调用线程每50ms仅投递WAKE_GATE内特殊唤醒，所有V8采样仍在owner。采样前验证owner TID、Environment vptr/loop和V8 ladder；缓存/JS共同核对account/nonce/sid/generation与R.stopped，畸形/incomplete/报告预算失败锁存0x25/quarantine保根，不自动重试，CLI非零明确错误。最终成功样本后才uv_close，close_cb确认后结算模型关闭回执，原0x22/23/24语义保留。
+
+实际fake QQNT pump/export回归补6条：正常多次采样一次关闭、sample失败/身份漂移0x25且Weak根存活无native close、观察中取消最终采样、停止前取消正常关闭、慢采样跨deadline拒绝。独立审查提出取消前永远等待和tick固定now漏算执行时间两问题，已修正：New取消直接解除观察，每动作/回执边界重取单调时间和身份；慢采样不以旧时间许可关闭。首轮全仓通过留为 `target-harness/feat004-window-wire-initial-all.log`，上述修正后再次执行最终all，不以中间通过替代最终。实际JSreader还覆盖active/wrong-account拒绝及同stopped R快照读取。辅助owner接线任务丢失上下文、未编辑后被停止，实际接线由主任务完成；无QQ动作、零发送。
+
+本轮仅research Rust激活接口，没有CLI/新C导出能开启窗口，不能用于现场；尚未新release。下一步是单独准备经过审查的现场激活/准入入口及实际晚到样本，不能把本机fake tick当QQ drain。真实迟到、native快照/环境寿命/final owner/drain仍未证，feat-004保持in-progress；旧16424不复用/热卸载，既有消息不重发，暂不需用户重启，未提交推送。
+
+
+接线最终Windows MSVC `init.ps1 -Mode all` 普通/research全仓通过，research qq_entry_lab21/21，日志 `target-harness/feat004-window-wire-all.log` SHA-256 `6A3D73A524971EE2D967B42C59AB85380A558E88421FE6CBA8FA0B6E3612D690`；定向日志 `F807258BCC8F348C23F4A824012EAA262719EA6C3D146095787A7390179A7451`，分析器17/17日志 `AC72413B99657307DFA06B14992847E7A6BE2A2ECC7A78ECA7DDAF9AB7C393A0`。源码/日志清单 `target-harness/feat004-window-wire-evidence.json` SHA-256 `420A317D62A31B05ACDF0DDBE8865997894E292889BE923F73BE0A885E95FE6D`。GitNexus绑定目标工作树，shutdown/pump动态边界与reader/CLI上游已查；最终结构化all-scope15已跟踪文件/152映射符号/51关联过程/CRITICAL，无partial/truncated字段，JSON SHA-256 `0568A0EB76D27A8CEB741AE248B3EAE57EC98627D9D461B21366F054D2DFF31E`，新未跟踪driver/模型/测试单独审查，计数不当现场安全证明。文档及diff检查通过；无release/现场操作，未提交推送。
+
+2026-11-19 feat-004 有界停止观察离线控制器：新增research-only `stop_observation`，显式创建时绑定账号/host nonce/sid/listener generation，1..5000ms窗口、50ms采样、104动作硬预算。动作按StopListener→确认停止→初次/周期Observe→最终Observe确认→ClosePump→关闭确认推进；序号/动作和typed receipt精确匹配，未知回执/身份漂移/时钟回退/截止/预算失败永久Quarantined，不自动重试。取消在停止前无动作，停止已发出后等待回执及最终采样；Closed仅是模型回执，不证明native关闭。
+
+验收工作树内research定向28项通过（控制器9、实际JS观察1、寿命1、发送17），default对应普通发送17通过且两个research-only目标0项。日志 `target-harness/feat004-stop-window-research.log` SHA-256 `40251D662A0C6C2BB44EE449279FAB1F89B7B1E36EDE3E2E99AC7E3430D55EE0`，default `BF815E41318188640D9CF73BD7C46433FC7DF65CE301EF2CBD3117CBE535A1A2`。独立静态审查未见模型状态机缺陷；最大窗口发103动作低于104。实际脚本回归额外在同一stopped R上初次快照后才完成deferred请求，下一读取取得两条stopped/closure/seq1事件且业务状态不变，重复读取不清数据；这是合成迟到，未说成QQ实际回调。
+
+辅助任务最初将两个新文件写入主工作树，发现后已只移动这两个新文件至 `E:/stella/Caligo-feat-004` 并通过模块导出在目标工作树重新测试；未混用主树验证结果或修改其原有文件。本轮尚无qq_entry/CLI/FFI接线，控制器不具备OS/V8/发送/关闭能力，两组LAB仍独立，现有shutdown原行为保持。须先接上合法owner tick和定时调度、scope/上下文核验、最终快照与原0x22/23/24保根/一次关闭，才可准备现场。本轮零QQ接入零发送，feat-004保持in-progress；不把模型或合成事件替代真实迟到/native寿命/drain。
+
+
+该块最终Windows MSVC `init.ps1 -Mode all` 普通/research全仓通过，日志 `target-harness/feat004-stop-window-all.log` SHA-256 `AF1E33E91138E0ED98EAA70C8B2FC3082EB11C10E50866DA7FC3625C0102D971`；分析器17/17日志SHA-256 `1CF5183A7BEBA6784ED7A027586B2A256F48CC648AEC3D3C984A8AA8B7AC4B6A`。证据清单 `target-harness/feat004-stop-window-evidence.json` SHA-256 `DACC5E99C0D5E8C679EACFDEAFB313C2E55CCEE883017A101E49E71EE57FED25`。GitNexus绑定目标工作树，快照reader上游已核对；最终结构化all-scope15已跟踪文件/138映射符号/44关联过程/CRITICAL，无partial/truncated字段，JSON SHA-256 `26733B7331BF7F5E2DCE217ACB1093A4548823CE6730A4A90C99A718A980E243`；未跟踪新模型/测试单独审查，不把图计数当实际现场影响。无owner接线故未新建release；文档/diff检查通过。工具启动另见本机.bashrc UTF-16前缀报错，但命令正常执行，未修改用户shell配置；未提交推送。
+
+2026-11-19 feat-004 停止后迟到证据判定收紧：只读分析器原先逐条校验phase却接受移除失败后又stop_end等矛盾序列。新增红绿回归后按同listener完整order验证active→stopping→stopped/remove_failed，拒绝无begin终态、重复标记、终态回退active及矛盾终态，返回unknown。新增 `late_callbacks` 仅汇总终态后正seq/closure的Promise或精确回读事件；只有未关联listener活动或只有stopping事件仍unknown，state_isolation始终unverified，不据此自动判业务隔离/送达/drain。
+
+Node分析器17/17通过，语法与diff检查通过。红灯 `target-harness/feat004-late-analyzer-red.log` SHA-256 `8B90B9030AE58C66A7CA0A9059A045C63936F331807BE8669B1F0F678ECD1FC3`；绿灯 `feat004-late-analyzer-green.log` SHA-256 `77CC2FAB881D10164651F65DF968081B842206B27FB016BA2416C52379CB04BC`。既有TID/PHASE现场日志只读回放均正常识别停止边界，但late_callbacks仍unknown且events为空；两回放SHA-256 `3818ED89043DF777CC9B4FBB5F9457841997349ACFBA4505AA1657973E55C385` / `51068DFCC215E5B68A97E86A09C72DD835FFDC378DCEC79420BBB2E20F100556`。旧测试中人为构造的无停止锚点及双终态不再作为合法样本，保留实际有界前缀兼容。
+
+本轮仅分析器/测试/合同修改，未改生产Rust/JS，不重建release或重复全仓；沿用固定产物的原验证。编辑前GitNexus明确工作树分析器上游LOW（1调用/1过程），源码核对CLI和测试使用；图边界不代表现场安全。当前STOP仍仅即时读取一次，真正更晚的事件需要独立设计新鲜代次下的有界owner观察窗口，不能重新接入旧QQ或从远程线程随意执行V8。17项工具回归不替代真实迟到、native对象寿命/final owner/drain；feat-004保持in-progress，本轮无QQ动作、零发送，暂不需用户重启，未提交推送。
+
+
+2026-11-19 同步 TID 单次私聊现场通过。按用户指定选取最新启动的 QQ 主实例 PID `16424`，创建于 `2026-11-19T01:51:57.3017921Z`。固定源码、脚本和二进制指纹核对通过，已加载模块、PE/backend 和唯一 Environment 均通过准入。登记账号登录核验后向好友 B 发送一次已授权样本。即时 `get_msg`、持久消息与唯一请求账本中的稳定 native ID 一致，账本依次记录 Queued、DispatchIntent、NativeStarted、ConfirmedSuccess。用户确认对端仅收到一条且完整文本一致。
+
+三份累计快照前缀一致，最终八条事件均通过字段审计。listener generation 1、request seq 1 的 `matched_add`、`matched_update`、`promise_fulfilled`、`readback_fulfilled` 四条事件各自直接记录 `callback_tid=60992`，与同代次 `first_entry` owner TID 相同。停止标记依次为 order 7 `stopping`、order 8 `stopped`。manager 与 owner 均退出 0，HTTP/SSE 端口关闭。事后只读核对确认同一 QQ 代次仍响应、线程列表仍包含 60992、固定 bridge 仍映射。样本授权已消耗。真实停止后迟到回调尚未观察到，QQ 原生生产者线程、最终 owner 和全局 drain 仍为 unknown。feat-004 保持 in-progress。
+
+原始材料保存在 ignored `local-evidence/feat004-tid-return-send-20261118/`。`entry.private.jsonl` SHA-256 `289CBF1ADC8D320587A176BF0F37E8B881FC62C133FED03C8763E3940BEFA787`，技术审计 `F0C4CC120B267CB0634AFA187D707AFD5ED7129E50C0ABBF8B7DF4CF58C4780E`，请求阶段审计 `1F80E7EBCE7E64A8A1ABDB55E0CF11C86694CA14E6A7EFE755DACBBE5F4796FB`，直接 TID 审计 `6D57BA6930F7C928240EE01F3304E4847AAA847D1019AC07340CA5C87EEF05F3`，线程事后核对 `D29DAA8F21940EE0B80FAFD8AEA916AD66E999C1115EFCF06DD94E28675F7B24`，对端确认 `A72D8FEABF3700343FAFC5003E43C8760B1A091C97EF9121C6CAD2A42EDFC3EF`，验收摘要 `0BE86D0C96C19B9ADA9A1E42F0E66A43F33BA9FB389F7C3277046FEFDE7B0768`。本轮仅归档现场证据，构建与离线测试沿用下方固定产物的验证结果。
+
+
+2026-11-18 feat-004 精确构建同步TID返回（静态/LAB）：对QQNT SHA-256 `75B19E58A123B0513E99DF4DF3EBC6524478535BA44651024D6A20821F5086E5` 与wrapper精确hash做导出普查、ModuleWrap::GetStatus/GetError双回调及整数工厂/调用者交叉核对，18项字节断言通过。info→implicit、isolate+8、tagged返回槽+0x18及Integer静态sret均有固定映像证据；无公开getter/ReturnValue导出，不以通用V8头猜布局。静态脚本/报告在ignored `local-evidence/feat004-tid-return-abi-20261118/`，报告SHA-256 `9870ACEFEC67368FE39EE03664481ED0D83F298277653196EB76D99478808EB8`。运行库validator部分非法分支trap，仅作静态佐证；getter用精确GetCurrent RVA0x42940B0对照安装/回调isolate，整数工厂RVA0x4299F20，只接受有效活动V8回调。
+
+research安装第六个 `__caligo_current_tid`，PIN后发布静态绑定；成功把当前OS u32 TID经Local handle解引用为tagged写返回槽，空绑定/不匹配/空Local不写槽。原生注入符号LAB3/3验证实际子线程TID、tagged非handle、canary拒绝分支，日志 `target-harness/feat004-tid-getter-tests.log` SHA-256 `24BACADE59DD4B0527433825DA2921F120DF29D0AB8DE0A73E87ABEAA3487DDC`。JS在同一请求/阶段观察记录同步返回的可选callback_tid；异常/非法/未安装为null，不影响业务。独立审查复现旧ready标志会误信同名全局函数，已改独立getter安装成功门、每次安装重置，JS只捕获一次函数；非配置同名假函数负例不调用且tid为null。旧五观察器就绪与getter就绪区分，不按ordinal拼接旧汇总日志。
+
+新增仓库只读 `scripts/analyze-callback-observation.mjs` 与15项测试，严格上限/规范schema/代次/前缀/来源校验，异常exit2且不回显原文；可兼容旧无callback_tid报告，新null/u32字段保留，外部请求映射/OS证据仍unverified。历史PHASE现场日志只读回放5快照/10事件/stop9→10与此前审计一致，未修改原证据；回放SHA-256 `CF3682F724AA2C64998F633FEEB208B4DE593954E71D8F35036784F8D6C93B09`。最终普通/research全仓all通过，日志 `feat004-tid-return-all.log` SHA-256 `4D779B5F148E4A718E04C506FF453C4F6754B1E35061FE80C675574192D3E999`；分析器最终15/15日志SHA-256 `46B34AF0FB5AF1DD981620F6D610E7380FA4AC7F0ABEBAB6BEF1B2CD39E56BD1`。初次getter测试shell引号失败发生Cargo前，修正后通过；Python打印Node结果因本机GBK不能编码符号而失败，改安全ASCII显示，测试和回放本身不受影响。
+
+新普通/research隔离release均通过：目录 `target-feat004-tid-return-default/` / `target-feat004-tid-return-research/`；EXE/bridge SHA-256 普通 `61F655EF4C02E08883F5E1A3A6D777D3BEBA40B91EA73B9F35DECE4D59138C73` / `6C01F0191730346A22A0853C01C6817450F0E4BBED67B22E40B6AFDD9FB0FB21`，research `C935D5F267533455A7ED8AA98F981F4D09C9E416855193A75101C48103D26840` / `657A9A7202FC728B30A41B4741F30CEE0F02BB8EFEBE11EDCAD912C4FD594FAC`。构建日志SHA-256 `D9B464F3BEE8AA63948918A81C53836600103A858FE912A06BD8ED89107E3E4C` / `8AE5DC2AE2FD38F2002F8E0CB5F0F14FCC1879A9F3DE245974EDC467123EE888`；固定清单 `feat004-tid-return-build-evidence.json` SHA-256 `15B7F401811DAC73663FAC5C3D8BE060A441215F46F1A59753C95F24405140C8`。GitNexus同工作树/9fe721f加修改，capture MEDIUM/install LOW、嵌入JS缺边由源码核对；最终all-scope15已跟踪文件/134映射符号/44关联过程/CRITICAL，无partial/truncated字段，JSON SHA-256 `23A6503DACC6485ACEAB733716FB477579378A069369C2FE1A7B46EB2610DB18`，新未跟踪模块/测试/分析器另审查。
+
+本轮零QQ接入零发送，getter未在QQ执行，feat-004保持in-progress。下一单次好友B样本 `CALIGO-FEAT004-TID-20261118-3C8E50A7` 准备于ignored `local-evidence/feat004-tid-return-send-20261118/`，源码/二进制/脚本固定且语法通过，尚无grant、未attach/发送；需对应授权与新QQ代次准入，核对同关联事件的有效callback_tid及owner/live线程资料，不做ordinal拼接。真实迟到/原生生产者/final owner/drain仍未证，旧18640不重接/热卸载，旧marker不重发，未提交推送。
+
+
+2026-11-18 feat-004 自有pump wake寿命续验：确定性fake QQNT回归复现正常shutdown后，EntryHandle::wake和worker蹦床wake仍因ready=1调用旧handle；旧结果 `(true,true,3次native send)`，期望 `(false,false,1次停止唤醒)`。ready保留是拒绝同代次重接的标志，不证明handle仍可唤醒。现两条普通wake统一到独立WAKE_GATE，关闭/隔离先拒绝新准入，再与已进入uv_async_send串行；shutdown保留一次专用停止唤醒，owner以close_started保证清理/uv_close仅一次。普通wake不获取DRAIN_HOOK，锁顺序hook→wake；不在wake锁内执行hook或uv_close回调。确定性在途send/关闭交错及hook内两wake均返回的回归通过，普通/research qq_entry_lab各15/15。red/green日志 `target-harness/feat004-wake-red.log` / `feat004-wake-green.log` SHA-256 `7FF92D905F29FB586AA4529E44FB22CE9B7D8AA139712207D35E68DF02F60D7E` / `F239DBC6A3D60A40D7B37792A07FB5DB32BFBAADB0C4AA7048306B859946610B`。强制重叠仅覆盖普通send与关闭，panic/poison/cleanup故障后拒绝仍为顺序回归；不声称全部fault交错现场通过。门锁依赖native send返回，wait_ms不是native挂起时的墙钟上限。最终全仓/构建结果见后续记录。辅助ABI资料查找因提供商认证失败终止，没有编辑/QQ操作，也未得出新的FunctionCallbackInfo ABI结论；主任务继续，历史逐请求TID未知边界不变。
+
+
+wake修复最终 `init.ps1 -Mode all` 普通/research全仓通过，日志 `target-harness/feat004-wake-all.log` SHA-256 `FB037E48AE4976F5719B8B51A1193686187184B59C2EAD1A0CC6DAAE7692BCFC`。新隔离release目录 `target-feat004-wake-default/` / `target-feat004-wake-research/` 均构建通过；EXE/bridge SHA-256 普通 `34C56BF80F306CB1D97D96BF3F1478E5A40DA8B9DFC9E570A6561439F2054A70` / `2A3E481D74894E203C603B816E41501A237AD983461AB8F1B296BF685875B299`，research `4A2F2EDED324CE7A929D9BB82AA2930253C3F6B47EC7A950A027599468D79BC9` / `F0E05F96889735F216D9468A521DC5D34A7F8AE4812DCA1226D48177C1CAE762`；构建日志SHA-256 `AC3A9CE03882AEEF2A007E13AF2BA691C10C5FD9F09B2963EFD54E14DD1E90F4` / `CEA594E49852E65DF53DF950E803575BD27E748AEDF2649A808AA7517C8FBC96`。固定清单 `target-harness/feat004-wake-build-evidence.json` SHA-256 `6E5014554FCAE84D1340B980D91FF3B215B027C4C6BEF96BD63550093391D123`。新构建未加载QQ，本轮零接入零发送。
+
+GitNexus绑定同工作树/9fe721f加修改：精确wake蹦床HIGH、quarantine/latch CRITICAL、pump和EntryHandle::wake UNKNOWN由实际注册/调用源码补核，shutdown LOW不抵消其它高影响。最终结构化all-scope 15已跟踪文件/134映射符号/43关联过程/CRITICAL，无partial/truncated字段，JSON SHA-256 `99E5E3E4EBE57EC7580C94270D8E14959FC8134D5C5F05E0916AF2955B89E28F`；图裁剪/动态缺边和未跟踪测试单独审查边界保留。独立静态审查未见锁顺序阻塞，确定性测试补足send/close交错；不外推QQ全局静默。feat-004仍in-progress，下一步聚焦精确ABI关联线程、实际迟到及native对象寿命，不用正常样本重复替代这些未知；无需现在重启QQ，未提交推送。
+
+2026-11-18 feat-004 请求/停止阶段单次私聊现场通过：用户授权本样本并重启QQ后，按最后启动实例选PID `18640`（创建 `2026-11-18T12:22:45.8833570Z`），固定源码/脚本/二进制、模块hash、PE/backend与唯一Environment准入通过，listener与当前登记账号登录核验通过。只向好友B单次发送 `CALIGO-FEAT004-PHASE-20261118-8D6A31F2`；send/get_msg成功，独立帧CRC账本审计确认唯一请求 Queued → DispatchIntent → NativeStarted → ConfirmedSuccess，稳定native ID与持久消息/回读一致。用户确认对端仅一条且完整文本相符，消息不重发。
+
+新观察现场5份快照前缀一致且均incomplete=false；最终10条JS元数据，listener generation1/request seq1的matched_add、matched_update、promise_fulfilled、readback_fulfilled均active/current=true且来源分别matched/closure；与同轮唯一请求和旧八阶段trace generation/seq一致。停止边界为order9 stop_begin/stopping → order10 stop_end/stopped，均seq0/none。停止后观察事件0，记late callback unobserved，不证明以后无回调。旧汇总TID6条均55432且与owner相同，但本轮不与新元数据做ordinal拼接，不提升逐请求OS线程。manager/owner退出0、端口关闭，QQ18640当次仍响应并保留指定bridge，不重接或热卸载；本次正常停止兼容0x22/23/24修复构建，不代表这些故障分支已在QQ注入。
+
+原始证据ignored `E:/stella/Caligo/local-evidence/feat004-request-phase-send-20261118/`；preparation/runner summary/独立技术审计/独立阶段审计/用户确认/entry/acceptance summary SHA-256 分别 `D2564B9BE5424C5FF7513AA93BE8A66A6B6D46BE48B9B074F37827CBC8A3F96F` / `2127AD63638E0CB6C0A6E425B9B96B591C32CDCCDD5F1CE7806BA7BE49E5EB04` / `415A665FC24C1DE761DFD1B96D5966046E12F9F765A35DE931C23E4B43E7290D` / `69C4B18E31B1DD56F05F3BC615B6515588E21B1F4761B0701A105FB961EBF7BA` / `6224ED23CDAE90EE4B320972997C85BF60620E22A1C58265568B9A28157667F1` / `E994C87C4F6EA8678DC065F0F5DC11D5D976EA6BF1E5A85E19CBC68869992B97` / `AFB61CD3836D0622FE42562E39ED493E11FA29C8975F9E1259FECA49A7C061FD`。无生产变更或新构建，沿用下方同产物全仓结果；授权机会已消耗。本轮只闭合指定样本正常请求阶段/停止顺序，真实关联迟到、逐请求OS线程、QQ native快照/环境寿命和final owner/drain仍未证，feat-004保持in-progress。下一块先离线明确这些剩余门的最小证据，不要求再用正常发送重复覆盖。
+
+
+2026-11-18 feat-004 请求/停止阶段关联观察接线：排除以无参TID记录与JS日志ordinal拼接为逐请求证据的方案，保留原TID association=unverified。本轮不新增ABI，research在实际JS事件点记录listener代次、终身单调order、既有text traceSeq、固定kind、active/stopping/stopped/remove_failed、关联来源none/closure/matched和捕获表内current身份。Promise/精确回读在业务stopped/current守卫前记录，matched add/update在身份匹配后记录，任意listener入口/停止标记seq0。current仅表示旧R.sends仍指向pending，停止后也可为true，不代表请求仍有业务准入。
+
+队列每listener终身128条；owner以原sid+代次绑定的非破坏性白名单快照读取保留__caligo_d8，先字段投影和24KiB预算再序列化，Rust严格脱敏；不同代次/畸形/溢出明确不完整。正常poll与STOP后即时读取、相同快照去重，进程32次报告预算最后一条为固定incomplete标记；pump停止后的新回调无后续读取保证，不以缺日志声称静默。旧可变线程诊断属性调用额外保护，诊断抛错/accessor异常不再影响send settlement或STOP。无账号/正文/cookie/原request/native ID输出，不把报告线程当callback线程。
+
+Windows MSVC定向普通137/research161通过，覆盖逆序双请求、旧代次迟到、停止/移除失败/同步移除回调、诊断异常、禁用/溢出/畸形和隐私。default/research最终日志 `target-harness/feat004-request-phase-default.log` / `feat004-request-phase-research-final.log` SHA-256 `76955C7CA27B4F382F3AE8CCD65076EBF4CA1BB1539DC8F6154E922B8B40095C` / `B7D8A2C4794FD17031C857FCAD2A65E44DCCD8E61E9E40CD2C59759F4ACF1B96`；初次vcvars命令引号错误未执行测试，保留 `feat004-request-phase-sanitizer.log` SHA-256 `48BFA2C2E47924766379841FA56252A12F9EAEFCBC4F5D64C33B3C6E754AFB87`。独立审查指出动态诊断异常风险和序列化前预算，均收敛在上述实现/负例。本轮零QQ接入、零发送，新观察尚未现场验收；feat-004仍in-progress，OS TID逐请求关联、真实迟到和原生pointee/drain门不提升。
+
+
+最终 `init.ps1 -Mode all` 普通/research全仓通过，日志 `target-harness/feat004-request-phase-all.log` SHA-256 `4ADE959B069501811D984F0F333A21A4F3D43B2733C500D1783F14F7A59DEAC5`。隔离普通/research release通过，目录 `target-feat004-request-phase-default/` / `target-feat004-request-phase-research/`；EXE/bridge SHA-256 普通 `15C5D5579DFD016864BB0F7418FF3630E2C1B6D4AE6F39C2B445A8EDD6E65DCC` / `D941D754C0609A6E094F796CE17027B89D63C2DBBCC735C644A84F0A01897888`，research `9F272C702C76412CD1A0DBD34434BA83DEBD662B5D52D30F7B65BAA06070692E` / `B9C64802356CA6FC5CFAA3445931E8ABBE4B6A734EAC0AEEB65897F79BF45013`。构建日志SHA-256 `B845BA9EF15DCD7FFB18FF4870EA2E31622872407B9B686BE2D8978DE58C430F` / `DAE9375904850E3E3871C6A5C999AAAD5754F52EA0BE64BA828E480CB538A08C`；固定清单 `target-harness/feat004-request-phase-build-evidence.json` SHA-256 `169D9247E413ED4E07C1BEEF9EE31C4C9F48347B0A068B094F88EABDDEF8C1DD`。GitNexus绑定同工作树/9fe721f加修改，exec_script上游CRITICAL、嵌入JS UNKNOWN由源码补核；最终结构化all-scope 15已跟踪文件/117映射符号/41关联过程/CRITICAL，无partial/truncated字段，JSON SHA-256 `7297EA25F8B4BB1A2478EE3A2A3708006458FA29CFDCD8F420EC8EBF99367810`，未跟踪新测试/观察器仍单独审查。
+
+下一单次样本已准备于ignored `E:/stella/Caligo/local-evidence/feat004-request-phase-send-20261118/`：向登记好友B发送 `CALIGO-FEAT004-PHASE-20261118-8D6A31F2` 一次，核对唯一请求、回读、同代次seq、closure/matched来源和stop_begin/stop_end。源码/二进制/脚本固定，Python与PowerShell语法通过；尚无本样本grant、未attach/发送，必须用户对应授权并正常重启登录新QQ主根后重新准入。此样本不诱发native故障/延迟，未命中真实迟到继续unknown，也不证明逐请求OS线程。已发送旧marker不重放，旧19020不重接/热卸载，暂不提升feat-004或其它功能。
+
+2026-11-18 feat-004 JS回调对象持有LAB：核对实际START同时保存 `__caligo_res` 与 `__caligo_d8`，正常STOP仅删除前者；后者继续强持有R及listener/sends/pending/session/ms。正式入口ready/daemon启动状态不因shutdown重置，同进程代次不能重新接入，不能把VM反复START当产品能力。新增 `wrapper_callback_lifetime` 用实际START/STOP/生产send、Node --expose-gc与WeakRef验证发送Promise在途、精确回读在途、移除失败三条路径：fake服务移除自身listener引用后，跨job/GC仍由生产别名保持同对象；合成旧listener及deferred Promise完成不改变已停止业务状态、不新增宿主查询。注入media完成stub仅证明路由，fake service/session身份检查不证明独占根或原生pointee寿命。
+
+普通/research定向各18项通过（新寿命LAB1+既有wrapper_send17），日志 `target-harness/feat004-js-lifetime-default.log` / `feat004-js-lifetime-research.log` SHA-256 `8DCD18CBD3BC342DF3C19EA98A5043D3A4B60B3CD659A27EE4CD8BB7B424586B` / `0B7C8DF61DC7DE7DEE04933F59BFB7DF81C9650BA6873C1135D9FB796663E48C`。期间尝试要求删除根后8次GC必须收集对象，结果未收集；此控制不具备规范保证，移除该错误验收断言，原失败 `feat004-js-lifetime-gc-control-failure.log` SHA-256 `A936D10BBB29B9EF6E189288A72BD418FA228FF68B667238FE31E4B2B69A4946` 保留，不称产品缺陷或QQ现场事实。独立只读审查确认显式根链，并收窄夹具media/宿主引用声明。
+
+本轮只有新回归与证据文档，无生产Rust/JS改动，不重建release或重复全仓；沿用前轮同生产源码的all结果。GitNexus绑定当前工作树，具名listener入口已查图，嵌入脚本无调用边/UNKNOWN后由字面量和实际注册源码核对，不按零影响放行。真实QQ native快照/注册、Environment/isolate寿命、请求/代次/停止顺序的实际迟到关联仍未证；本轮零QQ接入、零发送，无需现在重启QQ，feat-004保持in-progress。对象持有证据与范围见[合同补充](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-18-js-停止根与迟到调用-lab)，未提交推送。
+
+
+2026-11-18 feat-004 正式owner清理错误传播（`9fe721f` 加当前工作树）：将正式stop分支撤权/查询取消/resident.close的原实际代码提取为 `close_daemon_owner` 共享路径，以fake HostAdapter的listener移除返回Err，经实际pump/export复现旧路径仍返回0。修复独立锁存OWNER_CLEANUP_FAILED，保留quarantine和hook/resident根；hook正常返回后再检查故障，阻止uv_close与清理失败后的根释放，后续pump/wake/stop/clear/install不再重复原生清理。停止返回独立 `ERR_OWNER_CLEANUP_FAILED=0x24`，CLI明确失败，与Rust panic0x23区分。失败对照移除恰1次、uv_close0次、Weak根继续存活；正常对照返回0且释放本地根。
+
+Windows MSVC定向default/research各44项通过：qq_entry_lab14、resident_lifecycle24、resident_result_retained6，保留既有panic/poison/0x22正常对照。红灯 `target-harness/feat004-close-error-red.log` SHA-256 `5EC0E73798C2FE9298A9F8CA62E339142B548311AB406BD3CACA0EBC780B4B64`；绿灯 `feat004-close-error-green.log` SHA-256 `30717BA9B11E8ADC315D0BE0F3DAC7C589FDBF29786B531314F3D4F6CF977438`。红灯第二个正常用例失败由首个预期断言导致TEST_LOCK中毒，不能当正常清理行为失败。该故障只在自建HostAdapter注入，未在QQ制造清理错误；本轮零接入、零发送，feat-004保持in-progress。
+
+
+最终Windows MSVC、RUST_TEST_THREADS=1的 `init.ps1 -Mode all` 普通/research全仓通过，日志 `target-harness/feat004-close-error-all.log` SHA-256 `0D918347F268E6D3753AFD468955AE2ECB28546F137E8C307E0B7AA0DFE666D0`。新普通/research隔离release均通过，目录 `target-feat004-close-error-default/` / `target-feat004-close-error-research/`；EXE/bridge SHA-256 普通 `9E8FC82C54E61A3CA55C7041D252FBE5D2BAB9E38AB261A38BAC225980F7D140` / `E5BF67480AA55E3280C0C24CB92CF72B333B0B5A53D6ED59340849FE73C21A32`，research `8F7427817541A360731AD30AA613A40E95902567F4D48C430AE5242EF97D5C1C` / `5D68A530EC9B163B3CF7C7A0BB63E8178E7A59E58667B677833825D6D40D5AEE`；构建日志SHA-256 `7DE253DCC4CF3F294944ACB6EEB1851583BDDDF2D33F231C01F29E66E88ACFE3` / `B051782206EE79EA8C01F9D28B3F77774E5A80E79F8AFF178668143A39B23F05`。固定源码/产物/日志清单 `target-harness/feat004-close-error-build-evidence.json` SHA-256 `00E70461FCB026BBCA12856986010C2CC3306C0A1AD45621B7BCEB8E21B70C72`，新构建未加载QQ。
+
+GitNexus仍绑定本工作树/9fe721f加改动；首轮detect因shadow页只读回放失败，完整强制重建至独立 `target-harness/gitnexus-close-final-index` 后重查成功。最终结构化all-scope：14已跟踪文件、102映射符号、44关联过程、CRITICAL，无partial/truncated字段；JSON SHA-256 `FF16861D47E1FB4774C3E192430A9060D0DD3E046A0E803D21C3A2937D204B3F`。编辑前upstream CRITICAL/动态缺边和索引裁剪继续保留，不把计数当安全证明。四种本地停止语义已写入[合同](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-18-正式-owner-清理失败传播)。下一步优先对象持有和可关联迟到证据，不重复用零发送样本证明未知drain；暂不要求用户重启QQ。未提交或推送。
+
+2026-11-18 feat-004 owner Rust hook unwind 隔离（基于 `9fe721f` 加本轮工作树）：自建fake QQNT、实际extern C pump的独立子进程在普通tick/停止hook抛Rust panic时，旧版均以3221226505退出并报告non-unwinding panic。修复在Rust hook调用外加窄catch_unwind、锁guard留在边界外，hook panic或hook锁中毒锁存OwnerHookFault/quarantine并请求worker停止；拒绝后续hook调用与替换/清空，保留原捕获根，包括未安装SHUTDOWN_READY的场景。停止返回 `ERR_OWNER_HOOK_FAULT=0x23`，CLI明确失败；shutdown wake在hook锁内提交，避免该入口在故障发布间隙继续唤醒。常规并发wake的原子检查仍有竞态，仅证明顺序调用被拒绝，不作全并发静默声明。
+
+default/research qq_entry_lab各12/12通过，含normal/stop panic与poison独立子进程、Weak根寿命、重复pump/stop/clear/install后不重用和不假成功，既有正常/timeout/0x22对照通过。红灯/最终定向日志 `target-harness/feat004-owner-panic-red.log` / `feat004-owner-panic-green.log` SHA-256 `E6DACE1DE63C79CD1B9AECCE61606BC8EDA4AAE19A76DF73C7946FA26C8C84C7` / `6F4D637D6747990B9E08C46ED7AC400C7B4D48ABE838B9F86A68FCECA73A4891`。Windows MSVC、RUST_TEST_THREADS=1的 `init.ps1 -Mode all` 普通/research全仓通过，日志SHA-256 `D0C9B3F2B81E8D8D1905F25006A76BF33409B806F61192BA651D0A31EABB04BF`。这是Rust unwind隔离，不捕获SEH、访问冲突、panic=abort、panic hook终止或原生UB；不回滚可能损坏状态、不在QQ制造panic。
+
+普通/research隔离release均通过：目录 `target-feat004-owner-panic-default/` / `target-feat004-owner-panic-research/`；EXE/bridge SHA-256 普通 `6A8973B9C0AD8E9D80FDCFF85F020D78F041C8D65BEADDAB81E4B0C74AEE0ABA` / `059CB97D597A27F25D9A8BFF87BD479541B0401E3C6A653769CD7DCF2E53CCEB`，research `9E9C9724B4DB4D02010E1498807BB933CB2A0B4D38768481B62240F138356DAC` / `B904C7A381F284BEEC19343C571E3CBEAE58B2AD3C6C2F8260BFB7619A27AF79`。构建日志SHA-256 `CB8B09C54743B94AD112AFAD88AE08D59092DC36996519BFEA1AFE2DD788B391` / `1D54F7524CB862A6A642A4804013C6CC0B37CEB9099E503A7C80FB0115199C8C`；固定源码/产物/日志清单在 `target-harness/feat004-owner-panic-build-evidence.json`。新构建未加载QQ，本轮零接入、零发送；不从旧19020推断当前健康。
+
+同时完成[四项功能门与对象寿命清单](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-18-完成门对照与剩余最小证据)：正式wrapper与历史G3分开，DLL PIN不替代opaque pointee寿命，现有JS TID仍无逐请求关联。GitNexus绑定本工作树/9fe721f加修改，pump callback入口UNKNOWN（动态FFI无边）、CLI map HIGH；源码核对实际注册，最终结构化all-scope为14已跟踪文件/21映射符号/526关联过程/CRITICAL，无partial/truncated字段，保留图裁剪限制。feat-004仍in-progress，下一块明确核对正式停止 `r.close()` 返回Err当前仅记日志的传播与根保留，以及请求/代次/停止关联的实际迟到证据；不把本次panic修复算作清理失败或QQ全局drain已通过。后台检查完成期间会话显示停顿，恢复后核对原日志与指纹，没有重跑/重发现场。
+
+
+2026-11-18 feat-004 停止/回读寿命修复版零发送现场通过：用户正常重启后按最后启动实例选 QQ PID `19020`（创建 `2026-11-18T09:30:30.0036884Z`）。固定源码/脚本/二进制、模块 hash、PE/backend 和唯一 Environment 准入通过，research 新构建一次接入、观察器安装与登记账号登录核验通过。独立审计确认零发送、空请求账本、manager/owner退出0、CLI实际 shutdown `0x0 (Ok)`、HTTP/SSE端口关闭，未出现shutdown_results未收尾诊断。QQ19020当次仍响应，指定bridge保留，不重接或热卸载。
+
+本轮未注入待ACK结果或native故障，没有真实回调记录，故0x22持有/退休回读故障修复继续由下方LAB证明；不提升真实迟到、final owner或QQ全局drain。首次独立审计把PowerShell日志当UTF-8读取失败，按原UTF-16 BOM修正后完整通过，现场无重复接入/停止。证据ignored `E:/stella/Caligo/local-evidence/feat004-stop-lifetime-zero-20261118/`；preparation/runner summary/独立审计/entry/owner-stop SHA-256 为 `BB5DBBF7FEB462FF00F6126AD19CD9DA845DF9009DA7CFB3EB75C054E649AD72` / `2CFCD5A7EE7C61609DC14428F2F92946A57A222F93775064F70A446A98470A90` / `10A5BCFD97F45FA382F3A4DB23AB0BCC3D4F7362D0C07CFC07788BA169FC1E9F` / `A14BB5F75E74B5A4D58DFF482CDEDED7D33121BAA37A44839A727E2F357D52E8` / `B0B1FCAF1D5DA6D39B9B429BF45E5818C277321A2E6AAE76CE16889924B4FA7F`。无Rust新改动或构建，沿用同产物全仓通过；feat-004保持in-progress。后续先离线收敛剩余原生owner/停止边界与异常清理合同，不自行新增发送或复用旧代次。
+
+
+2026-11-18 feat-004 停止与退休回读离线修复（起点 `9fe721f` 加前轮工作树）：生产 JS 的 deferred 精确回读复现旧请求被替换后把新 pending 结果覆盖为旧 native ID 的 done，以及实际 poll 退休后结果重建。现查询启动、成功/失败回调都检查捕获 pending 仍为当前对象，共享终结检查 stopped/current/done；窗口内合法迟到成功保留。普通/research wrapper_send 各17/17通过，覆盖替换/退休成功与拒绝、停止、过期前查询启动和正常/窗口内成功。红灯日志 `target-harness/feat004-readback-red.log` SHA-256 `FF0AB3361FFE1E366E670DA7F613F3B410DF9DC5F1643BFAC1102BDDF7523635`；绿灯/default与research SHA-256 `DF6212926E64D386D51677199295D49E97A322004CDD0756D969A161DB175629` / `B2E71F2EF43C45905950B7B6A4D81B276D278F8AB7A4B841BCEFEC984D3F9A13`。替换场景由夹具注入，不声称正式入口已复用 request ID；退休路径使用实际 poll。
+
+另一确定性 LAB 复现最后交接后新强身份结果仍留在 resident，而 worker 已 LocalStop、shutdown 却返回0并可释放根。正式入口现独立持有 resident，只有 worker 已结束且无待交接/待ACK/真实未决结果预留才释放；期限内不能证明时返回 `ERR_SHUTDOWN_PENDING_RESULTS=0x22`，CLI明确失败，保留结果而不重发或自动重启。pump 已关闭后的重复检查不再唤醒/关闭旧libuv handle。已ACK unknown 的迟到容量曾被新判定误当未确认结果；独立红灯后，只有Closed且该已ACK终态占位可被排除，实际队列/未ACK预留仍阻止释放。入口10项+结果保留6项最终通过，包含真实worker LocalStop、自建QQNT关闭、Weak根寿命和精确payload保留、显式ACK后释放及空resident等待worker退出。
+
+停止误报红灯/已ACK窗口红灯/最终绿灯日志分别 `target-harness/feat004-stop-retention-red.log`、`feat004-stop-grace-red.log`、`feat004-stop-grace-green.log`，SHA-256 `EADB947D99C203192902E9CC620248CBB7DA12161137FD734EE5F166DBFB813F` / `5EC1E58994F4A62FDE2F3E149C4EB7FBA8A90018B7DA94A4AD9C9F073DD29FC5` / `B06BB2892099B32FC326CB9473FB3A25F638F7197387F89BE33270F6CFA43B5D`。中途Windows命令行超长、并行编辑类型/穷尽匹配编译失败和临时通道接收端寿命夹具失败分别留档；它们不是行为通过证据。此持有仅在宿主内存，不是磁盘持久化或自动恢复；显式ACK重试只在LAB，无生产端伪造确认。既有owner清理锁中毒/panic路径未闭合，不能概括为任意异常安全。QQ真实迟到、native最终owner/drain仍未证，本轮无QQ接入或发送，feat-004保持in-progress。
+
+
+最终 Windows MSVC / RUST_TEST_THREADS=1 `init.ps1 -Mode all` 普通/research全仓通过，日志 `target-harness/feat004-stop-final-all.log` SHA-256 `C53EC729EBC3F86DE7A8BEE5CE3F7E749274DBC28B3734CF612ACD4675D7778B`。普通/research隔离release目录 `target-feat004-stop-lifetime-default/` / `target-feat004-stop-lifetime-research/`；EXE/bridge SHA-256 普通 `DF44BE72E89EDEC9C5F386261C09C890CBBC4DBC362891BBD207545F51823C56` / `465DD5B8E28AC1CA478121942D12EB6D50EC1CF14292E95184FEC6224450DAC8`，research `86F2FD811B6ECFF329A9BCC503FA31D27D1E5E6864A43B4B0CE9DDE189B41D39` / `1FB1555F984DEBC8024FF4C03C60ADE42C761B7FE35F942BD0D6308CBDCAD6D6`；构建日志SHA-256 `C9890DCA2F3742AC5183DC27A7BC7BAE0E9EEE0A42DD50751C9E3DED917A0E9C` / `54B50043DE6FD5E7F4FA546FD8614D9FD3039F42D89A43E5C9E7C0023EF1DE75`。GitNexus绑定同一工作树/9fe721f加改动，相关upstream CRITICAL；刷新后的结构化all-scope为14已跟踪文件、66映射符号、36关联过程、CRITICAL，无partial/truncated字段，未跟踪观察器仍单独审查，不以计数降低影响判断。结果JSON SHA-256 `2D2A1F244FDAACD1EECADA0466BE909EF2800D0C21BD740FE2AAF9AF92685A7B`。
+
+修复版零发送现场准备 ignored `E:/stella/Caligo/local-evidence/feat004-stop-lifetime-zero-20261118/`，清单SHA-256 `BB5DBBF7FEB462FF00F6126AD19CD9DA845DF9009DA7CFB3EB75C054E649AD72`；PowerShell语法、Python语法与源码/二进制固定完成，未执行。下一步用户正常重启并登录测试QQ后重新核验最后启动的新主根，单次接入、登录和正常停止，零发送；旧62780不重接或热卸载，既有文本不重发。文档门PASS（15 live docs / 510 links / 38 historical / 10 features），diff检查通过；尚未提交或推送。
+
+2026-11-18 feat-004 单次私聊与 JS 线程现场：用户正常重启后，按最后启动实例选择 QQ PID `62780`（创建 `2026-11-18T08:59:51.8994960Z`）。与前轮相同固定源码/二进制，经模块 hash、PE/backend、唯一 Environment 准入与登记账号登录核验后，只向好友 B 发送一次 `CALIGO-FEAT004-THREAD-20261118-6F41B2C9`。发送与紧接的 HTTP get_msg 成功，独立帧/CRC 账本审计确认唯一请求为 Queued → DispatchIntent → NativeStarted → ConfirmedSuccess，稳定 native ID 与持久消息/回读一致；用户确认 B 仅收到一条且完整文本相符。回读来自持久账本，不冒充 QQ 原生查询；样本不重发。
+
+两批请求轨迹同一代次/临时序号、八阶段齐全且无 incomplete。新观察器采到 6 条 JS 入口（add、update、promise、readback 各一条及 recv 两条），callback_tid 均 `2440`，与 owner/报告 TID 相同。这直接证明对应 JS 入口的 OS 执行线程；线程记录自身没有 request ID，保持 association=unverified，不能把相邻轨迹提升为逐条请求关联，也不证明 native 生产者、回调发生顺序、真实停止后迟到、最终 owner 或 QQ 全局 drain。manager/owner 退出 0、HTTP/SSE 端口关闭，QQ62780 当次仍响应且指定 bridge 保留；不重接、不热卸载。feat-004 保持 in-progress，下一块先设计/验证停止与代次边界的最小观察合同，不自行重发或新增发送。
+
+原始材料 ignored `E:/stella/Caligo/local-evidence/feat004-js-thread-send-20261118/`；preparation/runner summary/独立技术审计/独立轨迹/用户确认/entry/acceptance summary SHA-256 分别为 `104142FD6C99C339E84F6340A721EA225D586D9694A02D6F01BFC20F4D5F7D1C` / `2127AD63638E0CB6C0A6E425B9B96B591C32CDCCDD5F1CE7806BA7BE49E5EB04` / `4AEF0AE413EC5C871BE4BE8656E9054FA35030CFC2E75D5D2A3EEBF1CBAFB8BD` / `D4B5A87FE8766EF94820C99D53DF82A60478CB1AC82FE9456B70F5AFC6121C5E` / `56D1F8F4795F10FD22C2D15F567E027EF8696DE8264E4111761F4673AE3DDA4C` / `49FCBB0A5C421D6F71BBBE6F5FA8CA34D5C314E9F3BD8B69E957B1C71E490890` / `A4FB7E4AE92E49DD384F73A017FE1C233412E11DB1AEC5730DBD3BD63CCAE661`。初次审计误把有帧 journal 当 UTF-8 JSONL 读取而失败，随后按真实帧格式与 CRC 完整独立核对通过，现场请求未重复。无 Rust 改动或新构建，沿用下方同产物全仓验证；文档门和 git diff 检查另行执行。
+
+
+2026-11-18 feat-004 JS 线程观察器零发送现场：用户授权现场并指定最后启动的 QQ，选择 PID `63032`（创建 `2026-11-18T08:53:47.8630908Z`）。固定源码/脚本/二进制与模块 hash、PE/backend、唯一 Environment 准入通过；research release 一次接入，`js_callback_thread_install` 成功，listener、登记账号登录核验和合成 stopped 分支通过。独立审计确认零发送、空请求账本、manager/owner 退出 0、HTTP/SSE 端口关闭。没有真实回调记录，不提升实际 OS 线程、迟到或 drain 证据；63032 当次仍响应并映射指定 bridge，不重接、不热卸载。首次只读枚举命令因 PowerShell 查询引号无效而失败，修正只读枚举后准入成功；加载/发送未因该失败执行或重试。
+
+证据 ignored `E:/stella/Caligo/local-evidence/feat004-js-thread-zero-20261118/`；preparation/runner summary/独立审计/entry SHA-256 为 `B8725BBF7BB75CBE37ECACBF6B1AB4A09A6F2DD5877CEEEE232604CF6DA0F176` / `2CFCD5A7EE7C61609DC14428F2F92946A57A222F93775064F70A446A98470A90` / `A1AD10D44FEF8BE7DC968143CB53C97A413B51684624290FA8ADBADCEAAA37C3` / `5BD940CDDC64657E3015D4164177AE4352BED7AF620CF8AF888887E29DC12F2B`。单次好友 B 文本 `CALIGO-FEAT004-THREAD-20261118-6F41B2C9` 的用户授权已记录在 `feat004-js-thread-send-20261118/grant.private.json`，尚未发送；等待用户正常重启并登录后，继续选择最后启动的新 QQ 主实例重新准入，无需重复授权。已修正本机 sender 对旧混合引号轨迹的解析，固定更新脚本 pin；本轮无 Rust 改动，沿用下方同构建全仓结果，feat-004 仍 in-progress。
+
+
+2026-11-18 feat-004 续验（起点 `9fe721f`，工作树 `E:/stella/Caligo-feat-004`）：两个真实 caligod 进程、真实命名管道和丢 ACK relay 复现 core 重启复用 epoch=2 时，存活 worker 心跳正常但未确认结果不重放。修复在每次新连接 HelloAck 后重置 outbox 的 sent_epoch，保留 notice 身份与精确 ACK；回归确认同一个 worker/resident、结果重放两次、强身份保持、保留项清空，合成宿主实际发送仅一次。红灯日志 `target-harness/feat004-core-restart-red.log` SHA-256 `F1FAC82011F3C9B58F7A67BA774EDBC0FC7DD5B5729BF65646EED901116FEE69`，绿灯 `feat004-core-restart-green.log` SHA-256 `D2F5FC77F5F4E3EDA60C002C0C5F7506F6B1696250EB842AD8FB0646023EFF09`。default/research 两组 core_restart_query_lab 3/3 + daemon_client_lab 15/15、ACK 定向 6/6 通过；这是合成 HostAdapter 的 LAB，不证明 QQ 重启现场或跨宿主持久化。
+
+新增 research-only [JS 入口线程观察](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-18-js-入口-os-线程观察已实现现场待验)：五个无参原生观察器忽略 callback-info，记录固定种类/OS TID/临时保留序号，128 次预算和不完整标记；全部安装成功才启用，合成停止探针不采样。精确 QQNT hash 的三个导出、隐藏返回缓冲区和结果字节 21 项静态断言通过，本机 verifier/report SHA-256 `05CEFFA07FB8D3D9ABFD36E8E58E2633F7E1B0C51450FB2616FFD3751F49C301` / `6C6236990F60325012558CA5ED8BEEF43AFEE66BB4A1E6A19177FACC3C1E5F41`，材料 ignored `E:/stella/Caligo/local-evidence/feat004-js-thread-abi-20261118/`。首版离线审查纠正了 Maybe<bool> 直接整数返回假设；最终实现按固定映像 method sret 调用。自建线程采集 1/1、实际生产 JS 合同 16/16 通过。该观察不具备请求关联或事件顺序证明；记录明确 association=unverified，不能冒充 native 生产者线程或停止前后时序。
+
+Windows MSVC、RUST_TEST_THREADS=1 的 `init.ps1 -Mode all` 普通/research 全仓通过，日志 `target-harness/feat004-final-all.log` SHA-256 `545F3367BA3907157C2896628FC34CAC278603258B51B5B77A82BCE23BB91FF3`；普通/research 隔离 release 构建通过，目录 `target-feat004-restart-thread-default/` 与 `target-feat004-restart-thread-research/`。普通 EXE/bridge SHA-256 `1150A1DA6B7405E2EA4FDD852D5EC799C56C48ED796A9090020B359A8479A835` / `FD346185318C562B5B44F8C4CCE5BE0C7E8C2F6D114261D3C4C0D53A1BBC745D`；research `1C59DD9C5E47363E7DE48E28E21CB5F0F4D767A39C02C44FFA127BF6F30F85EE` / `1B01DEED46F286C0EC972537C39C8840C978EF405BF4734215C53ABEB13666AE`。构建日志 SHA-256 `E4D6359CB7B0B2FA60B317274E14FE457CF9280602C5EABD3CACB6D4F0193672` / `A89A3C449CC3E9BBC9B26A48954DE72384D3DC45D7D4275E2E5A6E1BB92D16C2`。初次 Git Bash cmd 路径转义错误发生在测试启动前，随后正确引号执行通过。
+
+GitNexus 已恢复 Windows 本机独立索引，绑定 `E:/stella/Caligo-feat-004` / HEAD `9fe721f` 加工作树；session_loop 上游 HIGH，共享 exec_script 上游 CRITICAL。最终完整结构化 all-scope 返回 8 个已跟踪改动文件、15 个映射符号、521 条关联过程、CRITICAL；JSON 不含 partial/truncated 降级字段（CLI 人类摘要会截断，因此另保留 `target-harness/feat004-final-detect-structured.json`）。新未跟踪 callback_threads 模块已纳入索引但不在 git diff 统计中，另行完成源码/ABI 与测试审查，不把图缺边当零影响。索引仍有候选裁剪、跨语言拒绝和流程截断限制。文档最终检查 PASS（15 live docs / 507 local links / 38 historical entries / 10 features），git diff --check PASS。准备脚本四项 PowerShell 语法和缺授权在 manager 创建前拒绝的合成负例通过；首次负例因无 state 提前停止，随后使用纯合成 state 单独验证缺 grant，未触碰现场。
+
+现场仅准备：ignored `E:/stella/Caligo/local-evidence/feat004-js-thread-zero-20261118/` 与 `feat004-js-thread-send-20261118/` 保存固定源码/二进制/脚本清单。未生成授权、未接入 QQ、未发送；需用户正常重启并指定已登录的新测试根。先零发送检查安装/登录/正常停止，再以新代次对登记好友 B 单次发送 `CALIGO-FEAT004-THREAD-20261118-6F41B2C9`（须对应授权），核对轨迹/账本/线程与对端数量，unknown 不重发。实际 QQ 线程、真实迟到、最终 owner/drain 仍待证，feat-004 保持 in-progress。现有进程健康未重查；历史 G3 合同独立保留，业务拒绝语义继续不核验。
+
+
 2026-11-18 feat-004 管理器停止错误保留版零发送现场（源码 `41a2000a054f58a8e67961415fd5ce9786559f15`）：用户重启并登录后选择新 QQ 主进程 `30968`（创建 `2026-11-17T23:31:52.4795379Z`），未映射 bridge、响应状态、固定模块 hash、PE/backend 与唯一 Environment 的只读准入通过。research 构建一次接入、登录核验及正常停止通过；独立审计确认零发送、空请求账本、listener 与 owner TID 一致、manager/owner 停止码 0、端口关闭。同代 QQ 仍响应并映射指定 bridge，不重接、不热卸载。本轮不制造真实 journal 故障，管理器锁存故障仅有下条离线容量注入证据，且锁存不跨进程；真实 callback 线程、迟到及 drain 未证，feat-004 保持 in-progress。
 
 普通 EXE/bridge SHA-256 `EB05D47F1795E2068B558A9DB05B3015609118A43719C0D3C53F8A917377D5A9` / `6B33B00A5620D777B0DB864138B262C1F16C3F0505C5C964433AF5D2B4A0F6DE`；research EXE/bridge `CD4C92585F96D81359BDBFC32800ADFF4E3AE6FA2AC963B3F26570635F551290` / `37911305221FD787CAA8012B8B3356DD89CB05355A34F4552E37E47467EF1A0A`。构建日志 `target-harness/feat004-manager-stop-default-build.log` / `feat004-manager-stop-research-build.log` SHA-256 `8A7E7D20BBE527787B13202A88A05B0285044986F4AD6052D7490D277FA3855F` / `C3C5D49949D1DC3918FB8B7FB2993B56E79632B6250F6D5B6E36D8793FED0C61`。原始数据 ignored `E:/stella/Caligo/local-evidence/feat004-manager-stop-zero-20261118-41a2000/`；准备清单/preflight/runner summary/独立审计摘要/entry SHA-256 分别为 `6F22868C40352FAF4A86CF07F4DE5B541177FE500364A1CF6A6B549BA305813A` / `485A36E251EF531FF72EC94851D713B0083F1D11243494148C31D3A0B167D419` / `2CFCD5A7EE7C61609DC14428F2F92946A57A222F93775064F70A446A98470A90` / `B8D0561AFD8266789EB46B1DE23AB1F1F835F4F2D86338F25F18EE9E8BBA9784` / `0710D9ED77EEB81AD34169061CF5854DAFA4275F4D1A3E16858D493E189078BD`，脚本 hash 见准备清单；审计合成正例与发送数/缺关闭阶段/hash 三负例通过，`target-harness/feat004-manager-stop-audit-selftest.log` SHA-256 `04CB6B1317DDD5353D52606B57E48331E32C56E548C0E0335287EA8656DFFCC3`。

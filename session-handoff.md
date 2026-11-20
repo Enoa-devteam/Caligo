@@ -1,5 +1,131 @@
 # Session handoff
 
+2026-11-21 feat-004 阶段累积工作已归档：代码/测试/工具与文档分两个提交，补齐两个新分析器的 CI 入口（此前只在本地跑过）。提交前重跑 docs PASS、default 496 项、research 542 项、7 个 Node 套件 65 项，均 0 failed；`cargo check --workspace --all-targets` 无错误；GitNexus all-scope 为 critical 且未 partial。本轮未接入 QQ、零发送、未重接或卸载 bridge。feat-004 仍 in-progress：PR #12 保留的 native 持有者、最终释放与全局 drain 尚无现场证据，现有固定构建也没有已验证的非持有式 QQ 采集入口。下一块需先决定是继续该取证路线，还是把该项按已记录 unknown 归档并交给 feat-005 的原生链路证据；任何新现场仍须新鲜指定 QQ 与独立授权。旧请求不重发。 [进度](progress.md#current-state)
+
+2026-11-20 固定镜像已核对异常清理与正常返回共用的解锁路径，以及库存计数的可逆性。复跑 `python -B -E target-harness/feat004-unwind-evidence/verify_evidence.py`。后续先在自建宿主离线验证，去掉专用调用方检查点后，能否用同一线程的展开上下文和外层实际继续执行识别原帧退出。独立移交凭据另行核验，缺少任一项继续保留 unknown。当前无需接入 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 已在自建宿主验证四槽轮换的同类重入漏采、异帧拒绝及异常后同槽复用。复跑 `target-harness/feat004-reentry-unwind/run-lab.cmd`。下一步先离线核对固定镜像所选路径是否有独立于可逆计数的移交凭据，以及可可靠识别异常展开后退出原帧的边界。缺证窗口保留 unknown，当前无需接入 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 已核对固定镜像正常路径的外层返回候选。`target-harness/feat004-outer-completion/run-lab.cmd` 可复跑同槽尾调用及缺证对照。下一步仍离线核对是否有独立于可逆计数的实际移交凭据，并验证同类重入和异常返回时四槽是否会漏掉外层回执。当前无需接入或重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 固定镜像调用续点和尾调用已分类。自建混合四槽能在轮换分配器槽时保留同线程、其他线程的接收者与弱零分支。复跑 `target-harness/feat004-continuations/run-lab.cmd`。后续离线研究真实共享子调用能否补到外层移交与清理、实际栈帧可核范围和独立失采凭据。缺少返回或独立凭据的窗口保持 unknown。当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 自建宿主的四槽按实际移交入口轮换通过，观察器对所有线程使用相同初始布局。复跑 `target-harness/feat004-roleless-rotation/run-lab.cmd`。固定 QQ 下一步须离线验证可确认哪些实际调用续点，四槽能否兼顾接收者与弱释放，以及是否具备独立移交次序。当前仅有夹具级、非同类递归的移交观测证据。无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 固定镜像已定位路径内冲刷和补充阶段点，验证共享线程跳板、按需 TLS 缓存和可逆状态计数的边界。复跑目录 `target-harness/feat004-rotation-eligibility/`。恢复后布局回退的窗口继续保留 unknown，即使起末记录完整。若继续研究，先验证覆盖旁路的阶段交接与独立漏采凭据，当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 自建宿主的四槽动态轮换通过已知线程角色与阶段的正例，并复现启动交错后布局回退及其他漏采。复跑 `target-harness/feat004-rotating-observer/run-lab.cmd`。后续先离线核对固定 QQ 是否有同线程的可靠阶段入口、新线程准入信号和独立冲刷缺口凭据。立即读回结果只在该调试停止内有效，跨恢复需再次核对实际布局及覆盖。当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 固定构建已验证候选缓存路径的固定四点覆盖缺口，受控停顿能改写实际弱计数终止分支。复跑 `target-harness/feat004-hardware-budget/run-lab.cmd`。下步若研究动态轮换，先在自建宿主验证其他线程连续覆盖、槽位重装期间的证据缺口及失败后保留 unknown。尚无 QQ 的线程分工、原生移交或等价覆盖回执，不需要重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 自建子进程硬件执行断点已取得实际接收者、同代零值分支和分配器移交。复跑 `target-harness/feat004-hardware-observer/run-lab.cmd`。后续先离线核算固定 QQ 的所需观测点、每线程断点预算、转移失采判据和捕获暂停的影响。夹具拥有独立分配器序号，真实镜像尚未证实有等价移交记录。当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 固定镜像内置分配器通知只覆盖分配后和实际归还前。缓存往返可漏掉中间转移而保持相同的边界字段。复跑目录 `target-harness/feat004-observer-entrances/`。下一步如评估新的采集入口，先在自建宿主验证原生接收者及实际分支、成功移交和受保护的失采回执能在不新增引用时同时取得。当前没有等价现场入口，无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 自建宿主的源码观测点能串起实际虚调用接收者、同代零值快路径和分配器移交，缓存冲刷失采、无票号缺口的失采和溢出均保留 unknown。复跑目录 `target-harness/feat004-host-observer/`。下一步仍离线评估固定 QQ 构建是否有等价取证入口，须保留分配器移交的可信因果和失采判据。夹具采集依赖自有源码且未部署，当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 固定构建弱计数快路径和竞争终止路径已用静态与自建夹具复核。复跑目录 `target-harness/feat004-weak-release/`。下一步在自建宿主先验证观测手段能同时取得宿主已持有的接收者、实际分支和分配器移交，覆盖内部缓存冲刷与失采。取得无附加强弱持有且可核因果的证据后再评估现场。当前无需重启 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 同址复用和多线程释放的非持有式因果重建通过。复跑目录为 `target-harness/feat004-concurrent-release/`。下一步离线核对固定构建上是否存在合规的观测方式，能同时提供实际接收者、可信的分配器移交与引用操作来源。夹具已验证乱序报告，真实 QQ 的原生采集和弱计数快路径仍没有运行证据，暂不需要重启 QQ。旧请求不重发。 [证据与边界](progress.md#current-state)
+
+2026-11-20 同一分配代次的非持有式采集已在自建 MSVC 夹具验证。`target-harness/feat004-nonowning-release/run-lab.cmd` 与同目录 `check_capture.py` 可复跑。后续先离线核对实际可用观测方式是否能给出分配代次、引用槽复制和匹配的终止调用回执。夹具线程交接已排序，共享日志序号不能代替真实并发中的操作因果。固定镜像尚无可用运行采集方案，不需要重启 QQ。旧请求不重发，旧进程不重接或卸载。 [当前证据](progress.md#current-state)
+
+2026-11-20 固定镜像已确认监听器与同块控制对象的构造、两个引用计数及终止调用目标。复跑 `python -B -E target-harness/feat004-typed-listener-release/check_typed_release.py`。下一步先离线验证可在不改变持有关系的情况下，同代记录实际 service/adapter vptr、登记与快照复制、析构返回和命中的 allocator 效果。N-API 删除可经队列延后，须取独立回执。现有现场样本无法补出这些事件，待采集方法通过受控验证后再评估零发送 QQ 观察。旧请求不重发，旧进程不重接或卸载。 [证据与边界](progress.md#current-state)
+
+2026-11-20 登记项、快照引用及最后释放的离线判据与对照已完成。固定镜像验证见 `target-harness/feat004-listener-identity/check_fixed_pair.py`，C++ 夹具由该目录的 `run-lab.cmd` 重跑，构造证据由 `check_witness.py` 重跑。下一块先离线核对正式 adapter 的实际接收者类型和控制块计数约定，寻找能提供同对象终止释放与回收回执的采集入口。现有 JS 现场材料不含原生对象关联，暂不需要重启指定 QQ 或授权发送。旧请求不重发，旧进程不重接或卸载。 [证据与边界](progress.md#current-state)
+
+2026-11-20 已复验自有关闭根与固定原生候选释放分支。离线重放入口 `python -B -E target-harness/feat004-native-ownership-replay.py`。既有现场的迟到 Promise 与同 pending、同保留 `R` 和 JS owner OS TID 已关联。下一步先离线确认能否辨识同一登记项、真实快照引用、控制块和析构目标。只有收集方法能区分候选释放、实际最后一次释放与 Environment 失效，才提出新 QQ 现场观察；当前没有需要重启或发送的现场步骤。旧请求不重发，旧进程不重接或卸载。 [持有关系和证据索引](progress.md#current-state)
+
+2026-11-20 当前固定研究构建在 QQ `35000` 完成一次新私聊及一次同 ID 的 `get_msg`。CRC 账本 `ConfirmedSuccess`、持久原生身份、本端回读与两份停止快照均核实，B 侧确认仅一条且内容相符。对端回执与技术索引已绑定，现场材料在 `local-evidence/feat004-final-normal-20261120-35000/`。正常成功路径和此前同构建的迟到隔离样本均已有证据。下一工作块按 PR #12 的原生寿命条件收集实际对象持有与最终释放证据。该样本已提交一次，旧请求不重发，旧进程不得重接或卸载。 [现场与证据](progress.md#current-state)
+
+2026-11-20 清单计时解析修复已通过原始日志回放。未绑定模板位于 `local-evidence/feat004-parallel-timing-fix-20261120/`，原始回放命令为 `python -B -E target-harness/feat004-manifest-timing-replay.py`。 [回放和完成门](progress.md#current-state)
+
+2026-11-20 并行清单校验在指定 QQ `47760` 完成一次授权现场。清单校验 124.472 ms，CLI 至 listener 停止 151 ms。依靠同请求账本及状态对照，1 条自然迟到 `promise_fulfilled` 的隔离和 ACK 收尾均已证实，送达保持 unknown。现场归档 `local-evidence/feat004-natural-late-parallel-20261120-47760/`。 [现场证据和边界](progress.md#current-state)
+
+2026-11-20 预启动停止助手在指定 QQ `66188` 上完成单次授权验证。提交报告至 listener 停止 333 ms，其中 CLI 至停止 259 ms。同请求 ACK 收尾通过，1046 ms 窗口内未观察到关联迟到，送达与隔离保持 unknown。管理器在取证后退出，QQ 同代仍响应并保留 bridge。现场归档在 `local-evidence/feat004-natural-late-warm-20261120-66188/`。本样本授权已用尽，旧请求不重发，旧进程不重接或卸载。后续若继续研究，以本轮分段计时为基线，先离线验证可行的缩短方案。 [现场证据](progress.md#current-state)
+
+2026-11-20 单次在途现场已用尽本样本的授权。QQ `58112` 一次提交，分阶段停止的同请求 ACK 收尾已核实。四条关联回调均在停止前，真实迟到隔离仍为 unknown，发送终态为 `DeliveryUnknown`。owner、管理器正常退出，QQ 同代仍响应并保留 bridge。归档 `local-evidence/feat004-composed-single-20261120-58112/`，原准备包在同名前缀的不带 PID 目录。旧样本不重发，当前进程不重接或卸载。后续先离线分析如何在保持业务路径的前提下提高自然迟到的取证机会，任何新现场需新鲜指定 QQ 和另行单次授权。 [现场证据](progress.md#current-state)
+
+2026-11-20 分阶段停止零发送现场通过。指定 QQ `59384` 登录核验后对同连接停发，同一 owner 观察 1043 ms 并正常停止。管理器仍在线，采集第二份空账本后正常退出。QQ 同代仍响应并保留 bridge。后续要核验实际在途 ACK 或真实迟到隔离时，需使用新鲜指定测试 QQ，并先获得新样本的单次授权。该进程不重接或卸载，旧请求不重发。 [现场证据](progress.md#current-state)
+
+2026-11-20 现场前的离线串联通过。真实 Windows 管理器及管道在假宿主完成观察和 worker 收到 ACK 后才退出，单请求落账通过。零发送准备包及现场结果保存在本机忽略目录 `local-evidence/feat004-composed-zero-20261120`。 [进度与证据](progress.md#current-state)
+
+2026-11-20 研究观察的 bridge 收尾已接线。先停监听和采样、关闭 owner pump，再交接 Rust 已拥有的结果并等 core ACK 和 worker 退出。无 ACK 或交接端关闭保留结果。真实命名管道验证在途 `DeliveryUnknown` 落账和 ACK。下一块离线串联绑定账号的 core 停发、维持管道的研究观察、最终 manager 退出以及新顺序的账本审计。既有样本不重发，真实迟到隔离仍待证，feat-004 保持 in-progress。 [进度与验证](progress.md#current-state)
+
+2026-11-19 研究版 core 停发第一步已接通，管理入口绑定当前账号和 `connection_id`。真实 HTTP 和命名管道 LAB 验证拒发、同 actor 重连仍停发、旧连接拒绝、旧请求持久化与 ACK。下一步离线实现并验证 owner 最终交接和 worker 等 ACK 的阶段，包含超时或断连保留；核心停发完成后才能进入该阶段。旧请求不重发，`44116` 不重接或卸载，feat-004 保持 in-progress。 [参考](progress.md#current-state)
+
+2026-11-19 已离线复现 manager 先关管道时的 `0x22` 收尾机制。真实管理器和 worker 对照中，先退出可复现 `DeliveryUnknown` 以及已退出 worker 仍伴随 bridge 未确认状态；先等持久结果 ACK 则正常释放。现场只记录合并门超时，具体挂起项仍待诊断。下一块先验证停止期间保留结果与 ACK 通道的顺序，再安排实际接入。旧请求不重发，`44116` 不重接或卸载，feat-004 保持 in-progress。 [诊断与证据](progress.md#current-state)
+
+2026-11-19 单次在途停止现场已有证据。指定 QQ `44116` 一次接入并核验登录，唯一文本请求提交后启动退出，OneBot `1501`、账本 `DeliveryUnknown`。1 秒观察和最终采样通过，四条关联回调都在停止前。停止返回 `0x22 ShutdownPendingResults`，管理进程和端口已关闭，QQ 同代仍响应并保留 bridge。停止前与失败返回后两个账本副本一致。旧请求不重发，旧进程不重接或卸载。下一块先离线复核提前退出时的结果收尾，真实迟到隔离仍待证，feat-004 保持 in-progress。 [进度与证据](progress.md#current-state)
+
+2026-11-19 迟到隔离只读核对工具已完成，按同一 `wire_seq` 对应唯一 core 请求、提交轨迹和回调，并检查停止前后两份独立账本。33 项测试及两份现场归档回放通过，两份现场均保留迟到 unknown。后续现场需新鲜指定 QQ 和单次发送授权，在 manager 正常退出与 owner 开始停止之间固定第一份账本，owner 正常关闭后固定第二份。只在真实关联回调到达时计入其状态对照。feat-004 保持 in-progress。 [进度与证据](progress.md#current-state)
+
+2026-11-19 文本回调状态对照研究版已在指定 QQ `63120` 完成零发送、登录核验及 1000 ms 停止观察。最终采样先于正常关闭，墙钟差 1010 ms，空账本及端口关闭经独立审计。QQ 同代仍响应并保留 bridge。两份快照只含停止边界，真实迟到仍为 unknown。后续只有同请求的真实迟到及独立账本证据齐备，才推进隔离验收。后续若需发送，应另获单次授权并使用新鲜指定 QQ。feat-004 保持 in-progress。[进度与证据](progress.md#current-state)
+
+2026-11-19 停止后文本回调状态对照已完成离线准备。新构建和未绑定进程的零发送准入包见 [progress](progress.md#current-state)。下一步使用新鲜指定 QQ，按固定模块准入、登录、1000 ms 停止观察和独立空账本审计验证正常路径。随后只有实际关联的迟到回调与独立请求账本对照都取得，才可推进隔离验收。旧 QQ 代次保留 bridge，既有样本不重发。feat-004 保持 in-progress，本轮未接入 QQ。
+
+2026-11-19 resident 结果隔离修复版零发送现场通过。指定 QQ `67792` 通过固定准入、接入和登录核验。1000 ms 窗口的同 owner 最终采样先于关闭，报告墙钟差 1009 ms，空请求账本与关闭端口经独立审计。观察到一次停止前未关联接收回调，真实迟到仍为 unknown。QQ 同代仍响应并保留 bridge，下一次现场须新鲜指定进程。证据见 [progress](progress.md#current-state)。下一块继续真实迟到隔离或 native 寿命证据，feat-004 保持 in-progress。
+
+2026-11-19 resident 停止后回执隔离修复。正式与研究入口只在 Ready 接受结果，适配器读取跨 close 时拒绝入账，关闭前强回执仍可纠正已 ACK unknown。三个红绿对照、两种全仓测试及 release 通过，见 [progress](progress.md#current-state)。修复版 1000 ms 零发送现场已准备，旧 `38316` 保留 bridge，等待新鲜测试 QQ 后核验正常接入与停止。真实迟到和全局 drain 仍待证。feat-004 保持 in-progress。
+
+2026-11-19 好友 B 已确认单次组合样本的数量和正文。只读分析器现能在无请求回调的样本中保留合法停止边界，回调仍为 unknown，矛盾标记拒绝。两份现场日志回放及 20 项回归见 [progress](progress.md#current-state)。后续推进真实迟到与状态隔离的独立证据，原 QQ 代次仍保留 bridge，继续遵守新鲜进程准入与 unknown 不重发。feat-004 保持 in-progress。
+
+2026-11-19 单次私聊与停止观察组合现场。新 QQ `38316` 准入、授权单次发送、稳定消息账本回读和 1000 ms 停止观察技术审计通过，好友 B 确认仅收到一条且内容相符。两个投影行是同一消息的创建和时间修订。四条已关联 JS 回调均在停止前，真实迟到与全局 drain 仍待证。停止后 QQ 仍响应且保留 bridge，后续须新鲜代次。授权机会已消耗，证据见 [progress](progress.md#current-state)。feat-004 保持 in-progress。
+
+2026-11-19 单次私聊与停止观察组合已准备。固定样本 `CALIGO-004-STOP-9AB42E71` 到登记好友 B，账本回读后一次 1000 ms 观察。授权/重复保留负例、回放核对和固定构建见 [progress](progress.md#current-state)。当前等待新鲜指定 QQ 和单次授权，再核验固定准入并绑定 PID/创建时间；送达未知不重发，未观察到真实迟到仍为 unknown。旧 `7776` 保留 bridge。feat-004 保持 in-progress。
+
+2026-11-19 研究版零发送停止观察现场通过。新鲜指定 QQ `7776` 准入、登录、一次 1000 ms 观察和正常停止均通过。owner 停止 listener 至最终采样的日志墙钟差 1017 ms，最终采样先于关闭，账本为空且端口关闭。未观察到请求回调，真实迟到、native 寿命和全局 drain 仍待证。QQ 同代仍响应且保留 bridge，下一次现场须新的指定代次并重新准入。详细证据见 [progress](progress.md#current-state)。共享源码仍未提交，feat-004 保持 in-progress。
+
+2026-11-19 停止观察等待超时修复。已有研究版 CLI/FFI 激活入口，早期交接所述的入口缺失已过时。假 QQNT owner 阻塞采样时，等待线程仍按截止返回 `0x25`，保留根且不触发 `uv_close`。普通与 research 全仓、分析器及两种发布构建通过，源码叠加与产物哈希见 [progress](progress.md#current-state)。当前仍为共享未提交工作树。下一步在新鲜指定 QQ 代次按固定模块准入验证零发送停止观察。旧样本保留，unknown 不重发，未证寿命不卸载。真实迟到、native 对象寿命与 drain 继续按现场证据判定。
+
+2026-11-19 最新研究owner接线：stop_driver复用既有控制器，research Rust显式arm后，实际pump首tick一次清理、窗口只读采样、最终样本后一次关闭，shutdown调用线程50ms只发特殊wake。账号/nonce/sid/generation、owner/env/loop/V8 ladder检查，失败0x25/quarantine保根，原0x22/23/24保持；停止前取消正常close，观察中取消最终采样，慢采样计入deadline。research入口21+模型9+实际JS1定向通过，最终default/research all及分析器17通过，证据清单 `target-harness/feat004-window-wire-evidence.json`，hash见 [progress](progress.md#current-state)。尚无CLI/新C激活入口，无新release/QQ现场动作；下一步应准备research现场激活与准入合同/负例，再有界采真实晚到，不再新增模型。旧16424不重接/卸载，消息不重发；native寿命/drain仍待证，feat-004保持in-progress，暂不需用户重启，未提交推送。
+
+
+2026-11-19 最新停止窗口块：research纯控制器绑定account/nonce/sid/generation，窗口1..5000ms、50ms间隔、104动作预算，精确动作/回执控制停止→观察→最终样本→关闭，身份/时间/未知失败永久隔离；取消不重试。控制器9项+实际JS重复读取/寿命/发送定向研究28通过，普通发送17通过，最终全仓见 [progress](progress.md#current-state)。控制器与实际reader尚未接线，未改qq_entry shutdown/CLI/FFI，不能启动QQ观察；无新release/现场动作。下一块应直接做研究opt-in owner驱动接线：停止listener后只读采样、合法owner tick/定时唤醒、scope/上下文、取消/最终快照、0x22/23/24与一次uv_close；不要再新增平行模型。旧16424不重接/卸载、消息不重发，真实迟到/native寿命/drain仍待证，feat-004保持in-progress；暂不需用户重启，未提交推送。
+
+
+2026-11-19 最新分析块：只读callback分析器新增严格phase状态机和late_callbacks直接请求关联汇总，矛盾/重复/无锚点停止序列unknown，state_isolation仍unverified。Node17项及历史TID/PHASE只读回放通过，两现场均未观察迟到，证据见 [progress](progress.md#current-state)。本轮只工具/测试/文档，无生产改动，不重建或重复全仓。下一步先设计新鲜QQ代次下停止listener后、关闭owner pump前的有界只观察窗口（scope/account校验、取消/截止/最后关闭、失败保根），不自动启动；现有STOP仅一次快照不能证明更晚无回调。旧16424不重接/卸载、既有消息不重发，真实迟到/native寿命/drain仍待证，feat-004保持in-progress；无需现在重启QQ，未提交推送。
+
+
+2026-11-19 同步 TID 样本现场通过。最新 QQ 主实例 16424 完成固定准入，一次私聊发送、即时 `get_msg`、唯一请求账本和用户单条确认均通过。generation 1、seq 1 的四条关联事件直接记录 TID 60992，与同代次 owner 一致。停止顺序为 order 7 → 8，manager 和 owner 均退出 0，端口关闭。事后 QQ 响应正常，线程 60992 和 bridge 仍在。授权机会已消耗，保留现有 bridge 至进程退出。剩余门为真实停止后迟到回调、原生对象寿命、最终 owner 和全局 drain。feat-004 保持 in-progress。证据与指纹见 [progress](progress.md#current-state)。
+
+
+2026-11-18 最新同步TID块：精确QQNT两个具名回调+整数工厂18项静态断言后，research第六无参getter同步返回TID到同请求/阶段记录；活动/安装/current isolate一致门和独立getter安装成功标志，失败null不影响业务，避免ordinal拼接。原生LAB3、分析器15、最终default/research all和两套release通过，清单 `target-harness/feat004-tid-return-build-evidence.json`，hash见 [progress](progress.md#current-state)。新getter未加载QQ，本轮零接入/发送。下一样本登记好友B单次 `CALIGO-FEAT004-TID-20261118-3C8E50A7`，本机 `local-evidence/feat004-tid-return-send-20261118/` 已准备无grant；须用户对应授权、正常重启登录后最新QQ新根准入再执行一次，核对关联event.callback_tid与owner/live线程，不重发旧样本。真实迟到/生产者线程/原生pointee/final owner/drain仍未知，feat-004保持in-progress；旧18640不复用/卸载，未提交推送。
+
+
+2026-11-18 最新wake寿命块：复现正常shutdown后ready仍1导致两wake继续native send；已统一独立WAKE_GATE准入，关闭/隔离拒绝新wake，等待已准入send返回再一次停止唤醒/uv_close。default/research入口各15通过，含强制send/close交错、hook内两wake和重复pump一次关闭；最终all/release及hash见 [progress](progress.md#current-state) 和 `target-harness/feat004-wake-build-evidence.json`。强制fault交错未新增，沿用顺序故障拒绝；wait_ms不限制native挂起/门锁等待。新构建未加载QQ，本轮无接入/发送；辅助ABI查找认证失败无结论，不能猜结构。下一步回到精确ABI关联线程/真实迟到和native对象寿命最小取证，不反复正常样本代替drain。旧18640不重新接入/卸载，feat-004保持in-progress，未提交推送。
+
+
+2026-11-18 最新现场：QQ最新新根18640固定准入、已授权PHASE单次私聊/即时get_msg/唯一请求账本及对端一条确认通过。新观察5快照前缀一致无incomplete，generation1/seq1的matched与closure四事件齐，order9 stopping→10 stopped；无停止后事件，late仍unobserved。汇总TID55432只保留aggregate，不拼接逐请求。manager/owner0、端口关闭，QQ仍响应且bridge保留，不重接/卸载。证据/指纹见 [progress](progress.md#current-state)，本机 `local-evidence/feat004-request-phase-send-20261118/`，授权已消耗不重发。无生产变更，本轮正常路径指定样本通过不关闭真实迟到/逐请求OS线程/native对象寿命/final owner/drain；feat-004仍in-progress。下一块先离线定义剩余最小证据，不再重复正常样本；无需现在重启QQ，未提交推送。
+
+
+2026-11-18 最新关联观察块：research实际JS接入listener代次/终身order/text临时seq/kind/停止phase/current与none/closure/matched来源，队列128、24KiB白名单快照、sid+generation绑定、报告去重/32预算显式耗尽。实际owner poll与STOP即时读取；不与旧无参TID按顺序拼接，不声称逐请求OS线程。定向default137/research161通过，最终all/release与产物指纹见 [progress](progress.md#current-state) 和 `target-harness/feat004-request-phase-build-evidence.json`。新构建未加载QQ，本轮零接入零发送；生产stop完成后新到事件无读取保证仍unknown。下一现场应直接核对正常请求关联+停止标记与独立账本，不再用零发送代替；具体样本/准入脚本先准备，实际发送机会须新明确范围授权，不重发旧marker。native环境/快照寿命、逐请求OS TID与真实迟到/drain仍未闭合，feat-004保持in-progress；旧19020不复用/卸载，未提交推送。
+
+
+2026-11-18 最新对象寿命LAB：确认正常STOP后实际 `__caligo_d8 → R → listener/pending` 根保留，正式同代次重接禁止。新增实际脚本+生成send的Node WeakRef/GC回归覆盖发送Promise/精确回读在途及移除失败；合成迟到调用不改业务状态、不增宿主查询。default/research各18定向通过，证据/GC控制失败限制见 [progress](progress.md#current-state) 与观察合同。本轮仅测试/文档，无生产改动，沿用前轮all/release，不接QQ不发消息。下一块收敛可独立关联请求/代次/停止顺序的JS观察合同，真实native快照/opaque pointee/环境寿命仍未知；不再把JS根等同QQ drain。无需现在重启QQ，旧19020不复用/热卸载，feat-004仍in-progress；未提交推送。
+
+
+2026-11-18 最新离线块：实际正式stop清理helper的listener移除Err曾仍返回0，已红绿复现并修复；独立OWNER_CLEANUP_FAILED/quarantine保留根，shutdown0x24/CLI明确失败，后续不重复清理；正常对照释放。default/research定向各44（入口14、生命周期24、保留6）通过，最终all/release与指纹见 [progress](progress.md#current-state)，新产物未加载QQ，本轮零接入/零发送。owner panic0x23与pending0x22证据保留。下一步离线核对正式wrapper callback对象持有及请求/代次/停止关联，不把本地隔离当QQ drain；普通并发wake竞态仍未闭合。旧19020不重新接入或卸载，既有样本不重发；无需现在重启QQ。feat-004保持in-progress，未提交推送。
+
+
+2026-11-18 最新离线块：owner hook Rust panic/锁中毒在实际FFI pump的隔离子进程复现旧版abort后修复；sticky quarantine保留hook捕获根，shutdown0x23、CLI明确失败，不重复执行/清空/替换。default/research入口各12、最终all及两套隔离release通过，源码/产物/日志清单为 `target-harness/feat004-owner-panic-build-evidence.json`，指纹见 [progress](progress.md#current-state)。新构建未加载QQ，无新接入或发送；旧19020不复用或热卸载。下一块先离线复现正式停止hook中 `r.close()` Err只日志但继续关闭的错误传播/根释放边界；普通并发wake原子检查竞态仍未闭合，本次仅Rust unwind containment。ABI/请求关联线程/实际迟到/opaque对象寿命与QQ final owner/drain仍待证，见观察合同完成门清单。无需现在重启QQ，feat-004保持in-progress；未提交或推送。
+
+
+2026-11-18 最新现场：停止/退休回读修复版在最后启动的新QQ19020固定准入、research一次接入、观察器安装、登录及零发送正常停止通过；独立审计核对空请求账本、manager/owner0、实际shutdown0x0与端口关闭。原始证据及hash见 [progress](progress.md#current-state)。本轮无待ACK/native故障注入、无真实回调，不证明0x22现场或QQ drain；19020仍响应并保留bridge，不重接/卸载。下一步先离线收敛剩余owner/停止与异常清理合同；既有单次文本不重发，任何新现场须新代次准入。feat-004保持in-progress，未提交推送，下方为历史检查点。
+
+
+2026-11-18 最新离线块：修复精确回读在退休/替换后写旧结果，实际JS回归default/research各17通过；正式停止独立持有resident至worker退出及结果确认，未收尾返回0x22并保留，CLI明确失败；误报红灯、ACKed unknown grace负例及入口10+结果6定向通过。完整验证/构建与限制见 [progress](progress.md#current-state)。修复后零发送准备为本机 `local-evidence/feat004-stop-lifetime-zero-20261118/`，使用新隔离release，尚未执行；需用户正常重启并登录测试QQ，继续选择最后启动的新主根重新准入，再仅接入/登录/正常停止，不新发消息。旧62780保留先前bridge不重接/卸载；既有单次文本不重发。QQ native最终owner/真实迟到/drain、任意panic/锁中毒清理与跨宿主持久化仍未闭合，feat-004保持in-progress；未提交或推送。
+
+
+2026-11-18 最新 feat-004：重启后最后启动 QQ62780 完成固定准入、已授权单次好友 B 文本、即时 get_msg、唯一请求/稳定身份账本和八阶段轨迹独立审计，用户确认对端仅一条且内容完全一致。新观察器记录六条 JS 入口，OS TID 均2440，与 owner 相同；线程记录 request association 仍 unverified，native 生产者/迟到/final owner/drain 未证。manager/owner 停止0、端口关闭、QQ仍响应并保留 bridge，不重接或卸载、不重发样本。证据和指纹见 [progress](progress.md#current-state)，本机 `local-evidence/feat004-js-thread-send-20261118/`；发送机会已消耗，后续先离线制定停止/代次边界最小观察与独立关联合同，不能仅凭本轮线程样本标 feat-004 done。无 Rust 新变更、未提交推送；下方为此前检查点。
+
+
+2026-11-18 用户已授权现场并指定最后启动的 QQ。PID63032 的固定准入、观察器安装、零发送登录/停止和独立审计通过，真实回调记录为零；证据见 [progress](progress.md#current-state)。该代次仍响应并保留 bridge，不重接或卸载。下一步等用户正常重启并登录该测试账号，再选最后启动的新 QQ 主根、重核 hash/backend/envscan，运行本机 `local-evidence/feat004-js-thread-send-20261118/` 单次好友 B 文本 `CALIGO-FEAT004-THREAD-20261118-6F41B2C9`；grant 已记录用户授权，无需再次询问。发送机会未保留/未执行，unknown 不重发。需独立核对账本/回读/轨迹与实际 JS 线程样本，对端数量另确认；native 生产者/final owner/drain 仍 unknown，feat-004 in-progress。
+
+
+2026-11-18 feat-004 续验：`E:/stella/Caligo-feat-004` 基于 `9fe721f`，修复同 worker 跨 core 重启/相同 epoch 的未 ACK 结果停滞，两个真实 caligod 进程 LAB 红绿及 default/research 全仓通过。新增精确 hash 绑定、128 次预算的 research JS 入口线程观察器，静态 ABI 21 项和线程/实际 JS 合同通过，尚未加载 QQ；构建与日志指纹见 [progress](progress.md#current-state)。下一步用户正常重启并指定已登录新测试 QQ 根，先使用本机 `local-evidence/feat004-js-thread-zero-20261118/` 零发送验证观察器安装/登录/停止；后续新代次向登记好友 B 单次发送 `CALIGO-FEAT004-THREAD-20261118-6F41B2C9` 需对应授权，准备在 `feat004-js-thread-send-20261118/`，尚无 grant。记录只证明 JS 执行线程，关联/顺序及 native 生产者/最终 owner/drain 未证；feat-004 保持 in-progress。未接 QQ、未发送、未提交或推送；unknown 不重发、未证寿命不热卸载。其他分支未提交改动保留。
+
+
 2026-11-18 feat-004 管理器停止错误保留版零发送现场：新 QQ `30968` 只读准入、一次接入、登录及正常停止、独立零发送审计通过，固定构建与证据见 [progress](progress.md#current-state)。同代 QQ 仍映射 bridge，不重接、不热卸载；现场未注入 journal 故障，管理器锁存只限同进程。继续跨进程恢复及真实 callback/drain；后续现场须新进程准入，新消息需对应授权，unknown 不重发。
 
 
