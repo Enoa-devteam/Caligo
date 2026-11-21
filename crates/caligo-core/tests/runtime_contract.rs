@@ -482,6 +482,47 @@ fn stop_close_protocol_marks_states_honestly() {
     ));
 }
 
+// A full journal must not be reported as a clean stop or close.
+#[test]
+fn stop_reports_failed_cancel_journal_write() {
+    let path = tmp_journal("stop-capacity");
+    let mut initial = actor("stop-capacity");
+    initial.submit_send(send_req("queued", 1, &private_target("123"), "queued")).unwrap();
+    drop(initial);
+    let limit = std::fs::metadata(&path).unwrap().len();
+    let cfg = RuntimeConfig { journal_max_bytes: limit, ..RuntimeConfig::default() };
+    let (mut recovered, _) = AccountActor::open(&path, cfg).unwrap();
+    assert_eq!(recovered.stop(), Err(RejectReason::JournalFailure));
+    assert_eq!(recovered.phase(), Phase::Degraded);
+    assert_eq!(recovered.query_request("queued"), Some(ActionState::Queued));
+    assert_eq!(recovered.close(), Err(RejectReason::NotActive { phase: Phase::Degraded }));
+    drop(recovered);
+    let (after_restart, report) = AccountActor::open(&path, RuntimeConfig::default()).unwrap();
+    assert_eq!(after_restart.query_request("queued"), Some(ActionState::Queued));
+    assert_eq!(report.pending_queries, vec!["queued".to_string()]);
+}
+
+#[test]
+fn close_reports_failed_unknown_journal_write() {
+    let path = tmp_journal("close-capacity");
+    let mut initial = actor("close-capacity");
+    initial.submit_send(send_req("inflight", 1, &private_target("123"), "inflight")).unwrap();
+    initial.dispatch_begin("inflight").unwrap();
+    initial.bridge_started("inflight").unwrap();
+    drop(initial);
+    let limit = std::fs::metadata(&path).unwrap().len();
+    let cfg = RuntimeConfig { journal_max_bytes: limit, ..RuntimeConfig::default() };
+    let (mut recovered, _) = AccountActor::open(&path, cfg).unwrap();
+    assert_eq!(recovered.stop(), Ok(0));
+    assert_eq!(recovered.close(), Err(RejectReason::JournalFailure));
+    assert_eq!(recovered.phase(), Phase::Degraded);
+    assert_eq!(recovered.query_request("inflight"), Some(ActionState::NativeStarted));
+    drop(recovered);
+    let (after_restart, report) = AccountActor::open(&path, RuntimeConfig::default()).unwrap();
+    assert_eq!(after_restart.query_request("inflight"), Some(ActionState::NativeStarted));
+    assert_eq!(report.pending_queries, vec!["inflight".to_string()]);
+}
+
 // ---- 旧代次事件:只进审计,不进业务链 ----
 
 #[test]

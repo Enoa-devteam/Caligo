@@ -286,6 +286,8 @@ fn now_ms() -> u64 {
 /// 账号 actor(计划 §6.2 状态机的 owner)。
 pub struct AccountActor {
     pub(crate) phase: Phase,
+    #[cfg(feature = "research")]
+    send_admission_closed: bool,
     session: Option<SessionIdentity>,
     conn: Option<ConnectionIdentity>,
     journal: Journal,
@@ -342,6 +344,8 @@ impl AccountActor {
                 .map_err(OpenError::Journal)?;
         let mut actor = Self {
             phase: Phase::Detached,
+            #[cfg(feature = "research")]
+            send_admission_closed: false,
             session: None,
             conn: None,
             journal,
@@ -583,13 +587,9 @@ impl AccountActor {
             .cloned()
             .collect();
         for id in ids {
-            if self
-                .transition(&id, ActionState::CancelledUnsent, None)
-                .is_ok()
-            {
-                cancelled += 1;
-                self.counters.sends_cancelled_unsent += 1;
-            }
+            self.transition(&id, ActionState::CancelledUnsent, None)?;
+            cancelled += 1;
+            self.counters.sends_cancelled_unsent += 1;
         }
         Ok(cancelled)
     }
@@ -606,12 +606,8 @@ impl AccountActor {
         let ids: Vec<String> = self.pending.iter().cloned().collect();
         let mut marked = 0;
         for id in ids {
-            if self
-                .transition(&id, ActionState::DeliveryUnknown, None)
-                .is_ok()
-            {
-                marked += 1;
-            }
+            self.transition(&id, ActionState::DeliveryUnknown, None)?;
+            marked += 1;
         }
         self.phase = Phase::Closed;
         Ok(marked)
@@ -619,9 +615,20 @@ impl AccountActor {
 
     // ---- 动作面 ----
 
+    /// Keep the transport available for receipts while closing new admissions
+    /// for this actor, including after a bridge reconnect.
+    #[cfg(feature = "research")]
+    pub(crate) fn close_send_admission(&mut self) {
+        self.send_admission_closed = true;
+    }
+
     /// 提交发送(两层准入的第一层)。相同 id + 相同 payload → 查询语义,
     /// 返回当前状态,不重复执行;相同 id + 不同 payload → 冲突拒绝。
     pub fn submit_send(&mut self, req: SendTextRequest) -> Result<ActionState, RejectReason> {
+        #[cfg(feature = "research")]
+        if self.send_admission_closed {
+            return Err(RejectReason::SendAdmissionClosed);
+        }
         if self.phase != Phase::Active {
             return Err(RejectReason::NotActive { phase: self.phase });
         }
@@ -1201,6 +1208,10 @@ impl AccountActor {
             at_unix_ms: now_ms(),
             session_generation: gen,
             wire_seq,
+            failure_reason: match state {
+                ActionState::ConfirmedFailure { reason } => Some(reason.clone()),
+                _ => None,
+            },
         }))
     }
 
@@ -1355,7 +1366,7 @@ fn state_from_record(record: &RequestRecord) -> Option<ActionState> {
         },
         "AcceptedUnconfirmed" => Some(ActionState::AcceptedUnconfirmed),
         "ConfirmedFailure" => Some(ActionState::ConfirmedFailure {
-            reason: String::new(),
+            reason: record.failure_reason.clone().unwrap_or_default(),
         }),
         "CancelledUnsent" => Some(ActionState::CancelledUnsent),
         "DeliveryUnknown" => Some(ActionState::DeliveryUnknown),

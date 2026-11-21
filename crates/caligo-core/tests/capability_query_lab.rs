@@ -246,11 +246,11 @@ fn private_voice_dispatch_requires_current_advertisement_and_is_never_replayed()
     assert!(wire_seq > 0 && (1..=10_000).contains(&timeout_ms));
     bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
-    bridge.send(&BridgeMsg::SendResult {
+    bridge.send(&BridgeMsg::SendResult { notice_id: 42,
         request_id: request_id.clone(),
         outcome: OutcomePayload::Unknown { reason: Some("voice_submit_unknown".into()) },
     }).unwrap();
-    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { .. }));
+    assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { notice_id: 42, terminal: true, .. }));
     let target = caligo_model::SessionKey::new("10001", caligo_model::SessionKind::Private, "20002");
     assert_eq!(
         lab.daemon.onebot_text_status(&request_id, &target),
@@ -697,7 +697,7 @@ fn image_dispatch_requires_current_advertisement_and_is_never_replayed() {
         CoreToBridgeMsg::NativeStartedAck { .. }
     ));
     bridge
-        .send(&BridgeMsg::SendResult {
+        .send(&BridgeMsg::SendResult { notice_id: 1,
             request_id: request_id.clone(),
             outcome: OutcomePayload::Unknown {
                 reason: Some("image_submit_unknown".into()),

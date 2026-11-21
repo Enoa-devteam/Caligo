@@ -12,7 +12,7 @@ function (args) {
       !Number.isInteger(args.timeoutMs) || args.timeoutMs <= 0)
     return failure('invalid_image_request');
   if (Object.hasOwn(R.sends, args.requestId) || Object.hasOwn(R.sendResults, args.requestId) ||
-      Object.keys(R.sends).length >= 128)
+      Object.keys(R.sends).length >= 128 || Object.keys(R.sendResults).length >= 128)
     return failure('send_capacity_or_duplicate');
 
   const deadline = Date.now() + args.timeoutMs;
@@ -36,6 +36,25 @@ function (args) {
     if (typeof cookie !== 'string' || !cookie || cookie === '0' ||
         Object.values(R.sends).some(send => send.cookie === cookie))
       return failure('invalid_cookie');
+
+    // Keep image cookies for the lifetime of this JS environment, including
+    // after settlement or listener restart; stale callbacks can arrive later.
+    const guardKey = '__caligo_image_cookie_guard_v1';
+    if (!Object.prototype.hasOwnProperty.call(globalThis, guardKey)) {
+      const seenCookies = new Set();
+      const claimCookie = value => {
+        if (typeof value !== 'string' || !value || value === '0' || value.length > 256) return 'invalid_cookie';
+        if (seenCookies.has(value)) return 'invalid_cookie';
+        if (seenCookies.size >= 65536) return 'cookie_history_exhausted';
+        seenCookies.add(value); return 'ok';
+      };
+      Object.defineProperty(globalThis, guardKey, {value:claimCookie, writable:false, configurable:false, enumerable:false});
+    }
+    const guard = Object.getOwnPropertyDescriptor(globalThis, guardKey);
+    if (!guard || typeof guard.value !== 'function' || guard.writable !== false || guard.configurable !== false)
+      return failure('cookie_history_unavailable');
+    const claim = guard.value(cookie);
+    if (claim !== 'ok') return failure(claim);
 
     const bytes = Buffer.from(args.png, 'hex');
     const md5 = crypto.createHash('md5').update(bytes).digest('hex');
@@ -101,6 +120,7 @@ function (args) {
     if (R.stopped || R.sends[key] !== pending) return;
     pending.promiseDone = true;
     pending.promiseStatus = status;
+    if (status === 'unknown') pending.unknownReason = detail.reason;
     if (pending.readback) {
       R.settleSendResult(R, key, pending);
     } else if (!pending.ambiguous && !pending.timedOut) {
@@ -108,18 +128,19 @@ function (args) {
     }
     if (status !== 'accepted') pending.failed = true;
   }
-  const unknown = () => result('unknown', {status:'unknown', reason:'image_submit_unknown'});
+  const unknown = reason => result('unknown', {status:'unknown',
+    reason:typeof reason === 'string' ? reason : 'image_submit_unknown'});
   try {
     const promise = R.ms.sendMsg('0', {chatType, peerUid, guildId:cookie}, [element], new Map());
     Promise.resolve(promise).then(value => {
       if (value && value.result === 0) {
         result('accepted', {status:'accepted'});
-      } else if (value && Number.isInteger(value.result) && !pending.addId) {
-        result('rejected', {status:'rejected', error:'native image rejected'});
+      } else if (value && Number.isSafeInteger(value.result)) {
+        unknown('send_result_ambiguous=' + String(value.result));
       } else {
         unknown();
       }
-    }, unknown);
+    }, () => unknown());
   } catch (_) {
     unknown();
   }

@@ -40,6 +40,8 @@ pub enum SessionError {
     Frame(String),
     Io(std::io::Error),
     Serde(serde_json::Error),
+    /// Final account state could not be durably recorded during shutdown.
+    Shutdown(caligo_model::RejectReason),
     Closed,
 }
 
@@ -50,6 +52,7 @@ impl core::fmt::Display for SessionError {
             SessionError::Frame(e) => write!(f, "frame: {e}"),
             SessionError::Io(e) => write!(f, "io: {e}"),
             SessionError::Serde(e) => write!(f, "json: {e}"),
+            SessionError::Shutdown(reason) => write!(f, "actor shutdown failed: {reason:?}"),
             SessionError::Closed => write!(f, "session closed"),
         }
     }
@@ -717,8 +720,8 @@ impl Daemon {
         let r2 = t_control.join().expect("control accept thread");
         // 收尾:取消未执行 → 在途显式 unknown → Closed。
         let mut actor = self.actor.lock().unwrap();
-        let _ = actor.stop();
-        let _ = actor.close();
+        // Preserve shutdown failures even when an earlier pipe owner also failed.
+        actor.stop().and_then(|_| actor.close()).map_err(SessionError::Shutdown)?;
         r1.and(r2)
     }
 
@@ -1066,6 +1069,7 @@ impl Daemon {
                     }
                     BridgeMsg::SendResult {
                         request_id,
+                        notice_id,
                         outcome,
                     } => {
                         let terminal = !matches!(&outcome, OutcomePayload::AcceptedUnconfirmed);
@@ -1101,6 +1105,7 @@ impl Daemon {
                                 &conn,
                                 &CoreToBridgeMsg::SendResultAck {
                                     request_id,
+                                    notice_id,
                                     terminal,
                                 },
                             )?;

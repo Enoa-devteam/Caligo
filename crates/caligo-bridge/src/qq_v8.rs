@@ -14,6 +14,9 @@ use core::ffi::c_void;
 
 use crate::qq_entry::append_stage;
 
+#[cfg(feature = "research")]
+mod callback_threads;
+
 const NAME_HANDLE_SCOPE_CTOR: &str = "??0HandleScope@v8@@QEAA@PEAVIsolate@1@@Z";
 const NAME_HANDLE_SCOPE_DTOR: &str = "??1HandleScope@v8@@QEAA@XZ";
 const NAME_ISOLATE_GETCURRENT: &str = "?GetCurrent@Isolate@v8@@SAPEAV12@XZ";
@@ -368,7 +371,10 @@ pub const D8_START_JS: &str = r"
 (function () {
   try {
     var G = globalThis;
-    if (G.__caligo_res) { G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid; }
+    if (G.__caligo_res) {
+      if (G.__caligo_res.stopped) return 'ERR:stopped_listener_retained';
+      G.__caligo_d8 = G.__caligo_res; return 'ALREADY sid=' + G.__caligo_res.sid;
+    }
     var q = process._linkedBinding('QQNT');
     var S = q.NodeIQQNTWrapperSession;
     var live = null, sidName = null;
@@ -388,6 +394,130 @@ pub const D8_START_JS: &str = r"
     var ms = live.getMsgService();
     var R = { sid: sidName, session: live, ms: ms, recv: [], recvBytes: 0,
       rejected: 0, overflow: 0, imageShapes: [], listenerId: null, sendResults: {}, sends: {} };
+    var traceText = typeof caligoSendTrace !== 'undefined' && caligoSendTrace === true;
+    R.textSendTrace = [];
+    var traceGeneration = 0;
+    if (traceText) {
+      try {
+        var lastGeneration = G.__caligo_text_trace_generation;
+        if (lastGeneration === undefined) lastGeneration = 0;
+        if (Number.isSafeInteger(lastGeneration) && lastGeneration >= 0 && lastGeneration < 2147483647) {
+          traceGeneration = lastGeneration + 1;
+          G.__caligo_text_trace_generation = traceGeneration;
+          if (G.__caligo_text_trace_generation !== traceGeneration) traceGeneration = 0;
+        }
+      } catch (_) { traceGeneration = 0; }
+    }
+    // The JS order belongs to this listener only. Polling never resets it.
+    var observationOrder = 0, observationPhase = 'active';
+    var currentTid = null;
+    if (traceText && typeof caligoTidGetterReady !== 'undefined' && caligoTidGetterReady === true) {
+      try {
+        var installedTidGetter = G.__caligo_current_tid;
+        if (typeof installedTidGetter === 'function') currentTid = installedTidGetter;
+      } catch (_) {}
+    }
+    var observeCallback = function(kind, association, key, pending) {
+      try {
+        if (!traceText || R.syntheticStopProbe) return;
+        var seq = pending ? pending.traceSeq : 0;
+        if (!traceGeneration || observationOrder >= 128 ||
+            (pending && (!Number.isSafeInteger(seq) || seq < 1 || seq > 2147483647))) {
+          R.callbackObservationsOverflow = true;
+          return;
+        }
+        var callbackTid = null;
+        try {
+          var sampledTid = currentTid ? currentTid() : null;
+          if (Number.isInteger(sampledTid) && sampledTid > 0 && sampledTid <= 4294967295) callbackTid = sampledTid;
+        } catch (_) {}
+        var row = {generation:traceGeneration, order:++observationOrder,
+          seq:seq, kind:kind, phase:observationPhase, association:association,
+          current:pending ? R.sends[key] === pending : null, callback_tid:callbackTid};
+        R.callbackObservations.push(row);
+        return row;
+      } catch (_) { try { R.callbackObservationsOverflow = true; } catch (_) {} }
+    };
+    // Capture only the text closure's business fields. References and values
+    // stay in this invocation; the observation row stores a fixed label only.
+    var captureTextClosureState = function(key, pending) {
+      if (R.stopped !== true || G.__caligo_d8 !== R || !R.sends || !R.sendResults ||
+          !Array.isArray(R.recv) || !Array.isArray(R.imageShapes)) return null;
+      var result = R.sendResults[key], readback = pending.readback;
+      return [R.sends, R.sends[key], R.sendResults, result,
+        result && result.status, result && result.msgId, result && result.reason,
+        pending.promiseDone, pending.promiseStatus, pending.unknownReason, pending.failed,
+        pending.timedOut, pending.done, pending.addId, pending.updateId, pending.readbackStarted,
+        readback, readback && readback.status, readback && readback.msgId, readback && readback.reason,
+        R.recv, R.recv.length, R.recvBytes, R.rejected, R.overflow, R.imageShapes, R.imageShapes.length];
+    };
+    var beginTextClosureObservation = function(kind, key, pending) {
+      var row = observeCallback(kind, 'closure', key, pending);
+      if (!row || row.phase !== 'stopped') return null;
+      row.text_state = 'unverified';
+      try {
+        var before = captureTextClosureState(key, pending);
+        if (!before) return null;
+        return function () {
+          try {
+            var after = captureTextClosureState(key, pending);
+            if (after) row.text_state = before.every(function(value, index) {
+              return Object.is(value, after[index]);
+            }) ? 'unchanged' : 'changed';
+          } catch (_) {}
+        };
+      } catch (_) { return null; }
+    };
+    if (traceText) {
+      R.beginTextClosureObservation = beginTextClosureObservation;
+      R.callbackObservations = [];
+      R.callbackObservationsOverflow = traceGeneration === 0;
+      R.observeCallback = observeCallback;
+      R.observeStopPhase = function(phase, kind) {
+        observationPhase = phase;
+        observeCallback(kind, 'none');
+      };
+    }
+    // Capture the observers once per listener generation. The native no-argument
+    // functions only record the current OS thread; their return value is ignored.
+    var threadObservers = null;
+    if (traceText && typeof caligoThreadObserversReady !== 'undefined' && caligoThreadObserversReady === true) {
+      try {
+        var candidates = {
+          recv:G.__caligo_thread_recv, add:G.__caligo_thread_add,
+          update:G.__caligo_thread_update, promise:G.__caligo_thread_promise,
+          readback:G.__caligo_thread_readback
+        };
+        if (Object.keys(candidates).every(function(k) { return typeof candidates[k] === 'function'; }))
+          threadObservers = candidates;
+      } catch (_) {}
+    }
+    var noteCallbackThread = R.noteCallbackThread = function(kind) {
+      try {
+        if (R.syntheticStopProbe || !threadObservers) return;
+        var observer = threadObservers[kind];
+        if (typeof observer === 'function') observer();
+      } catch (_) {}
+    };
+    R.textTraceGeneration = traceGeneration;
+    R.textTraceSequence = 0;
+    R.textTraceOverflow = traceText && traceGeneration === 0;
+    R.allocateTextTrace = function() {
+      try {
+        if (!traceText) return 0;
+        if (!traceGeneration || R.textTraceSequence >= 2147483647) { R.textTraceOverflow = true; return 0; }
+        return ++R.textTraceSequence;
+      } catch (_) { try { R.textTraceOverflow = true; } catch (_) {} return 0; }
+    };
+    R.noteTextSend = function(stage, seq) {
+      try {
+        if (!traceText) return;
+        if (!traceGeneration || !Number.isSafeInteger(seq) || seq <= 0 || R.textSendTrace.length >= 32) {
+          R.textTraceOverflow = true; return;
+        }
+        R.textSendTrace.push({seq:seq, stage:stage});
+      } catch (_) { try { R.textTraceOverflow = true; } catch (_) {} }
+    };
     var voiceAccount = typeof caligoVoiceAccount === 'string' ? caligoVoiceAccount : null;
     R.voiceAccount = voiceAccount;
     // The pinned wrapper serializes absent numeric mention IDs as '0' and the optional NT UID as null.
@@ -399,10 +529,12 @@ pub const D8_START_JS: &str = r"
     };
     var utf8Bytes = function (s) { return Buffer.byteLength(s, 'utf8'); };
     var settleSendResult = function (R, key, pending) {
-      if (!pending || !pending.promiseDone || !pending.readback) return;
+      if (R.stopped || !pending || R.sends[key] !== pending || pending.done ||
+          !pending.promiseDone || !pending.readback) return;
+      if (!pending.voice && !pending.image) R.noteTextSend('settled', pending.traceSeq);
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
-          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+          (pending.promiseStatus !== 'accepted' ? (pending.unknownReason || 'promise_event_conflict') : pending.readback.reason)};
       } else if ((pending.voice || pending.image) && !push('add_send', pending.readback.record, true)) {
         R.sendResults[key] = {status:'unknown', reason:'verified_voice_projection_rejected'};
       } else {
@@ -549,6 +681,10 @@ pub const D8_START_JS: &str = r"
             ((send.voice || send.image) && (m.peerUin !== send.peerUin ||
               !/^[0-9]{1,128}$/.test(m.msgId) || !/[1-9]/.test(m.msgId)))) continue;
         if (src === 'add_send') {
+          if (!send.voice && !send.image) {
+            if (traceText) observeCallback('matched_add', 'matched', key, send);
+            R.noteTextSend('matched_add', send.traceSeq);
+          }
           if (send.addId && (send.addId !== m.msgId ||
               ((send.voice || send.image) && send.addElementId !== m.elements[0].elementId))) {
             send.ambiguous = true;
@@ -562,49 +698,70 @@ pub const D8_START_JS: &str = r"
         }
         if (src === 'update' && send.addId === m.msgId && m.sendStatus === 2 && !send.readbackStarted &&
             (!(send.voice || send.image) || send.addElementId === m.elements[0].elementId)) {
+          if (!send.voice && !send.image) {
+            if (traceText) observeCallback('matched_update', 'matched', key, send);
+            R.noteTextSend('matched_update', send.traceSeq);
+          }
           send.updateId = m.msgId; send.readbackStarted = true;
           (function (key, pending, service) {
+            var queryEntered = false;
             Promise.resolve().then(function () {
-              if (R.stopped) return null;
+              if (R.stopped || R.sends[key] !== pending) return null;
+              queryEntered = true;
               return service.getMsgsByMsgId({chatType:pending.chat, peerUid:pending.peer,
                 guildId:pending.cookie}, [pending.updateId]);
             }).then(function (response) {
-              if (R.stopped) return;
-              var list = response && response.msgList;
-              if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
-                pending.readback = {status:'unknown', reason:'exact_query_miss'};
-              } else {
-                var record = list[0];
-                var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
-                  record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
-                  record.sendStatus === 2 && matchesSendElement(record, pending) &&
-                  (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
-                    record.elements[0].elementId === pending.addElementId));
-                var owned;
-                if (matched && (pending.voice || pending.image)) {
-                  owned = {};
-                  var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
-                    'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
-                  for (var f = 0; f < fields.length; f++) {
-                    var value = record[fields[f]];
-                    if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+              noteCallbackThread('readback');
+              var finishObservation = traceText && queryEntered && !pending.voice && !pending.image
+                ? beginTextClosureObservation('readback_fulfilled', key, pending) : null;
+              try {
+                if (R.stopped || R.sends[key] !== pending) return;
+                var list = response && response.msgList;
+                if (!response || response.result !== 0 || !Array.isArray(list) || list.length !== 1) {
+                  pending.readback = {status:'unknown', reason:'exact_query_miss'};
+                } else {
+                  var record = list[0];
+                  var matched = record && record.msgId === pending.updateId && record.chatType === pending.chat &&
+                    record.peerUid === pending.peer && record.senderUin === pending.selfUin &&
+                    record.sendStatus === 2 && matchesSendElement(record, pending) &&
+                    (!(pending.voice || pending.image) || (record.peerUin === pending.peerUin &&
+                      record.elements[0].elementId === pending.addElementId));
+                  var owned;
+                  if (matched && (pending.voice || pending.image)) {
+                    owned = {};
+                    var fields = ['msgId','msgSeq','msgRandom','msgTime','clientSeq','guildId',
+                      'peerUid','peerUin','senderUid','senderUin','chatType','msgType','subMsgType','sendStatus'];
+                    for (var f = 0; f < fields.length; f++) {
+                      var value = record[fields[f]];
+                      if (typeof value === 'string' || typeof value === 'number') owned[fields[f]] = value;
+                    }
+                    owned.elements = pending.image
+                      ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
+                        md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
+                        picType:record.elements[0].picElement.picType,picSubType:0}}]
+                      : [{elementType:4, elementId:pending.addElementId,
+                        pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
                   }
-                  owned.elements = pending.image
-                    ? [{elementType:2,elementId:pending.addElementId,picElement:{fileSize:String(pending.image.size),
-                      md5HexStr:pending.image.md5,picWidth:pending.image.width,picHeight:pending.image.height,
-                      picType:record.elements[0].picElement.picType,picSubType:0}}]
-                    : [{elementType:4, elementId:pending.addElementId,
-                      pttElement:{fileSize:String(pending.voice.size),md5HexStr:pending.voice.md5}}];
+                  pending.readback = matched
+                      ? {status:'readback', msgId:record.msgId, record:owned}
+                      : {status:'unknown', reason:'exact_query_identity_mismatch'};
+                  if (!pending.voice && !pending.image) R.noteTextSend(matched ? 'readback_matched' : 'readback_mismatch', pending.traceSeq);
                 }
-                pending.readback = matched
-                    ? {status:'readback', msgId:record.msgId, record:owned}
-                    : {status:'unknown', reason:'exact_query_identity_mismatch'};
+                settleSendResult(R, key, pending);
+              } finally {
+                if (finishObservation) finishObservation();
               }
-              settleSendResult(R, key, pending);
             }, function () {
-              if (R.stopped) return;
-              pending.readback = {status:'unknown', reason:'exact_query_rejected'};
-              settleSendResult(R, key, pending);
+              noteCallbackThread('readback');
+              var finishObservation = traceText && queryEntered && !pending.voice && !pending.image
+                ? beginTextClosureObservation('readback_rejected', key, pending) : null;
+              try {
+                if (R.stopped || R.sends[key] !== pending) return;
+                pending.readback = {status:'unknown', reason:'exact_query_rejected'};
+                settleSendResult(R, key, pending);
+              } finally {
+                if (finishObservation) finishObservation();
+              }
             });
           })(key, send, R.ms);
         }
@@ -616,13 +773,65 @@ pub const D8_START_JS: &str = r"
       for (var i = 0; i < a.length; i++) push(src, a[i]);
     };
     R.listener = {
-      onRecvMsg: function (a) { pushList('recv', a); },
-      onMsgInfoListUpdate: function (a) { pushList('update', a); },
-      onAddSendMsg: function (m) { push('add_send', m); },
+      onRecvMsg: function (a) {
+        noteCallbackThread('recv');
+        if (traceText) observeCallback('recv', 'none');
+        if (!R.stopped) pushList('recv', a);
+      },
+      onMsgInfoListUpdate: function (a) {
+        noteCallbackThread('update');
+        if (traceText) observeCallback('update', 'none');
+        if (!R.stopped) pushList('update', a);
+      },
+      onAddSendMsg: function (m) {
+        noteCallbackThread('add');
+        if (traceText) observeCallback('add', 'none');
+        if (!R.stopped) push('add_send', m);
+      },
+      // A late media completion can still release an owned temporary file.
       onRichMediaDownloadComplete: function (result) {
         if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
       }
     };
+    if (typeof caligoNetworkObserverReady !== 'undefined' && caligoNetworkObserverReady === true) {
+      R.networkEvents = [];
+      R.networkEventOverflow = false;
+      R.networkObserver = {};
+      var captureNetwork = function (kind, args) {
+        try {
+          if (R.stopped) return;
+          if (R.networkEvents.length >= 32) { R.networkEventOverflow = true; return; }
+          var row = {kind:kind, args:[]};
+          for (var i = 0; i < args.length && i < 4; i++) {
+            var a = args[i], t = (a === null ? 'null' : typeof a);
+            if (t === 'number') row.args.push({type:'number', value:a});
+            else if (t === 'boolean') row.args.push({type:'boolean', value:a});
+            else if (t === 'string') row.args.push({type:'string', length:a.length});
+            else if (t === 'object') {
+              var ks = [];
+              try {
+                var names = Object.keys(a);
+                if (names.length > 16) names = names.slice(0, 16);
+                for (var j = 0; j < names.length; j++) ks.push(String(names[j]).slice(0, 32));
+              } catch (e) {}
+              row.args.push({type:'object', keys:ks});
+            } else row.args.push({type:t});
+          }
+          R.networkEvents.push(row);
+        } catch (e) {}
+      };
+      var installNetwork = function (name, kind) {
+        try {
+          if (typeof live[name] === 'function') {
+            live[name](function () { captureNetwork(kind, arguments); });
+            R.networkObserver[name] = true;
+          }
+        } catch (e) {}
+      };
+      installNetwork('setOnNetworkChanged', 'network');
+      installNetwork('setOnMsfStatusChanged', 'msf');
+      installNetwork('setOnWeakNetChanged', 'weak');
+    }
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
     G.__caligo_d8 = R;
@@ -638,6 +847,8 @@ pub const D8_POLL_JS: &str = r"
     var G = globalThis;
     if (!G.__caligo_res) return 'NOT_ARMED';
     var R = G.__caligo_res;
+    // Production passes the captured binding; reject before any mutation.
+    if (typeof caligoExpectedSid !== 'undefined' && R.sid !== caligoExpectedSid) return 'ERR:session_mismatch';
     var keys = Object.keys(R.sends || {});
     for (var k = 0; k < keys.length; k++) {
       var key = keys[k], send = R.sends[key];
@@ -647,25 +858,110 @@ pub const D8_POLL_JS: &str = r"
       }
       if (send && Date.now() >= send.deadline + 30000) delete R.sends[key];
     }
+    var leaseMode = typeof caligoResultLease !== 'undefined' && caligoResultLease === true;
+    var sourceResults = R.sendResults || {}, offeredResults = sourceResults;
+    var deferrals = R.resultDeferrals;
+    if (leaseMode && deferrals instanceof Map && deferrals.size) {
+      var retryNow = null;
+      try { var n = process.hrtime.bigint(); if (typeof n === 'bigint' && n >= 0n) retryNow = n; } catch (_) {}
+      if (retryNow === null) {
+        // A missing clock must not hide an unacknowledged result.
+        deferrals.clear();
+      } else {
+        deferrals.forEach(function(d, k) {
+          if (!d || typeof d.since !== 'bigint' || typeof d.until !== 'bigint' ||
+              d.until < d.since || d.until - d.since > 2000000000n ||
+              !Number.isInteger(d.count) || d.count < 1 || d.count > 4 ||
+              !Object.prototype.hasOwnProperty.call(sourceResults, k) || sourceResults[k] !== d.value)
+            deferrals.delete(k);
+        });
+        offeredResults = Object.create(null);
+        Object.keys(sourceResults).forEach(function(k) {
+          var d = deferrals.get(k);
+          if (!d || d.value !== sourceResults[k] || retryNow < d.since || retryNow >= d.until) offeredResults[k] = sourceResults[k];
+        });
+      }
+    }
     var out = {schema:1, sid:R.sid, items:R.recv, rejected:R.rejected, overflow:R.overflow,
-      sendResults:R.sendResults || {}, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || []};
+      sendResults:offeredResults, imageShapes:R.imageShapes || [], mediaDiagnostics:R.mediaDiagnostics || [],
+      textSendTrace:R.textSendTrace || [], textSendTraceGeneration:R.textTraceGeneration || 0,
+      textSendTraceOverflow:R.textTraceOverflow === true};
+    var resultKeysForLease = Object.keys(offeredResults);
+    var hasTerminal = resultKeysForLease.some(function(k) {
+      var value = offeredResults[k];
+      return value && (value.status === 'done' || value.status === 'unknown' || value.status === 'rejected');
+    });
+    var receipt = null;
+    if (leaseMode && hasTerminal) {
+      if (R.resultLeaseGeneration === undefined) {
+        var crypto = process.getBuiltinModule('node:crypto');
+        var generation = crypto.randomBytes(16).toString('hex');
+        if (!/^[0-9a-f]{32}$/.test(generation)) return 'ERR:result_lease_unavailable';
+        R.resultLeaseGeneration = generation;
+        R.resultLeaseSequence = 0;
+      }
+      if (typeof R.resultLeaseGeneration !== 'string' || !/^[0-9a-f]{32}$/.test(R.resultLeaseGeneration) ||
+          !Number.isSafeInteger(R.resultLeaseSequence) || R.resultLeaseSequence < 0 ||
+          R.resultLeaseSequence >= Number.MAX_SAFE_INTEGER) return 'ERR:result_lease_unavailable';
+      receipt = {generation:R.resultLeaseGeneration, sequence:++R.resultLeaseSequence};
+      out.resultReceipt = receipt;
+    }
     var json = JSON.stringify(out);
     // Preserve legacy D9 state for a later poll rather than truncate JSON or D8 records.
     if (Buffer.byteLength(json, 'utf8') > 524288) {
       out.sendResults = {};
-      var keys = Object.keys(R.sendResults || {});
+      var keys = Object.keys(offeredResults);
+      var isolated = {schema:1, sid:R.sid, items:[], rejected:0, overflow:0,
+        sendResults:{}, imageShapes:[], mediaDiagnostics:[], textSendTrace:[],
+        textSendTraceGeneration:R.textTraceGeneration || 0, textSendTraceOverflow:false};
+      if (receipt) isolated.resultReceipt = receipt;
       for (var i = 0; i < keys.length; i++) {
-        out.sendResults[keys[i]] = R.sendResults[keys[i]];
+        out.sendResults[keys[i]] = offeredResults[keys[i]];
         if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288) {
-          delete out.sendResults[keys[i]]; break;
+          // Keep the omitted result for a later poll, but let smaller results
+          // behind it make progress in this batch.
+          delete out.sendResults[keys[i]];
+          isolated.sendResults = {};
+          isolated.sendResults[keys[i]] = offeredResults[keys[i]];
+          if (offeredResults[keys[i]].status !== 'pending' &&
+              Buffer.byteLength(JSON.stringify(isolated), 'utf8') > 524288) {
+            // A terminal result that cannot fit even in an otherwise empty
+            // batch cannot carry a usable identity; report unknown instead.
+            out.sendResults[keys[i]] = {status:'unknown', reason:'result_exceeds_poll_budget'};
+            if (Buffer.byteLength(JSON.stringify(out), 'utf8') > 524288)
+              delete out.sendResults[keys[i]];
+          }
+          continue;
         }
       }
       json = JSON.stringify(out);
     }
-    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = [];
-    var resultKeys = Object.keys(R.sendResults || {});
-    for (var i = 0; i < resultKeys.length; i++) {
-      if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+    // Match the decoder's batch-level admission before discarding state. This
+    // does not acknowledge delivery to Rust or its durable consumer.
+    if (Buffer.byteLength(json, 'utf8') > 524288) return 'ERR:poll_batch_invalid';
+    var wire = JSON.parse(json);
+    if (wire.schema !== 1 || typeof wire.sid !== 'string' || !wire.sid ||
+        Buffer.byteLength(wire.sid, 'utf8') > 128 || !Array.isArray(wire.items) ||
+        !Number.isSafeInteger(wire.rejected) || wire.rejected < 0 ||
+        !Number.isSafeInteger(wire.overflow) || wire.overflow < 0)
+      return 'ERR:poll_batch_invalid';
+    if (leaseMode && receipt) {
+      var refs = Object.create(null);
+      var emitted = Object.keys(wire.sendResults || {});
+      for (var i = 0; i < emitted.length; i++) {
+        var item = wire.sendResults[emitted[i]];
+        if (item && (item.status === 'done' || item.status === 'unknown' || item.status === 'rejected'))
+          refs[emitted[i]] = R.sendResults[emitted[i]];
+      }
+      R.resultLease = {generation:receipt.generation, sequence:receipt.sequence, refs:refs};
+    }
+    R.recv = []; R.recvBytes = 0; R.rejected = 0; R.overflow = 0; R.imageShapes = []; R.mediaDiagnostics = []; R.textSendTrace = []; R.textTraceOverflow = false;
+    if (!leaseMode) {
+      // Compatibility path; serialization is not downstream acknowledgement.
+      var resultKeys = Object.keys(out.sendResults || {});
+      for (var i = 0; i < resultKeys.length; i++) {
+        if (R.sendResults[resultKeys[i]].status !== 'pending') delete R.sendResults[resultKeys[i]];
+      }
     }
     return json;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
@@ -681,13 +977,240 @@ pub const D8_STOP_JS: &str = r"
     var R = G.__caligo_res;
     var r = 'no-listener';
     R.stopped = true;
-    try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); } catch (e) { r = 'ERR:' + String(e).slice(0, 100); }
+    var noteStopPhase = function(phase, kind) {
+      try { if (R.observeStopPhase) R.observeStopPhase(phase, kind); } catch (_) {}
+    };
+    noteStopPhase('stopping', 'stop_begin');
+    // Research-only, synchronous synthetic callbacks. No QQ API or message data.
+    var probe = '';
+    if (typeof caligoStopProbe !== 'undefined' && caligoStopProbe === true) {
+      try {
+        var before = [R.recv, R.recv.length, R.recvBytes, R.rejected, R.overflow,
+          R.imageShapes, R.imageShapes.length];
+        R.syntheticStopProbe = true;
+        try {
+          R.listener.onRecvMsg(null);
+          R.listener.onMsgInfoListUpdate(null);
+          R.listener.onAddSendMsg(null);
+        } finally { R.syntheticStopProbe = false; }
+        var unchanged = R.recv === before[0] && R.recv.length === before[1] &&
+          R.recvBytes === before[2] && R.rejected === before[3] && R.overflow === before[4] &&
+          R.imageShapes === before[5] && R.imageShapes.length === before[6];
+        probe = unchanged ? ' stop_probe=pass' : ' stop_probe=fail';
+      } catch (_) { probe = ' stop_probe=error'; }
+    }
+    try { r = String(R.ms.removeKernelMsgListener(R.listenerId)); }
+    catch (_) {
+      noteStopPhase('remove_failed', 'stop_remove_failed');
+      return 'ERR:listener_remove_failed' + probe;
+    }
+    noteStopPhase('stopped', 'stop_end');
     var sid = R.sid;
     delete G.__caligo_res;
-    return 'STOPPED sid=' + sid + ' remove=' + r;
+    return 'STOPPED sid=' + sid + ' remove=' + r + probe;
   } catch (e) { return 'ERR:' + String(e).slice(0, 300); }
 })()
 ";
+
+/// Read the retained listener's metadata without clearing any queue. The owner
+/// binds both fields at acquisition, including for the immediate post-STOP read.
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub fn build_callback_observations_js(session: &str, generation: u32) -> Option<String> {
+    if session.is_empty() || session.len() > 128 || generation > 2_147_483_647 {
+        return None;
+    }
+    let sid = serde_json::to_string(session).ok()?;
+    Some(format!(r#"(function(sid, generation) {{
+      try {{
+        var R = globalThis.__caligo_d8;
+        if (!R || R.sid !== sid || R.textTraceGeneration !== generation ||
+            !Array.isArray(R.callbackObservations) || typeof R.callbackObservationsOverflow !== 'boolean')
+          return 'UNAVAILABLE';
+        var rows = R.callbackObservations, events = [];
+        var kinds = ['recv','add','update','matched_add','matched_update','promise_fulfilled',
+          'promise_rejected','readback_fulfilled','readback_rejected','stop_begin','stop_end','stop_remove_failed'];
+        var phases = ['active','stopping','stopped','remove_failed'];
+        var associations = ['none','matched','closure'];
+        var overflow = R.callbackObservationsOverflow || rows.length > 128;
+        for (var i = 0; i < Math.min(rows.length, 129); i++) {{
+          var e = rows[i];
+          if (!e) {{ overflow = true; continue; }}
+          var g = e.generation, order = e.order, seq = e.seq, kind = e.kind,
+            phase = e.phase, association = e.association, current = e.current, callbackTid = e.callback_tid;
+          if (g !== generation || !Number.isInteger(order) || order < 1 || order > 128 ||
+              !Number.isInteger(seq) || seq < 0 || seq > 2147483647 || !kinds.includes(kind) ||
+              !phases.includes(phase) || !associations.includes(association) ||
+              (current !== null && typeof current !== 'boolean') ||
+              (callbackTid !== null && (!Number.isInteger(callbackTid) || callbackTid < 1 || callbackTid > 4294967295))) {{ overflow = true; continue; }}
+          var row = {{generation:g, order:order, seq:seq, kind:kind, phase:phase,
+            association:association, current:current, callback_tid:callbackTid}};
+          if (e.text_state !== undefined) {{
+            if (phase !== 'stopped' || association !== 'closure' ||
+                !['unchanged','changed','unverified'].includes(e.text_state)) {{ overflow = true; continue; }}
+            row.text_state = e.text_state;
+          }}
+          events.push(row);
+        }}
+        var json = JSON.stringify({{generation:generation, overflow:overflow, events:events}});
+        return json.length <= 24576 ? json : 'UNAVAILABLE';
+      }} catch (_) {{ return 'UNAVAILABLE'; }}
+    }})({sid}, {generation})"#))
+}
+
+/// Build a read-only, session-bound aggregate of the result table. No result
+/// key, message content, reason, generation or account is returned.
+pub fn build_result_pressure_js(session: &str) -> Option<String> {
+    if session.is_empty() || session.len() > 128 { return None; }
+    let sid = serde_json::to_string(session).ok()?;
+    Some(format!(r#"(function(expected) {{
+      try {{
+        var R = globalThis.__caligo_res;
+        if (!R || R.sid !== expected) return 'ERR:pressure_session';
+        var results = R.sendResults;
+        if (!results || typeof results !== 'object' || Array.isArray(results) ||
+            (Object.getPrototypeOf(results) !== Object.prototype && Object.getPrototypeOf(results) !== null)) return 'ERR:pressure_state';
+        var keys = Object.keys(results), overflow = keys.length > 128;
+        var delayed = null, deferrals = R.resultDeferrals;
+        if (!overflow && (deferrals === undefined || deferrals === null)) delayed = 0;
+        else if (!overflow && deferrals instanceof Map) {{
+          if (deferrals.size === 0) delayed = 0;
+          else if (deferrals.size <= 128) {{
+            var now = null;
+            try {{ var t = process.hrtime.bigint(); if (typeof t === 'bigint' && t >= 0n) now = t; }} catch (_) {{}}
+            if (now !== null) {{
+              delayed = 0;
+              for (var i = 0; i < keys.length; i++) {{
+                var d = deferrals.get(keys[i]);
+                if (d === undefined) continue;
+                if (!d || typeof d.since !== 'bigint' || typeof d.until !== 'bigint' ||
+                    d.until < d.since || d.until - d.since > 2000000000n ||
+                    !Number.isInteger(d.count) || d.count < 1 || d.count > 4) {{ delayed = null; break; }}
+                if (d.value === results[keys[i]] && now >= d.since && now < d.until) delayed++;
+              }}
+            }}
+          }}
+        }}
+        return JSON.stringify({{entries:Math.min(keys.length,128), over_capacity:overflow, delayed:delayed}});
+      }} catch (_) {{ return 'ERR:pressure_unavailable'; }}
+    }})({sid})"#))
+}
+
+/// Validate and reconstruct only the fixed aggregate fields; arbitrary input
+/// fields never reach the stage report. A missing sample is not zero pressure.
+pub fn sanitize_result_pressure(input: &str) -> Option<String> {
+    if input.len() > 1024 { return None; }
+    let value: serde_json::Value = serde_json::from_str(input).ok()?;
+    let entries = value.get("entries")?.as_u64().filter(|n| *n <= 128)?;
+    let over = value.get("over_capacity")?.as_bool()?;
+    if over && entries != 128 { return None; }
+    let delayed = match value.get("delayed")? {
+        serde_json::Value::Null => None,
+        v => Some(v.as_u64().filter(|n| *n <= entries)?),
+    };
+    if over && delayed.is_some() { return None; }
+    Some(serde_json::json!({"entries":entries,"capacity":128,"saturated":entries == 128,
+        "over_capacity":over,"delayed":delayed}).to_string())
+}
+
+pub fn read_result_pressure(session: &str) -> Result<Option<String>, V8Error> {
+    let Some(source) = build_result_pressure_js(session) else { return Ok(None); };
+    let output = run_fixed_query_script(&source)?;
+    Ok(sanitize_result_pressure(&output))
+}
+
+/// A receipt identifies one JS listener's exact serialized result snapshot.
+/// It only acknowledges resident processing, not daemon durability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollResultReceipt { pub generation: String, pub sequence: u64 }
+
+/// Only the result keys accepted by the resident may be acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollResultAck {
+    pub session: String,
+    pub receipt: PollResultReceipt,
+    pub keys: Vec<String>,
+}
+
+pub fn poll_result_receipt(json: &str) -> Result<Option<PollResultReceipt>, &'static str> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|_| "receipt_json")?;
+    let Some(receipt) = value.get("resultReceipt") else { return Ok(None); };
+    let generation = receipt.get("generation").and_then(|v| v.as_str())
+        .filter(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .ok_or("receipt_generation")?;
+    let sequence = receipt.get("sequence").and_then(|v| v.as_u64())
+        .filter(|n| *n > 0 && *n <= 9_007_199_254_740_991).ok_or("receipt_sequence")?;
+    Ok(Some(PollResultReceipt { generation: generation.to_string(), sequence }))
+}
+
+/// Build an idempotent ack that only removes unchanged result objects.
+pub fn build_poll_result_ack_js(session: &str, receipt: &PollResultReceipt, keys: &[String]) -> Option<String> {
+    if session.is_empty() || session.len() > 128 || receipt.generation.len() != 32 ||
+        !receipt.generation.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) ||
+        receipt.sequence == 0 || receipt.sequence > 9_007_199_254_740_991 || keys.len() > 128 { return None; }
+    let unique: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
+    if unique.len() != keys.len() || serde_json::to_string(keys).ok()?.len() > 524288 { return None; }
+    let args = serde_json::json!({"sid":session,"generation":receipt.generation,"sequence":receipt.sequence,"keys":keys});
+    Some(format!(r#"(function(a) {{
+      try {{
+        var R = globalThis.__caligo_res;
+        if (!R || R.sid !== a.sid) return 'ERR:receipt_session';
+        if (!Array.isArray(a.keys) || a.keys.length > 128) return 'ERR:receipt_keys';
+        var fingerprint = JSON.stringify(a.keys);
+        var last = R.resultLeaseAcked;
+        if (last && last.generation === a.generation && last.sequence === a.sequence)
+          return last.keys === fingerprint ? 'ACKED' : 'ERR:receipt_replay_mismatch';
+        var lease = R.resultLease;
+        if (!lease || lease.generation !== a.generation || lease.sequence !== a.sequence) return 'ERR:receipt_stale';
+        for (var i = 0; i < a.keys.length; i++) {{
+          if (typeof a.keys[i] !== 'string' || !Object.prototype.hasOwnProperty.call(lease.refs, a.keys[i]))
+            return 'ERR:receipt_keys';
+        }}
+        var now = null;
+        try {{ var t = process.hrtime.bigint(); if (typeof t === 'bigint' && t >= 0n) now = t; }} catch (_) {{}}
+        var deferred = R.resultDeferrals;
+        if (now !== null && !(deferred instanceof Map)) {{ deferred = new Map(); R.resultDeferrals = deferred; }}
+        if (now === null && deferred instanceof Map) {{ deferred.clear(); deferred = null; }}
+        var selected = new Set(a.keys), snapshotKeys = Object.keys(lease.refs);
+        for (var i = 0; i < snapshotKeys.length; i++) {{
+          var k = snapshotKeys[i], original = lease.refs[k];
+          if (selected.has(k)) {{
+            if (R.sendResults[k] === original) delete R.sendResults[k];
+            if (deferred) deferred.delete(k);
+          }} else if (deferred && R.sendResults[k] === original) {{
+            var prior = deferred.get(k);
+            if (prior || deferred.size < 128) {{
+              var count = prior && prior.value === original && typeof prior.since === 'bigint' &&
+                Number.isInteger(prior.count) && prior.count >= 1 && prior.count <= 4 && now >= prior.since
+                ? Math.min(prior.count + 1, 4) : 1;
+              var delayMs = 250 * Math.pow(2, count - 1);
+              deferred.set(k, {{value:original, count:count, since:now, until:now + BigInt(delayMs) * 1000000n}});
+            }}
+          }} else if (deferred) {{ deferred.delete(k); }}
+        }}
+        R.resultLeaseAcked = {{generation:a.generation, sequence:a.sequence, keys:fingerprint}};
+        R.resultLease = null;
+        return 'ACKED';
+      }} catch (_) {{ return 'ERR:receipt_failed'; }}
+    }})({args})"#))
+}
+
+/// Advance one pending receipt only after the caller observes an ACKED reply.
+pub fn advance_poll_result_ack<F>(pending: &mut Option<PollResultAck>, ack: F) -> bool
+where F: FnOnce(&PollResultAck) -> bool {
+    if let Some(item) = pending.as_ref() {
+        if !ack(item) { return false; }
+        *pending = None;
+    }
+    true
+}
+
+pub fn ack_poll_result(item: &PollResultAck) -> Result<String, V8Error> {
+    let Some(source) = build_poll_result_ack_js(&item.session, &item.receipt, &item.keys) else { return Ok("ERR:receipt_invalid".into()); };
+    let Some(syms) = symbols() else { return Err(V8Error::NoCurrentContext); };
+    // SAFETY: caller is the owner thread; exec_script checks the V8 ladder.
+    unsafe { exec_script(&syms, isolate_addr(), &source) }
+}
 
 // —— 共享符号存取(daemon 导出解析一次;adapter/pump 共用) ——
 
@@ -724,11 +1247,30 @@ fn isolate_addr() -> *mut c_void {
 
 /// 排空轮转点:执行 D8_POLL_JS 并返回原始 JSON("NOT_ARMED"/items JSON)。
 pub fn poll_listener_json() -> Result<String, V8Error> {
+    poll_listener_script(D8_POLL_JS)
+}
+
+/// Generate a poll tied to the listener session captured at acquisition.
+pub fn build_bound_poll_js(session: &str) -> Option<String> {
+    if session.is_empty() || session.len() > 128 { return None; }
+    let quoted = serde_json::to_string(session).ok()?;
+    Some(format!("(function(caligoExpectedSid, caligoResultLease) {{ return ({}); }})({quoted}, true)", D8_POLL_JS))
+}
+
+/// Production poll. A missing binding must not execute the destructive script.
+pub fn poll_listener_bound_json(session: &str) -> Result<String, V8Error> {
+    let Some(source) = build_bound_poll_js(session) else { return Ok("NOT_ARMED:session_unavailable".into()); };
+    poll_listener_script(&source)
+}
+
+fn poll_listener_script(source: &str) -> Result<String, V8Error> {
+    #[cfg(feature = "research")]
+    callback_threads::drain();
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
     // SAFETY: 阶梯内自管全部检查;调用方保证 owner 线程。
-    let output = unsafe { exec_script(&syms, isolate_addr(), D8_POLL_JS) }?;
+    let output = unsafe { exec_script(&syms, isolate_addr(), source) }?;
     if let Some(detail) = crate::receive_diagnostics::sanitize_image_shapes(&output) {
         // This is a per-process research report budget, independent of message admission.
         static IMAGE_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -744,7 +1286,250 @@ pub fn poll_listener_json() -> Result<String, V8Error> {
             crate::qq_entry::append_stage_simple("media_download_stage", true, &detail);
         }
     }
+    #[cfg(feature = "research")]
+    if let Some(detail) = crate::receive_diagnostics::sanitize_text_send_trace(&output) {
+        static TEXT_REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if TEXT_REPORTS.fetch_update(std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed, |n| (n < 32).then_some(n + 1)).is_ok() {
+            crate::qq_entry::append_stage_simple("text_send_trace", true, &detail);
+        }
+    }
+    #[cfg(feature = "research")]
+    report_callback_observations(&syms);
     Ok(output)
+}
+
+#[cfg(feature = "research")]
+#[derive(Default)]
+struct CallbackObservationReport {
+    source: Option<String>,
+    generation: u32,
+    previous: Option<String>,
+    reports: u8,
+}
+
+#[cfg(feature = "research")]
+static CALLBACK_OBSERVATION_REPORT: std::sync::Mutex<CallbackObservationReport> =
+    std::sync::Mutex::new(CallbackObservationReport {
+        source: None,
+        generation: 0,
+        previous: None,
+        reports: 0,
+    });
+
+#[cfg(feature = "research")]
+const OBSERVATION_REPORTS: u8 = 32;
+/// Polling may use every slot but the last: the stop sample reserves it so a
+/// long idle session can always record its final observation.
+#[cfg(feature = "research")]
+const POLL_OBSERVATION_REPORTS: u8 = OBSERVATION_REPORTS - 1;
+
+#[cfg(feature = "research")]
+fn poll_report_allowed(reports: u8) -> bool {
+    reports < POLL_OBSERVATION_REPORTS
+}
+
+#[cfg(feature = "research")]
+fn final_report_allowed(reports: u8) -> bool {
+    reports < OBSERVATION_REPORTS
+}
+
+#[cfg(feature = "research")]
+fn report_callback_observations(syms: &V8Symbols) {
+    let (source, generation) = {
+        let Ok(report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
+        if !poll_report_allowed(report.reports) { return; }
+        let Some(source) = report.source.clone() else { return; };
+        (source, report.generation)
+    };
+    // SAFETY: same owner and context checks as the preceding poll or STOP.
+    let snapshot = unsafe { exec_script(syms, isolate_addr(), &source) }.unwrap_or_default();
+    let detail = crate::receive_diagnostics::sanitize_callback_observations(&snapshot, generation);
+    let Ok(mut report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
+    if !poll_report_allowed(report.reports) || report.generation != generation ||
+        report.source.as_deref() != Some(source.as_str()) || report.previous.as_ref() == Some(&detail) {
+        return;
+    }
+    report.reports += 1;
+    crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
+    report.previous = Some(detail);
+}
+
+/// Cached binding only: safe to read before scheduling work on the owner.
+#[cfg(feature = "research")]
+pub fn stop_observation_identity(account: &str, host_nonce: u64) -> Option<crate::stop_observation::StopIdentity> {
+    if account.is_empty() || account.len() > 128 || !account.bytes().all(|b| b.is_ascii_digit())
+        || host_nonce == 0 || host_nonce != crate::daemon_client::host_instance_nonce() { return None; }
+    let session = listener_session()?;
+    let report = CALLBACK_OBSERVATION_REPORT.lock().ok()?;
+    if report.source.is_none() || !(1..=i32::MAX as u32).contains(&report.generation) { return None; }
+    Some(crate::stop_observation::StopIdentity {
+        account:account.to_owned(), host_nonce, wrapper_session:session,
+        listener_generation:report.generation,
+    })
+}
+
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub fn build_stopped_observation_js(identity: &crate::stop_observation::StopIdentity) -> Option<String> {
+    if identity.host_nonce == 0 || identity.account.is_empty() || identity.account.len() > 128
+        || !identity.account.bytes().all(|b| b.is_ascii_digit()) || identity.listener_generation == 0 { return None; }
+    let source = build_callback_observations_js(&identity.wrapper_session, identity.listener_generation)?;
+    let account = serde_json::to_string(&identity.account).ok()?;
+    Some(format!(r#"(function(account) {{
+      try {{
+        var R = globalThis.__caligo_d8;
+        if (!R || R.voiceAccount !== account || R.stopped !== true) return 'UNAVAILABLE';
+        return ({source});
+      }} catch (_) {{ return 'UNAVAILABLE'; }}
+    }})({account})"#))
+}
+
+/// Called only by the admitted owner driver; never dispatches or polls messages.
+#[cfg(feature = "research")]
+pub fn sample_stopped_observations(identity: &crate::stop_observation::StopIdentity) -> Result<crate::stop_observation::Sample, &'static str> {
+    if stop_observation_identity(&identity.account, identity.host_nonce).as_ref() != Some(identity) {
+        return Err("observation_binding_changed");
+    }
+    let source = build_stopped_observation_js(identity).ok_or("observation_binding_invalid")?;
+    let syms = symbols().ok_or("observation_symbols_unavailable")?;
+    // SAFETY: owner/context admission is checked by the driver and V8 ladder.
+    let snapshot = unsafe { exec_script(&syms, isolate_addr(), &source) }.map_err(|_| "observation_v8_failed")?;
+    let detail = crate::receive_diagnostics::sanitize_callback_observations(&snapshot, identity.listener_generation);
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "observation_shape")?;
+    if parsed.get("incomplete").and_then(|v| v.as_bool()) != Some(false) { return Err("observation_incomplete"); }
+    let count = parsed.get("events").and_then(|v| v.as_array()).ok_or("observation_shape")?.len();
+    let mut report = CALLBACK_OBSERVATION_REPORT.lock().map_err(|_| "observation_report_poisoned")?;
+    if report.generation != identity.listener_generation { return Err("observation_binding_changed"); }
+    // The stop sample never fails on the report budget: polling leaves it the
+    // final slot, and a full budget only skips the detail line.
+    if report.previous.as_ref() != Some(&detail) && final_report_allowed(report.reports) {
+        report.reports += 1;
+        crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
+        report.previous = Some(detail);
+    }
+    Ok(crate::stop_observation::Sample { callbacks_seen:count as u64 })
+}
+
+/// Read-only surface enumeration for the R2/R3 notification work. It prints
+/// only property names and typeof values, never message data or identity
+/// strings, so the report stays bounded and auditable.
+#[cfg(feature = "research")]
+pub const D8_SURFACE_PROBE_JS: &str = r"
+(function () {
+  try {
+    var q = process._linkedBinding('QQNT');
+    var S = q.NodeIQQNTWrapperSession;
+    var s = S.getNTWrapperSession('nt_1');
+    if (!s || typeof s !== 'object') return JSON.stringify({error:'no_session'});
+    function names(o, limit) {
+      try {
+        var ks = Object.getOwnPropertyNames(o);
+        if (!Array.isArray(ks)) return [];
+        if (ks.length > limit) ks = ks.slice(0, limit);
+        var out = [];
+        for (var i = 0; i < ks.length; i++) {
+          var k = ks[i];
+          if (typeof k === 'string' && k.length > 0) out.push(k.slice(0, 64));
+        }
+        return out;
+      } catch (e) { return ['ERR:' + String((e && e.name) || 'error').slice(0, 32)]; }
+    }
+    function typeOf(v) { return v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v); }
+    function service(name) {
+      try {
+        if (typeof s[name] !== 'function') return {type:typeOf(s[name])};
+        var v = s[name]();
+        var out = {type:typeOf(v)};
+        if (v && (typeof v === 'object' || typeof v === 'function')) {
+          out.keys = names(v, 48);
+          try { out.proto = names(Object.getPrototypeOf(v), 48); } catch (e) { out.proto = []; }
+        }
+        return out;
+      } catch (e) { return {error:String((e && e.name) || 'error').slice(0, 32)}; }
+    }
+    var out = {session:names(s, 64), wrapper_class:names(S, 48), services:{}};
+    try { out.session_proto = names(Object.getPrototypeOf(s), 64); } catch (e) { out.session_proto = []; }
+    var probes = ['getLoginService','getNetworkService','getNetwork','getNTWrapperNetwork','getProfileService','getMsgService'];
+    for (var i = 0; i < probes.length; i++) out.services[probes[i]] = service(probes[i]);
+    return JSON.stringify(out);
+  } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn surface_probe() -> Result<String, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_SURFACE_PROBE_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    let mut detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    // Validate first: the bounded enumerations can exceed 3 KiB, and truncating
+    // before parsing would corrupt the JSON and hide the real surface.
+    if detail.len() > 65536 { return Err("too_large"); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
+    detail = parsed.to_string();
+    Ok(detail)
+}
+
+#[cfg(feature = "research")]
+pub fn drain_network_events() -> Result<Option<String>, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_NETWORK_EVENTS_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw == "NONE" { return Ok(None); }
+    if raw == "ERR" { return Err("script_error"); }
+    let detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if detail.len() > 8192 { return Err("too_large"); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
+    Ok(Some(parsed.to_string()))
+}
+
+#[cfg(feature = "research")]
+pub const D8_NETWORK_EVENTS_JS: &str = r"
+(function () {
+  try {
+    var R = globalThis.__caligo_d8;
+    if (!R || !R.networkObserver) return 'NONE';
+    var events = R.networkEvents || [];
+    if (!events.length) return 'NONE';
+    R.networkEvents = [];
+    var overflow = R.networkEventOverflow === true;
+    R.networkEventOverflow = false;
+    return JSON.stringify({events:events, overflow:overflow});
+  } catch (e) { return 'ERR'; }
+})()
+";
+
+#[cfg(all(test, feature = "research"))]
+mod observation_report_budget_tests {
+    use super::*;
+
+    #[test]
+    fn polling_reserves_the_final_slot() {
+        assert!(poll_report_allowed(0));
+        assert!(poll_report_allowed(POLL_OBSERVATION_REPORTS - 1));
+        assert!(!poll_report_allowed(POLL_OBSERVATION_REPORTS));
+        assert!(!poll_report_allowed(OBSERVATION_REPORTS));
+        assert!(final_report_allowed(POLL_OBSERVATION_REPORTS));
+        assert!(!final_report_allowed(OBSERVATION_REPORTS));
+        assert_eq!(POLL_OBSERVATION_REPORTS + 1, OBSERVATION_REPORTS);
+    }
 }
 
 static D8_SESSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -763,11 +1548,51 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
+    #[cfg(feature = "research")]
+    let observers_ready = account.is_some() && unsafe { callback_threads::install(&syms, isolate_addr()) };
+    #[cfg(not(feature = "research"))]
+    let observers_ready = false;
+    #[cfg(feature = "research")]
+    if account.is_some() {
+        crate::qq_entry::append_stage_simple("js_callback_thread_install", observers_ready,
+            if observers_ready { "exact_runtime_observers_ready" } else { "observation_unavailable" });
+    }
+    let listener = account.map(listener_script_with_account).unwrap_or_else(|| {
+        format!("(function(caligoSendTrace) {{ return ({}); }})(false)", D8_START_JS)
+    });
+    #[cfg(feature = "research")]
+    let getter_ready = observers_ready && callback_threads::getter_installed();
+    #[cfg(not(feature = "research"))]
+    let getter_ready = false;
+    #[cfg(feature = "research")]
+    let network_observer_ready = account.is_some();
+    #[cfg(not(feature = "research"))]
+    let network_observer_ready = false;
+    let source = format!("(function(caligoThreadObserversReady, caligoTidGetterReady, caligoNetworkObserverReady) {{ return ({listener}); }})({observers_ready}, {getter_ready}, {network_observer_ready})");
+    #[cfg(feature = "research")]
+    let source = if account.is_some() {
+        format!(r#"(function() {{
+          var result = ({source});
+          try {{
+            if (result.startsWith('ARMED sid=')) {{
+              var generation = globalThis.__caligo_d8.textTraceGeneration;
+              if (Number.isInteger(generation) && generation >= 0 && generation <= 2147483647)
+                return generation + ' ' + result;
+            }}
+          }} catch (_) {{}}
+          return result;
+        }})()"#)
+    } else { source };
     // SAFETY: 同上。
-    let source = account.map(listener_script_with_account);
-    let result = unsafe {
-        exec_script(&syms, isolate_addr(), source.as_deref().unwrap_or(D8_START_JS))
-    }?;
+    let result = unsafe { exec_script(&syms, isolate_addr(), &source) }?;
+    #[cfg(feature = "research")]
+    let (generation, result) = match result.split_once(' ') {
+        Some((prefix, rest)) if rest.starts_with("ARMED sid=") => match prefix.parse::<u32>() {
+            Ok(generation @ 0..=2_147_483_647) => (generation, rest.to_owned()),
+            _ => (0, result),
+        },
+        _ => (0, result),
+    };
     if let Some(session) = result
         .strip_prefix("ARMED sid=")
         .and_then(|v| v.split_once(" lidRet=").map(|(s, _)| s))
@@ -775,15 +1600,22 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
         if let Ok(mut bound) = D8_SESSION.lock() {
             *bound = Some(session.to_owned());
         }
+        #[cfg(feature = "research")]
+        if let Ok(mut report) = CALLBACK_OBSERVATION_REPORT.lock() {
+            report.source = account.and_then(|_| build_callback_observations_js(session, generation));
+            report.generation = generation;
+            report.previous = None;
+        }
     }
     Ok(result)
 }
 
 fn listener_script_with_account(account: &str) -> String {
     format!(
-        "(function(caligoVoiceAccount) {{ return ({}); }})({})",
+        "(function(caligoVoiceAccount, caligoSendTrace) {{ return ({}); }})({}, {})",
         D8_START_JS,
-        serde_json::to_string(account).expect("serializable account")
+        serde_json::to_string(account).expect("serializable account"),
+        cfg!(feature = "research")
     )
 }
 
@@ -792,8 +1624,26 @@ pub fn stop_listener() -> Result<String, V8Error> {
     let Some(syms) = symbols() else {
         return Err(V8Error::NoCurrentContext);
     };
+    #[cfg(feature = "research")]
+    let source = format!("(function(caligoStopProbe) {{ return ({}); }})(true)", D8_STOP_JS);
+    #[cfg(not(feature = "research"))]
+    let source = format!("(function(caligoStopProbe) {{ return ({}); }})(false)", D8_STOP_JS);
     // SAFETY: 同上。
-    unsafe { exec_script(&syms, isolate_addr(), D8_STOP_JS) }
+    let output = unsafe { exec_script(&syms, isolate_addr(), &source) };
+    #[cfg(feature = "research")]
+    report_callback_observations(&syms);
+    let output = output?;
+    #[cfg(feature = "research")]
+    callback_threads::drain();
+    #[cfg(feature = "research")]
+    if output.starts_with("STOPPED ") || output.starts_with("ERR:listener_remove_failed ") {
+        if let Some(label) = output.rsplit_once(" stop_probe=").map(|(_, label)| label) {
+            let ok = label == "pass";
+            let detail = match label { "pass" => "pass", "fail" => "fail", _ => "error" };
+            crate::qq_entry::append_stage_simple("synthetic_stopped_callbacks", ok, detail);
+        }
+    }
+    Ok(output)
 }
 
 /// 固定语义 UID/UIN 双向查询：直接复用 QQNT wrapper session 的服务。
@@ -1753,6 +2603,16 @@ mod uid_map_script_tests {
     };
 
     #[test]
+    fn send_trace_is_enabled_only_in_research_listener_wrapper() {
+        let js = listener_script_with_account("10001");
+        assert!(js.ends_with(if cfg!(feature = "research") {
+            ", true)"
+        } else {
+            ", false)"
+        }));
+    }
+
+    #[test]
     fn profile_refresh_requires_request_reply_and_notification_and_retains_unknown_cleanup() {
         let scripts = serde_json::json!({
             "start": CURRENT_LOGIN_START_JS,
@@ -2398,7 +3258,7 @@ pub fn build_send_js(
       if (!pending || !pending.promiseDone || !pending.readback) return;
       if (pending.ambiguous || pending.promiseStatus !== 'accepted' || pending.readback.status !== 'readback') {
         R.sendResults[key] = {status:'unknown', reason:pending.ambiguous ? 'multiple_add_send_ids' :
-          (pending.promiseStatus !== 'accepted' ? 'promise_event_conflict' : pending.readback.reason)};
+          (pending.promiseStatus !== 'accepted' ? (pending.unknownReason || 'promise_event_conflict') : pending.readback.reason)};
       } else {
         R.sendResults[key] = {status:'done', msgId:pending.readback.msgId};
       }
@@ -2422,7 +3282,7 @@ pub fn build_send_js(
     js.push_str("    if (typeof sv !== 'string' || !sv || sv === '0') return JSON.stringify({err:'server_time_unavailable'});\n");
     js.push_str("    var cookie = R.ms.generateMsgUniqueId(chat, sv);\n");
     js.push_str(
-        "    if (typeof cookie !== 'string' || !cookie || cookie === '0') return JSON.stringify({err:'invalid_cookie'});\n",
+        "    if (typeof cookie !== 'string' || !cookie || cookie === '0' || Object.values(R.sends).some(send => send.cookie === cookie)) return JSON.stringify({err:'invalid_cookie'});\n",
     );
     js.push_str("    var selfUin = ");
     js.push_str(&account_json);
@@ -2447,22 +3307,62 @@ pub fn build_send_js(
     js.push_str("    var key = ");
     js.push_str(&request_json);
     js.push_str(";\n");
-    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.keys(R.sends).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    js.push_str("    if (Object.prototype.hasOwnProperty.call(R.sends, key) || Object.prototype.hasOwnProperty.call(R.sendResults, key) || Object.keys(R.sends).length >= 128 || Object.keys(R.sendResults).length >= 128) return JSON.stringify({err:'send_capacity_or_duplicate'});\n");
+    // Retain every text cookie in this JS environment: a late notification from a
+    // completed send must not be able to confirm a later same-cookie send.
+    // Bound memory and fail closed on exhaustion rather than evicting old cookies.
+    js.push_str(r#"    var guardKey = '__caligo_text_cookie_guard_v1';
+    if (!Object.prototype.hasOwnProperty.call(G, guardKey)) {
+      var seenCookies = new Set();
+      var claimCookie = function (value) {
+        if (typeof value !== 'string' || !value || value === '0' || value.length > 256) return 'invalid_cookie';
+        if (seenCookies.has(value)) return 'invalid_cookie';
+        if (seenCookies.size >= 65536) return 'cookie_history_exhausted';
+        seenCookies.add(value); return 'ok';
+      };
+      Object.defineProperty(G, guardKey, {value:claimCookie, writable:false, configurable:false, enumerable:false});
+    }
+    var guardDescriptor = Object.getOwnPropertyDescriptor(G, guardKey);
+    if (!guardDescriptor || typeof guardDescriptor.value !== 'function' || guardDescriptor.writable !== false || guardDescriptor.configurable !== false) return JSON.stringify({err:'cookie_history_unavailable'});
+    var cookieClaim = guardDescriptor.value(cookie);
+    if (cookieClaim !== 'ok') return JSON.stringify({err:cookieClaim});
+"#);
     js.push_str("    var pending = {cookie:cookie, chat:chat, peer:peerUid, text:");
     js.push_str(&text_json);
     js.push_str(", selfUin:selfUin, wireSeq:");
     js.push_str(&wire_seq.to_string());
-    js.push_str(", deadline:Date.now()+");
+    js.push_str(", traceSeq:typeof R.allocateTextTrace === 'function' ? R.allocateTextTrace() : 0, deadline:Date.now()+");
     js.push_str(&timeout_ms.to_string());
     js.push_str(", addId:null, updateId:null, done:false};\n");
     js.push_str("    R.sends[key] = pending; R.sendResults[key] = {status:'pending'};\n");
-    js.push_str("    var pr; try { pr = R.ms.sendMsg('0', peer, elems, new Map()); } catch (e) { delete R.sends[key]; delete R.sendResults[key]; throw e; }\n");
-    js.push_str("    Promise.resolve(pr).then(function (res) {\n");
-    js.push_str("      pending.promiseDone = true;\n");
-    js.push_str("      if (res && res.result === 0) { pending.promiseStatus = 'accepted'; R.sendResults[key] = {status:'accepted'}; }\n");
-    js.push_str("      else { pending.promiseStatus = 'rejected'; pending.failed = true; R.sendResults[key] = {status:'rejected', error:'send result=' + String(res && res.result)}; }\n");
-    js.push_str("      settleSendResult(R, key, pending);\n");
-    js.push_str("    }, function (err) { pending.promiseDone=true; pending.promiseStatus='rejected'; pending.failed=true; R.sendResults[key] = {status:'rejected', error:String(err).slice(0,300)}; settleSendResult(R,key,pending); });\n");
+    js.push_str("    if (R.noteTextSend) R.noteTextSend('registered', pending.traceSeq);\n");
+    js.push_str("    function result(status, detail) {\n");
+    js.push_str("      if (R.stopped || R.sends[key] !== pending) return;\n");
+    js.push_str("      if (R.noteTextSend) R.noteTextSend(status === 'accepted' ? 'promise_accepted' : (status === 'rejected' ? 'promise_rejected' : 'promise_unknown'), pending.traceSeq);\n");
+    js.push_str("      pending.promiseDone=true; pending.promiseStatus=status;\n");
+    js.push_str("      if (status === 'unknown') pending.unknownReason=detail.reason;\n");
+    js.push_str("      if (pending.readback) settleSendResult(R,key,pending);\n");
+    js.push_str("      else if (!pending.ambiguous && !pending.timedOut) R.sendResults[key]=detail;\n");
+    js.push_str("      if (status !== 'accepted') pending.failed=true;\n");
+    js.push_str("    }\n");
+    js.push_str("    function unknown(reason) { result('unknown', {status:'unknown', reason:typeof reason === 'string' ? reason : 'text_submit_unknown'}); }\n");
+    js.push_str("    function observePromise(kind) {\n");
+    js.push_str("      try { if (R.beginTextClosureObservation) return R.beginTextClosureObservation(kind, key, pending); if (R.observeCallback) R.observeCallback(kind, 'closure', key, pending); } catch (_) {}\n");
+    js.push_str("      return null;\n");
+    js.push_str("    }\n");
+    js.push_str("    try { if (R.noteTextSend) R.noteTextSend('submit_enter', pending.traceSeq); var pr = R.ms.sendMsg('0', peer, elems, new Map()); if (R.noteTextSend) R.noteTextSend('submit_return', pending.traceSeq); Promise.resolve(pr).then(function (res) {\n");
+    js.push_str("      try { if (R.noteCallbackThread) R.noteCallbackThread('promise'); } catch (_) {}\n");
+    js.push_str("      var finishObservation = observePromise('promise_fulfilled');\n");
+    js.push_str("      try {\n");
+    js.push_str("        if (res && res.result === 0) result('accepted', {status:'accepted'});\n");
+    js.push_str("        else if (res && Number.isSafeInteger(res.result)) unknown('send_result_ambiguous=' + String(res.result));\n");
+    js.push_str("        else unknown();\n");
+    js.push_str("      } finally { try { if (finishObservation) finishObservation(); } catch (_) {} }\n");
+    js.push_str("    }, function () {\n");
+    js.push_str("      try { if (R.noteCallbackThread) R.noteCallbackThread('promise'); } catch (_) {}\n");
+    js.push_str("      var finishObservation = observePromise('promise_rejected');\n");
+    js.push_str("      try { unknown(); } finally { try { if (finishObservation) finishObservation(); } catch (_) {} }\n");
+    js.push_str("    }); } catch (e) { unknown(); }\n");
     js.push_str("    return JSON.stringify({fired:true, mid:key});\n");
     js.push_str("  } catch (e) { return JSON.stringify({ err: String(e).slice(0, 300) }); }\n");
     js.push_str("})()\n");

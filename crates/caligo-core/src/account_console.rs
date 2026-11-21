@@ -1,7 +1,8 @@
-//! Shared read-only account display for the local browser and terminal.
+//! Shared account operations for the local browser and terminal.
 
 use crate::daemon::Daemon;
 use crate::message_store::{ChatType, StoredMessage};
+use crate::runtime::AccountActor;
 use caligo_model::capability::{HostQuery, QueryData, QueryOutcome};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,6 +85,10 @@ impl From<&StoredMessage> for MessageRow {
 /// Snapshot the active connection under the same actor lock as the phase.
 pub(crate) fn connection_id(daemon: &Daemon) -> Option<String> {
     let actor = daemon.actor.lock().ok()?;
+    active_connection_id(daemon, &actor)
+}
+
+fn active_connection_id(daemon: &Daemon, actor: &AccountActor) -> Option<String> {
     if daemon.stop_flag().load(Ordering::Acquire) || actor.phase() != caligo_model::Phase::Active {
         return None;
     }
@@ -92,6 +97,19 @@ pub(crate) fn connection_id(daemon: &Daemon) -> Option<String> {
         "{:016x}-{}",
         connection.core_instance_nonce, connection.connection_epoch
     ))
+}
+
+#[cfg(feature = "research")]
+pub(crate) fn quiesce_sends(daemon: &Daemon, expected_connection: &str) -> Result<(), &'static str> {
+    let mut actor = daemon.actor.lock().map_err(|_| "account actor unavailable")?;
+    if active_connection_id(daemon, &actor).as_deref() != Some(expected_connection)
+        || actor.connection().map(|connection| connection.connection_epoch)
+            != Some(daemon.connection_epoch())
+    {
+        return Err("active account connection changed");
+    }
+    actor.close_send_admission();
+    Ok(())
 }
 
 pub(crate) fn verify_login(
