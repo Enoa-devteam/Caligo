@@ -1172,6 +1172,22 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                         "surface_probe", false, &format!("unavailable:{code}")),
                 }
             }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                match crate::qq_v8::drain_network_events() {
+                    Ok(Some(detail)) => qq_entry::append_stage_simple("network_state", true, &detail),
+                    Ok(None) => {}
+                    Err(code) => {
+                        static NET_OBS_ERR: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let n = NET_OBS_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 {
+                            qq_entry::append_stage_simple(
+                                "network_state", false, &format!("unavailable:{code}"));
+                        }
+                    }
+                }
+            }
             for ev in r.take_events() {
                 let _ = etx.send(ev); // 转交 worker(此前在此处被吞 —— D8 现场缺陷)
             }

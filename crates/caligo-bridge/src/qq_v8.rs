@@ -793,6 +793,45 @@ pub const D8_START_JS: &str = r"
         if (typeof R.voiceDownload === 'function') R.voiceDownload(result);
       }
     };
+    if (typeof caligoNetworkObserverReady !== 'undefined' && caligoNetworkObserverReady === true) {
+      R.networkEvents = [];
+      R.networkEventOverflow = false;
+      R.networkObserver = {};
+      var captureNetwork = function (kind, args) {
+        try {
+          if (R.stopped) return;
+          if (R.networkEvents.length >= 32) { R.networkEventOverflow = true; return; }
+          var row = {kind:kind, args:[]};
+          for (var i = 0; i < args.length && i < 4; i++) {
+            var a = args[i], t = (a === null ? 'null' : typeof a);
+            if (t === 'number') row.args.push({type:'number', value:a});
+            else if (t === 'boolean') row.args.push({type:'boolean', value:a});
+            else if (t === 'string') row.args.push({type:'string', length:a.length});
+            else if (t === 'object') {
+              var ks = [];
+              try {
+                var names = Object.keys(a);
+                if (names.length > 16) names = names.slice(0, 16);
+                for (var j = 0; j < names.length; j++) ks.push(String(names[j]).slice(0, 32));
+              } catch (e) {}
+              row.args.push({type:'object', keys:ks});
+            } else row.args.push({type:t});
+          }
+          R.networkEvents.push(row);
+        } catch (e) {}
+      };
+      var installNetwork = function (name, kind) {
+        try {
+          if (typeof live[name] === 'function') {
+            live[name](function () { captureNetwork(kind, arguments); });
+            R.networkObserver[name] = true;
+          }
+        } catch (e) {}
+      };
+      installNetwork('setOnNetworkChanged', 'network');
+      installNetwork('setOnMsfStatusChanged', 'msf');
+      installNetwork('setOnWeakNetChanged', 'weak');
+    }
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
     G.__caligo_d8 = R;
@@ -1440,6 +1479,43 @@ pub fn surface_probe() -> Result<String, &'static str> {
     Ok(detail)
 }
 
+#[cfg(feature = "research")]
+pub fn drain_network_events() -> Result<Option<String>, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_NETWORK_EVENTS_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw == "NONE" { return Ok(None); }
+    if raw == "ERR" { return Err("script_error"); }
+    let detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if detail.len() > 8192 { return Err("too_large"); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
+    Ok(Some(parsed.to_string()))
+}
+
+#[cfg(feature = "research")]
+pub const D8_NETWORK_EVENTS_JS: &str = r"
+(function () {
+  try {
+    var R = globalThis.__caligo_d8;
+    if (!R || !R.networkObserver) return 'NONE';
+    var events = R.networkEvents || [];
+    if (!events.length) return 'NONE';
+    R.networkEvents = [];
+    var overflow = R.networkEventOverflow === true;
+    R.networkEventOverflow = false;
+    return JSON.stringify({events:events, overflow:overflow});
+  } catch (e) { return 'ERR'; }
+})()
+";
+
 #[cfg(all(test, feature = "research"))]
 mod observation_report_budget_tests {
     use super::*;
@@ -1488,7 +1564,11 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
     let getter_ready = observers_ready && callback_threads::getter_installed();
     #[cfg(not(feature = "research"))]
     let getter_ready = false;
-    let source = format!("(function(caligoThreadObserversReady, caligoTidGetterReady) {{ return ({listener}); }})({observers_ready}, {getter_ready})");
+    #[cfg(feature = "research")]
+    let network_observer_ready = account.is_some();
+    #[cfg(not(feature = "research"))]
+    let network_observer_ready = false;
+    let source = format!("(function(caligoThreadObserversReady, caligoTidGetterReady, caligoNetworkObserverReady) {{ return ({listener}); }})({observers_ready}, {getter_ready}, {network_observer_ready})");
     #[cfg(feature = "research")]
     let source = if account.is_some() {
         format!(r#"(function() {{
