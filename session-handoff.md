@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-21 用户决定按功能门收口 feat-004：四项完成条件均有固定 QQ 9.9.36-53644 的指定样本证据，`feature_list.json` 状态提升为 done；PR #12 原额外保留的 native 持有者、最终释放与全局 drain 记为已知缺口，由 feat-005 的原生链路证据承接，不计作已证。累积工作已归档（`1a30bd5` 代码/测试/工具，`a1a4404` 文档）并更新 PR #12 正文与清单。收口检查：docs PASS、default 496、research 542、7 个 Node 套件 65 项、`git diff --check` 通过。本轮未接入 QQ、零发送、未重接或卸载 bridge。下一块按 feat-005 可离线准备的原生链路证据推进；任何新现场仍须新鲜指定 QQ、重新准入与独立单次授权，旧请求不重发，未证寿命不热卸载。 [进度](progress.md#current-state)
+
 2026-11-21 feat-004 阶段累积工作已归档：代码/测试/工具与文档分两个提交，补齐两个新分析器的 CI 入口（此前只在本地跑过）。提交前重跑 docs PASS、default 496 项、research 542 项、7 个 Node 套件 65 项，均 0 failed；`cargo check --workspace --all-targets` 无错误；GitNexus all-scope 为 critical 且未 partial。本轮未接入 QQ、零发送、未重接或卸载 bridge。feat-004 仍 in-progress：PR #12 保留的 native 持有者、最终释放与全局 drain 尚无现场证据，现有固定构建也没有已验证的非持有式 QQ 采集入口。下一块需先决定是继续该取证路线，还是把该项按已记录 unknown 归档并交给 feat-005 的原生链路证据；任何新现场仍须新鲜指定 QQ 与独立授权。旧请求不重发。 [进度](progress.md#current-state)
 
 2026-11-20 固定镜像已核对异常清理与正常返回共用的解锁路径，以及库存计数的可逆性。复跑 `python -B -E target-harness/feat004-unwind-evidence/verify_evidence.py`。后续先在自建宿主离线验证，去掉专用调用方检查点后，能否用同一线程的展开上下文和外层实际继续执行识别原帧退出。独立移交凭据另行核验，缺少任一项继续保留 unknown。当前无需接入 QQ，旧请求不重发。 [证据与边界](progress.md#current-state)

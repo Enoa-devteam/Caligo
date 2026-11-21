@@ -574,3 +574,18 @@ CLI为 `qq-entry-stop ... --created-filetime <n> --stop-observe-ms <n> --wait-ms
 后续仅以同一进程的私有会话核对 query 输出：A 停止后 B 使用不同名称及 GUID 时，旧句柄 query 输出的名称和 GUID 均为 B（12/12），可据此发现这一组替换；B 复用 A 的名称和 GUID 时，旧句柄 query 输出均与 A 的名称和 GUID 相同（12/12），无法凭这两个字段区分代次。两组句柄数值均复用，实际 stop 仅使用本次成功创建的当前句柄。此检查不比较所有返回字段，也不是 query 与 stop 之间的原子锁；样本不证明系统日志或跨进程行为。完整输出只读审计及负例见 [progress](../../progress.md#current-state)。
 
 2026-11-16 补充：在同一自建进程的 20 次同名同 GUID 私有会话替换中，逐项比较 `EVENT_TRACE_PROPERTIES`、嵌套 `WNODE_HEADER` 的具名成员及返回名称共 25 项；A 的两次查询、B 的查询及用 A 旧值查询 B 的上述字段均相同，句柄数值均复用。只保存字段差异而非原始指针；停止仅使用当次创建的当前句柄。这些对照说明指定样本的已比较字段无法区分代次，不比较填充字节或 ETW 完整状态，也不证明系统 logger 无代次机制。查询与后续停止依旧不是已证的原子操作；系统会话恢复方案不能将匹配的字段快照提升为所有权证明。
+
+## 2026-11-21 按功能门收口（用户决定）
+
+用户决定按四项功能完成条件收口 feat-004，并把 PR #12 额外保留的 native ABI、线程与释放寿命记为已知缺口。下表只汇总已经取得的样本，不把离线取证或保守策略升级为原生事实。
+
+| 完成条件 | 采用的证据 | 仍不覆盖 |
+|---|---|---|
+| 预登记先于 native 调用 | 同一请求的 `registered → submit_enter → submit_return` 现场顺序；正式 JS 顺序 LAB | 其他构建、其他请求类型 |
+| inline、重复、旧代次只终结一次 | listener/cookie/退休回读正反 LAB；`47760` 同 `wire_seq` 自然迟到 `promise_fulfilled`、逐条 `unchanged`、前后账本与 ACK 审计 `corroborated` | 仅该条迟到闭包与比较过的字段 |
+| 受理与稳定身份成功区分，未确认保留 unknown | `35000` 正常发送、同 ID `get_msg`、`ConfirmedSuccess` 与对端单条确认；在途停止样本 `DeliveryUnknown` | 业务拒绝语义仍为已排除缺口 |
+| 超时或排空未知不自动重发 | 0x22/0x23/0x24/0x25 本地持有 LAB、ACK 丢失与 worker/core 恢复 LAB、现场一次提交与 ACK 收尾门 | 故障分支来自 LAB |
+
+尚未闭合的原生项保持 unknown：真实 QQ 的 listener 快照持有者、`Environment`/isolate/service 的最终释放、成功 wait 与全局 drain。固定镜像只有静态路径核对，自建夹具验证的是判据与采集方法；没有已验证的非持有式现场采集入口。该项按用户决定由 feat-005 的常驻原生链路证据承接，feat-004 的提升不表示它已通过。未证寿命继续保留 bridge 至 QQ 正常退出，不热卸载，也不把该策略称为全局 drain。
+
+本轮不改变 feat-005/006/007 的 blocked、其他 in-progress 能力与产品 NOT READY。证据边界与复跑入口见 [progress](../../progress.md#current-state)。

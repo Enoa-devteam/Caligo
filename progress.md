@@ -2,6 +2,12 @@
 
 ## Current State
 
+2026-11-21 feat-004 按功能门收口为 done。四项完成条件均有固定 QQ 9.9.36-53644 的指定样本证据：预登记先于 native 调用（同一请求依次报告 `registered → submit_enter → submit_return`）；inline、重复与旧代次只终结一次（正反 LAB，另以 `47760` 同一 `wire_seq` 的自然迟到 `promise_fulfilled`、逐条 `unchanged` 及前后账本审计得到 `corroborated` 的隔离结论）；受理与稳定身份成功区分且未确认保留 unknown（`35000` 正常发送、同 ID `get_msg`、`ConfirmedSuccess` 与对端单条确认，在途停止样本为 `DeliveryUnknown`）；超时或排空保持 unknown 且不自动重发（0x22/0x23/0x24/0x25 本地持有、结果 ACK 丢失与 worker/core 恢复 LAB、现场一次提交与 ACK 收尾门）。业务拒绝语义按此前用户决定继续是已排除的已知缺口。
+
+PR #12 原额外保留的 native ABI、线程与释放寿命未闭合：真实 QQ 的 listener 快照持有者、`Environment`/isolate/service 最终释放、成功 wait 与全局 drain 仍为 unknown；固定构建只有静态路径核对，自建夹具验证的是判据与采集方法，没有已验证的非持有式现场采集入口。经用户 2026-11-21 决定，该项记为已知缺口并由 feat-005 的原生链路证据承接，feat-004 的提升不表示它已通过。未证寿命继续保留 bridge 至 QQ 正常退出，不热卸载，也不把该策略称为全局 drain；旧请求不重发。 [收口表](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-21-按功能门收口用户决定)
+
+收口检查：Windows `node scripts/check-docs.mjs` PASS（15 live docs、603 links、38 historical、10 features）；`cargo check --workspace --all-targets` 无错误；default 全仓 496 项、research 全仓 542 项均 0 failed；7 个 Node 工具套件 65 项通过、2 项可选项 skip；`git diff --check` 通过。GitNexus 对 4 个状态文件的结构化变更检查为 LOW、3 个符号、0 流程，未报告 partial/truncated；索引的跨语言/流程覆盖有限，0 不证明无影响，已逐文件审阅状态与完成条件。 这些结果只覆盖离线与文档层，不代表其他 QQ 构建、完整私群矩阵或长期运行通过；feat-005/006/007 保持 blocked，其他 in-progress 能力与产品 NOT READY 不变。
+
 2026-11-21 feat-004 阶段累积证据提交。此前各离线工作块与现场记录一直留在共享工作树；本轮按代码/测试/工具与文档分两个提交归档，并补上两个新分析器的 CI 入口。提交前在 Windows x64 重跑适用门：`node scripts/check-docs.mjs` PASS（15 live docs、600 links、38 historical、10 features），`cargo check --workspace --all-targets` 无错误，default 全仓 496 项、research 全仓 542 项均 0 failed，7 个 Node 工具套件 65 项通过、2 项可选项 skip。GitNexus `detect-changes --scope all` 覆盖 28 文件/274 符号/79 流程，risk critical 且未标记 partial；该等级来自共享 V8、停止与账本路径，本轮只抽查其中停止驱动与观察元数据，未逐符号复核，图映射不作为安全或现场通过证明。本轮未接入 QQ、未发送消息、未重载或卸载任何 bridge。feat-004 仍 in-progress：PR #12 保留的 native 持有者、最终释放与全局 drain 仍无现场证据。
 
 2026-11-20 feat-004 核对固定镜像中的异常清理。共享归还正常路径和异常清理使用同一解锁函数，按节点归还还可能临时解锁。已核对的库存计数均可反向变化，所查路径未证实独立移交凭据。 [异常清理与移交凭据](docs/acceptance/2026-11-15-feat-004-observation.md#固定镜像的异常清理与移交凭据)
