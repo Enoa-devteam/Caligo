@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 分析器兼容停止原因行（离线）：`analyze-callback-observation` 与 `analyze-text-stop-evidence` 都只按各自阶段名取行，新增的 `stop_observation_reason` 不改变结论；两个套件各加入含原因行的对照用例（回调分析断言输出完全一致，停止证据断言 staged 结论与 `late_callbacks` 一致）。全部 7 个 Node 套件 69 项（67 通过、2 个可选项 skip），0 failed；无生产代码改动。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
+
 2026-11-21 feat-005 停止原因白名单分支补全（离线）：`stop_driver` 新增单元测试锁定 `FAIL_REASONS` 9 项透传与未知值（`fixture`、伪账号样式串、空串）折叠为 `other`；`qq_entry_lab` 新增 7 个原因集成用例（`observation_binding_changed`、`observation_binding_invalid`、`observation_symbols_unavailable`、`observation_v8_failed`、`observation_shape`、`observation_report_poisoned`、`observation_report_budget`），连同既有 incomplete/other/identity_unavailable 覆盖全部白名单。research `qq_entry_lab` 33/33、default 16/16；全仓 `init.ps1 -Mode all` default 498 / research 554，均 0 failed。原因行语义未变：仍返回 `0x25`、隔离并保留根，不重试。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
 
 2026-11-21 feat-005 新构建单桥与观察停止复验（零发送）：使用包含 §11 诊断的新研究构建（源码 `63bdd01`，EXE `2AB16751…`、bridge `FE301F2F…`、caligod `6AB019B5…`），新实例 PID `59204`（创建 `2026-11-21T05:06:10.4093290Z`）通过固定 manifest、模块 hash、PE/backend 审计与唯一 Environment 后一次接入，baseline self 查询成功。同代次第二次 attach 仍被 CLI 以已映射 bridge 拒绝（exit 2），首会话 report 不变且随后查询成功。`--stop-observe-ms 1000 --wait-ms 10000` 观察停止全阶段通过（`armed → listener_stopped → final_snapshot(+1051 ms) → close_permitted → shutdown(closed via owner pump)`），CLI 原始退出码 `0`，QQ 响应、bridge 保留；成功报告中 `stop_observation_reason` 行数为 0，说明新诊断不影响成功路径。零发送。边界：仅成功路径负向对照，原因行由离线回归覆盖，未现场强制失败或复现重会话 0x25；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#12-2026-11-21-新构建单桥与观察停止复验零发送)

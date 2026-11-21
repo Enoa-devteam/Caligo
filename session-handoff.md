@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-21 feat-005 分析器兼容停止原因行（离线）：`analyze-callback-observation` 与 `analyze-text-stop-evidence` 新增含 `stop_observation_reason` 的对照用例，输出与无原因行时一致；7 个 Node 套件 69 项（67 通过、2 skip）0 failed，无生产改动。下一块：现场复现重会话 `0x25` 并读取原因（需可控会话活动，发送需单次授权），或转向 R2/R3（合同 blocked）；原生寿命仍 unknown，未证寿命不热卸载，旧请求不重发。 [验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
+
 2026-11-21 feat-005 停止原因白名单分支补全（离线）：`stop_driver` 单元测试锁定 `FAIL_REASONS` 9 项透传与未知→`other`；`qq_entry_lab` 新增 7 个 reason 集成用例，连同 incomplete/other/identity_unavailable 覆盖全部白名单。research `qq_entry_lab` 33/33、default 16/16；全仓 all default 498 / research 554，0 failed；`0x25`/隔离/保留根语义未变。复跑 `cargo test -p caligo-bridge --test qq_entry_lab --features research --locked --offline --target-dir target-harness`。下一块：现场复现重会话 `0x25` 并读取原因（需可控会话活动，发送需单次授权），或转向 R2/R3（合同仍 blocked）；原生寿命仍 unknown，未证寿命不热卸载，旧请求不重发。 [验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
 
 2026-11-21 feat-005 新构建现场（零发送）：源码 `63bdd01` 的研究构建（EXE `2AB16751…`、bridge `FE301F2F…`，含 §11 原因诊断）在新实例 `59204` 完成固定准入、一次接入、baseline self 查询；同代次第二次 attach 被 CLI 拒绝（exit 2）且首会话不受影响；1000 ms 观察停止全阶段通过、CLI exit 0、QQ 响应且 bridge 保留。成功报告 `stop_observation_reason` 行数为 0（负向对照）。现场材料在 ignored `local-evidence/feat005-newbuild-stop-20261121-59204/`。下一块若继续现场：需可控制造重会话活动才能复现 0x25 并读取原因（发送需单次授权）；R2/R3 换号/断网仍受合同限制；原生寿命未知。当前 `59204` 已停止但 bridge 保留、不可重接，后续现场须重启 QQ 并重新准入；旧请求不重发、未证寿命不热卸载。 [现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#12-2026-11-21-新构建单桥与观察停止复验零发送)

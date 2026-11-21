@@ -22,6 +22,17 @@ const isUnknown = input => {
   return result;
 };
 
+test('stop-observation reason rows do not change callback analysis', () => {
+  const events = [event(1), event(2, 1, 'matched_add', 'active', 'matched')];
+  const base = snapshot(events);
+  const withReason = [
+    JSON.stringify({ts: 9, tid: 1, stage: 'stop_observation_reason', ok: false, detail: 'observation_incomplete'}),
+    base,
+    JSON.stringify({ts: 10, tid: 1, stage: 'stop_observation', ok: false, detail: 'window_failed; roots retained'}),
+  ].join('\n');
+  assert.deepEqual(analyze(withReason), analyze(base));
+});
+
 test('reversed request completion order groups by seq without joining report TIDs', () => {
   const events = [event(1, 2), event(2, 1, 'readback_rejected', 'active', 'closure', false)];
   const result = analyze([JSON.stringify({stage: 'other', detail: 'PRIVATE_ACCOUNT'}), snapshot(events)].join('\n'));

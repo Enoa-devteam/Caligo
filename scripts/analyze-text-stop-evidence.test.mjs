@@ -20,13 +20,14 @@ const marker = (order, kind, phase) =>
 const closure = (order, phase, textState) => ({association: 'closure', current: false, generation,
   kind: 'promise_fulfilled', order, phase, seq, ...(textState === undefined ? {} : {text_state: textState})});
 
-function report({textState = 'unchanged', stoppedClosure = true, traceRows = [trace(submit)], afterFinal = false} = {}) {
+function report({textState = 'unchanged', stoppedClosure = true, traceRows = [trace(submit)], afterFinal = false, reasonRow = false} = {}) {
   const begin = marker(1, 'stop_begin', 'stopping');
   const end = marker(2, 'stop_end', 'stopped');
   const events = stoppedClosure ? [begin, end, closure(3, 'stopped', textState)] :
     [closure(1, 'active'), {...begin, order: 2}, {...end, order: 3}];
   const observation = batch('js_callback_observation', events);
   return [...traceRows, line('stop_observation', 'armed'), line('stop_observation', 'listener_stopped'),
+    ...(reasonRow ? [line('stop_observation_reason', 'observation_incomplete')] : []),
     ...(!afterFinal ? [observation] : []), line('stop_observation', 'final_snapshot'),
     line('stop_observation', 'close_permitted'), line('shutdown', 'closed'),
     ...(afterFinal ? [observation] : [])].join('\n');
@@ -153,6 +154,15 @@ test('damaged and multiple-request journals leave the mapping unknown', () => {
   const second = frame('Request', {v: 1, request_id: 'OTHER', state: 'Queued', wire_seq: null, session_generation: 3});
   assert.equal(analyze(report(), Buffer.concat([original, second])).reason, 'missing_single_request');
   assert.equal(analyze(report(), journal(seq, 'ConfirmedSuccess', null)).reason, 'missing_single_request');
+});
+
+test('stop reason rows do not change the staged verdict', () => {
+  const [after, before] = stagedJournals();
+  const base = analyze(report(), after, before, {staged: true});
+  const withReason = analyze(report({reasonRow: true}), after, before, {staged: true});
+  assert.deepEqual(withReason, base);
+  assert.equal(typeof base.status, 'string');
+  assert.equal(withReason.late_callbacks, base.late_callbacks);
 });
 
 test('CLI refuses to use one journal file as both stopping snapshots', t => {
