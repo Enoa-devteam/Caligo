@@ -1033,24 +1033,37 @@ pub fn cmd_qq_surface(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let code = match unsafe {
-        remote_export(pid, remote_base, "caligo_qq_surface_probe", extra.created_filetime)
-    } {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[qq-surface] {e}");
-            return ExitCode::FAILURE;
+    // The command only requests an owner tick; quiet ticks can lack a JS
+    // context, so retry a bounded number of times and print the last result.
+    let mut last_line: Option<String> = None;
+    let mut ok = false;
+    for _ in 0..30 {
+        match unsafe {
+            remote_export(pid, remote_base, "caligo_qq_surface_probe", extra.created_filetime)
+        } {
+            Ok(0) => {}
+            Ok(code) => {
+                eprintln!("[qq-surface] request exit={code:#x}");
+                return ExitCode::from(2);
+            }
+            Err(e) => {
+                eprintln!("[qq-surface] {e}");
+                return ExitCode::FAILURE;
+            }
         }
-    };
-    println!("[qq-surface] exit={code:#x}");
-    // The command only requests the owner tick; give it a bounded moment to run.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    if let Ok(text) = std::fs::read_to_string(&report) {
-        for line in text.lines().filter(|line| line.contains("\"stage\":\"surface_probe\"")) {
-            println!("{line}");
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Ok(text) = std::fs::read_to_string(&report) {
+            for line in text.lines().filter(|line| line.contains("\"stage\":\"surface_probe\"")) {
+                if line.contains("\"ok\":true") { ok = true; }
+                last_line = Some(line.to_string());
+            }
         }
+        if ok { break; }
     }
-    if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) }
+    if let Some(line) = &last_line {
+        println!("{line}");
+    }
+    if ok { ExitCode::SUCCESS } else { ExitCode::from(2) }
 }
 
 /// SAFETY: 前置:bridge 已加载。

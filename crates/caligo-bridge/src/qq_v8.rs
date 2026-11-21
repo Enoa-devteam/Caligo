@@ -1419,13 +1419,21 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
 ";
 
 #[cfg(feature = "research")]
-pub fn surface_probe() -> Result<String, V8Error> {
-    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+pub fn surface_probe() -> Result<String, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
     // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
-    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_SURFACE_PROBE_JS) }?;
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_SURFACE_PROBE_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
     let mut detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     if detail.len() > 3000 { detail.truncate(3000); }
-    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| V8Error::RunEmpty)?;
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
     Ok(parsed.to_string())
 }
 

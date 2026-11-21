@@ -1063,14 +1063,9 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 }
                 return 0;
             }
-            // Read-only surface probe for the R2/R3 notification work.
-            #[cfg(feature = "research")]
-            if OWNER_INIT.load(Ordering::Relaxed) && qq_entry::take_surface_probe() {
-                match crate::qq_v8::surface_probe() {
-                    Ok(detail) => qq_entry::append_stage_simple("surface_probe", true, &detail),
-                    Err(_) => qq_entry::append_stage_simple("surface_probe", false, "unavailable"),
-                }
-            }
+            // Read-only surface probe for the R2/R3 notification work. Run it
+            // only after a poll proved a usable JS context on this tick.
+            let mut poll_context_ok = false;
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。
             if OWNER_INIT.load(Ordering::Relaxed) {
@@ -1089,6 +1084,7 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                     let poll = session.as_deref().map(crate::qq_v8::poll_listener_bound_json);
                     match (session, poll) {
                         (Some(session), Some(Ok(json))) if !json.starts_with("NOT_ARMED") => {
+                            poll_context_ok = true;
                             let mut binding = wrapper_binding.clone();
                             binding.wrapper_session = session;
                             if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
@@ -1166,6 +1162,14 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                         }
                         _ => {}
                     }
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok && qq_entry::take_surface_probe() {
+                match crate::qq_v8::surface_probe() {
+                    Ok(detail) => qq_entry::append_stage_simple("surface_probe", true, &detail),
+                    Err(code) => qq_entry::append_stage_simple(
+                        "surface_probe", false, &format!("unavailable:{code}")),
                 }
             }
             for ev in r.take_events() {
