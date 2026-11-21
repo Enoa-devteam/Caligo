@@ -52,6 +52,7 @@
 - 宿主启动：[bootstrap-contract](research/k4-bootstrap-contract.md)、[js-context-acquisition](research/js-context-acquisition.md)。
 - 线程与异步持有：[thread-contract](research/qq-native-thread-contract.md)、[lifetime-contract](research/qq-native-lifetime-contract.md)。
 - 生产 JS 链路的持有者/释放/drain：[holder-release-drain](research/2026-11-21-native-holder-release-drain.md)。
+- R2/R3 持续通知面：[login-network-surface](research/2026-11-21-login-network-notification-surface.md)。
 - 固定 build 重建：[QQ 合同/版本适配研究](research/2026-10-08-qq-native-contract-and-version-adaptation.md)，
   [SnowLuma 工作流重建](research/2026-10-08-snowluma-native-workflow-reconstruction.md)。
 - K3-E 通用 exec 判负与现场材料索引：[K3-E 实验归档](research/k3-e-exec-retrospective.md)。
