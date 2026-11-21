@@ -81,3 +81,24 @@ unknown，不自动重连、不重发；恢复后必须重新核实身份并显�
   （`no_symbols`/`no_context`/`run_empty`/`compile_failed`/`bad_json` 等）。该实例已停止、bridge 保留，未重跑；
   新构建 `d2b981e`（EXE `83342968…`、bridge `73476CA8…`、caligod `D02B07AA…`）待下一次现场。
 - 第二次在线尝试（PID 56396，构建 0e58fbf）证明 tick gating 生效、探针实际执行，但返回 bad_json：3 KiB 预截断破坏了 JSON；已改为先校验（64 KiB 上限）再序列化。该实例已停止、bridge 保留，未重跑；构建 d2b981e 待下一次现场。
+
+## 6. 第三次在线探针结果（2026-11-21，成功）
+
+实例 `6544`（创建 `2026-11-21T14:30:27.0613801Z`），构建 `d2b981e`（EXE `83342968…`、bridge `73476CA8…`、caligod `D02B07AA…`），
+准入 PASS、一次 attach、self 查询通过；`surface_probe` 返回 64 项会话原型与两个服务原型：
+
+- 会话对象**没有** `getLoginService` / `getNetworkService` / `getNetwork` / `getNTWrapperNetwork`（均为 `undefined`）。
+- 通知面在 **session 原型**上：`setOnNetworkChanged`、`setOnMsfStatusChanged`、`setOnWeakNetChanged`、
+  `onLine`、`offLine`、`offLineSync`、`onNetReply`、`onMsfPush`。
+- `getMsgService()` 原型含 `getOnLineDev`、`kickOffLine`、`setStatus`、`fetchStatusMgrInfo`、
+  `fetchStatusUnitedConfigInfo`、`sendMsg`、`addSendMsg`、`cancelSendMsg`、`resendMsg` 等。
+- `getProfileService()` 原型含 `startStatusPolling`、`getSelfStatus`、`getStatus`、`getStatusInfo`、
+  `getCoreInfo`、`getCoreAndBaseInfo`、`getUinByUid`/`getUidByUin` 等。
+
+含意：R2 的连续来源是 session 的 `setOnNetworkChanged`/`setOnMsfStatusChanged`（注册回调），不需要不存在的
+network service getter；R3 可用 `ProfileService.startStatusPolling` + `getSelfStatus`/`getStatusInfo` 作为
+持续身份/状态源，并用会话 `getSessionId` 与会话身份查询核对。
+
+仍未证：setter 回调的参数形状/状态枚举、触发时机与线程、移除方式（传空回调还是单独 remove）、
+以及“状态变化 → 撤权 → 恢复重绑”的接线。下一步应先做研究型 observer（只注册 session setter 与
+ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM 夹具锁定保守语义，再执行 R2/R3 现场。
