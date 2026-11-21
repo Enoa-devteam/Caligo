@@ -102,3 +102,15 @@ network service getter；R3 可用 `ProfileService.startStatusPolling` + `getSel
 仍未证：setter 回调的参数形状/状态枚举、触发时机与线程、移除方式（传空回调还是单独 remove）、
 以及“状态变化 → 撤权 → 恢复重绑”的接线。下一步应先做研究型 observer（只注册 session setter 与
 ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM 夹具锁定保守语义，再执行 R2/R3 现场。
+
+### 6.1 研究型网络观察者（离线实现，2026-11-21）
+
+- 启用：research 构建、带 account 的 attach 时，`D8_START_JS` 收到 `caligoNetworkObserverReady=true`，在 session 上注册
+  `setOnNetworkChanged`/`setOnMsfStatusChanged`/`setOnWeakNetChanged`。
+- 记录：回调只写有界形状——最多 4 个参数；数字/布尔保留值；字符串只写长度；对象只写最多 16 个键名；最多 32 行并带溢出标记。
+  字符串内容、身份与错误文本都不入库。
+- 取数：`D8_NETWORK_EVENTS_JS` 在 poll 成功后的 owner tick 由 `network_state` 阶段行取走并清空；`R.stopped` 后回调 no-op。
+- 夹具：`crates/caligo-bridge/tests/network_observer.rs` 验证注册、sanitize、无泄漏、停止后不再追加。
+- 限制与风险：setter 可能覆盖 QQ 自身网络处理器，仅研究构建启用；本轮除已有点击监听器外不注册 message listener、不发送消息；
+  尚未接入撤权/重绑动作，也未调用 ProfileService 轮询。
+- 构建：源码 `02c15b0`，EXE `4303D964…`、bridge `DAD17EEE…`、caligod `5837BAE7…`。R2 现场需安装该构建后断网/恢复。
