@@ -217,3 +217,18 @@ pub(super) fn reset() {
     DRIVER.clear_poison();
     if let Ok(mut guard) = DRIVER.lock() { *guard = None; }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fail_reasons_are_fixed_labels_and_unknowns_collapse() {
+        for reason in FAIL_REASONS {
+            assert_eq!(bounded_reason(reason), reason, "allowlisted reason must pass through");
+        }
+        assert_eq!(bounded_reason("fixture"), "other");
+        assert_eq!(bounded_reason("PUBLIC-ACCOUNT-123"), "other");
+        assert_eq!(bounded_reason(""), "other");
+    }
+}

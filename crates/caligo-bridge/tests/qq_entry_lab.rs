@@ -313,6 +313,27 @@ fn research_stop_window_snapshot_failure_preserves_roots() { observation_case("s
 fn research_stop_window_reports_sample_incomplete_reason() { observation_case("sample_incomplete"); }
 #[cfg(feature = "research")]
 #[test]
+fn research_stop_window_reports_binding_changed_reason() { observation_case("sample_binding_changed"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_binding_invalid_reason() { observation_case("sample_binding_invalid"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_symbols_unavailable_reason() { observation_case("sample_symbols"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_v8_failed_reason() { observation_case("sample_v8"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_shape_reason() { observation_case("sample_shape"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_report_poisoned_reason() { observation_case("sample_report_poisoned"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_report_budget_reason() { observation_case("sample_report_budget"); }
+#[cfg(feature = "research")]
+#[test]
 fn research_stop_window_reports_missing_binding_reason() { observation_case("identity_missing"); }
 #[cfg(feature = "research")]
 #[test]
@@ -401,13 +422,24 @@ fn observation_case(mode: &'static str) {
     handle.daemon_stop_flag().store(true,Ordering::Release);
     let binding=current.clone();let seen=samples.clone();let closed=stops.clone();
     let owner=std::thread::current().id();
+    let sample_reason = match mode {
+        "sample_failure" => Some("fixture"),
+        "sample_incomplete" => Some("observation_incomplete"),
+        "sample_binding_changed" => Some("observation_binding_changed"),
+        "sample_binding_invalid" => Some("observation_binding_invalid"),
+        "sample_symbols" => Some("observation_symbols_unavailable"),
+        "sample_v8" => Some("observation_v8_failed"),
+        "sample_shape" => Some("observation_shape"),
+        "sample_report_poisoned" => Some("observation_report_poisoned"),
+        "sample_report_budget" => Some("observation_report_budget"),
+        _ => None,
+    };
     install_stop_observation_driver(Box::new(move || if missing_reader.load(Ordering::SeqCst) { None } else { Some(binding.lock().unwrap().clone()) }),
         Box::new(move |_| { assert_eq!(std::thread::current().id(),owner);assert_eq!(closed.load(Ordering::SeqCst),1);
             let n=seen.fetch_add(1,Ordering::SeqCst);
             if mode=="slow_sample" { std::thread::sleep(Duration::from_millis(60)); }
-            if mode=="sample_failure" { Err("fixture") }
-            else if mode=="sample_incomplete" { Err("observation_incomplete") }
-            else { Ok(Sample { callbacks_seen:n as u64 }) }
+            if let Some(reason)=sample_reason { return Err(reason); }
+            Ok(Sample { callbacks_seen:n as u64 })
         })).unwrap();
     arm_stop_observation(identity,if mode=="slow_sample" { 1 } else if mode=="cancel" { 5000 } else { 80 },
         if mode=="slow_sample" { 40 } else if mode=="cancel" { 6000 } else { 1000 }).unwrap();
@@ -437,6 +469,13 @@ fn observation_case(mode: &'static str) {
         assert!(!handle.wake());pump_once();assert_eq!(caligo_bridge::caligo_qq_entry_shutdown(0),0x25);
         let expected = match mode {
             "sample_incomplete" => Some("observation_incomplete"),
+            "sample_binding_changed" => Some("observation_binding_changed"),
+            "sample_binding_invalid" => Some("observation_binding_invalid"),
+            "sample_symbols" => Some("observation_symbols_unavailable"),
+            "sample_v8" => Some("observation_v8_failed"),
+            "sample_shape" => Some("observation_shape"),
+            "sample_report_poisoned" => Some("observation_report_poisoned"),
+            "sample_report_budget" => Some("observation_report_budget"),
             "sample_failure" => Some("other"),
             "identity_missing" => Some("identity_unavailable"),
             _ => None,
