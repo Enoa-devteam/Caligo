@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 满仓观察停止现场准备包（未绑定，离线）：本机 ignored `feat005-overfull-stop-20261121-unbound/` 包含 `preflight.ps1`、`host-op.ps1`（attach + 1000 ms 观察停止）、`run-field.py`（一次授权私聊 + `get_msg` + 账本四态 + 观察停止与原因采集）、`preparation-unbound.json`、`staged_evidence.py`、README；构建固定为 `63bdd01` 的 `2AB16751…` / `FE301F2F…`。安全门：未绑定 state/授权时 runner exit 1（已离线验证、无副作用）；授权须精确匹配 PID/创建时间/marker/目标/`send_once`；unknown 不重发、停止失败不重试不卸载。未绑定清单 SHA-256 `C52E9A3E…30E6`（6 文件）。**未绑定、未授权、未执行，不构成现场证据**；失败原因在运行前保持 unknown。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#13-2026-11-21-满仓观察停止现场准备包未绑定)
+
 2026-11-21 feat-005 满仓停止快照离线闭环（research）：`wrapper_callback_observation` 的 Node VM 用例把观察库填到 128 条并置 `overflow=true` 后停止 listener，再运行停止快照读取，断言返回仍是 128 条、`overflow=true` 且与停止前快照完全一致。结合 `sanitize_callback_observations` 的 overflow→incomplete 规则与 `sample_stopped_observations` 对 incomplete 的拒绝（§11 原因映射），构成 `0x25` 的完整离线因果链；矩阵会话的原始现场仍为 unknown，需要一次真实满仓会话才能把原因写进日志。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
 
 2026-11-21 feat-005 分析器兼容停止原因行（离线）：`analyze-callback-observation` 与 `analyze-text-stop-evidence` 都只按各自阶段名取行，新增的 `stop_observation_reason` 不改变结论；两个套件各加入含原因行的对照用例（回调分析断言输出完全一致，停止证据断言 staged 结论与 `late_callbacks` 一致）。全部 7 个 Node 套件 69 项（67 通过、2 个可选项 skip），0 failed；无生产代码改动。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
