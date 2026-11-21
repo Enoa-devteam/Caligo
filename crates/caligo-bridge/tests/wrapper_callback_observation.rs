@@ -164,6 +164,22 @@ const state = R => JSON.stringify([R.sends,R.sendResults,R.recv,R.recvBytes,R.re
     assert.equal(h.context.__caligo_res,undefined);
     assert.equal(h.context.__caligo_d8,r);
   }
+  {
+    // Holder probe: the stopped reader needs __caligo_d8, while a pending
+    // promise closure still reaches the same R after that global is cleared.
+    const h=harness(true,false,()=>77), r=h.start();
+    const job=h.fire(s.first);
+    assert.match(h.run(s.stop),/^STOPPED/);
+    r.voiceAccount='233';
+    assert.ok(h.snapshot().events.length>0);
+    delete h.context.__caligo_d8;
+    assert.equal(h.run('delete globalThis.__caligo_d8'),true);
+    assert.equal(h.run(s.stopped_read),'UNAVAILABLE');
+    job.submit.resolve({result:0});job.read.resolve(readOK(job));
+    await tick();await tick();
+    assert.ok(r.callbackObservations.some(e=>e.phase==='stopped'),
+      'pending promise closures still reach the retained object');
+  }
   for (const mode of ['changed','unverified']) {
     const h=harness(true,false,()=>77), r=h.start();
     const job=h.fire(s.first);
