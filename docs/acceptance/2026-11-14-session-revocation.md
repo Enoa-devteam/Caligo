@@ -70,8 +70,8 @@ Profile 查询则从精确 wrapper 的 nt_1 取 ProfileService。
 | --- | --- | --- | --- |
 | R1a | 同一 core 中断 bridge 管道，QQ 身份不变 | 旧查询终结、能力清除、新 epoch、重新声明后新 self 查询成功 | 缺正常入口的受控断开步骤与相交在途证据；先离线准备 |
 | R1b | 仅重启隔离 caligod，QQ 不退出 | 新 core nonce；相同 epoch 数值也不保留旧查询；无旧查询 poll/重发 | **LAB 已通过**：当前工作树 `core_restart_query_lab` research 2/2，真实 caligod/IPC/worker + 合成 owner；**双账号 LoginInfo FIELD 已通过**：新代次 A/B 各 attach 一次，self 查询、鉴权隔离和停止 A 后 B 存活通过；**core 重启交错 FIELD 待验**：尚未在 QQ owner 上做重启期间在途取消/迟到回调样本，已完成根禁止复用/重接 |
-| R2 | 指定 QQ 的网络状态变化，IPC 保持可用 | 可定位状态通知触发全路径撤权，恢复后重新核实同一身份 | 静态通知面已定位：`NodeIQQNTWrapperNetwork` 的 `getNetworkStatus/start/stop` 与 `nodeIQQNTWrapperNetworkListener.onNetworkStatusChanged`，kernel 侧 `addNetworkListener`（`networkConnect/onLine/offLine`）；参数/枚举/线程待只读探针，暂不执行 |
-| R3 | 指定测试 QQ 退出账号并登录另一测试身份 | 旧身份失效、旧事件不入新账本、旧请求不重放、显式新代次绑定 | 静态通知面已定位：`NodeIKernelLoginService.addKernelLoginListener`（1 参）与 `nodeIKernelLoginListener` 的 `onLoginState/onLoginConnected/onLoginDisConnected/onQRCodeLoginSucceed`；会话访问器与枚举待只读探针，暂不执行 |
+| R2 | 指定 QQ 的网络状态变化，IPC 保持可用 | 可定位状态通知触发全路径撤权，恢复后重新核实同一身份 | 静态通知面已定位：`NodeIQQNTWrapperNetwork` 的 `getNetworkStatus/start/stop` 与 `nodeIQQNTWrapperNetworkListener.onNetworkStatusChanged`，kernel 侧 `addNetworkListener`（`networkConnect/onLine/offLine`）；只读探针已实现（离线，`caligo_qq_surface_probe` + `qq-surface`），待在线执行；参数/枚举/线程仍未证，R2 暂不执行 |
+| R3 | 指定测试 QQ 退出账号并登录另一测试身份 | 旧身份失效、旧事件不入新账本、旧请求不重放、显式新代次绑定 | 静态通知面已定位：`NodeIKernelLoginService.addKernelLoginListener`（1 参）与 `nodeIKernelLoginListener` 的 `onLoginState/onLoginConnected/onLoginDisConnected/onQRCodeLoginSucceed`；只读探针已实现（离线），待在线执行；会话访问器与枚举仍未证，R3 暂不执行 |
 | R4 | QQ 正常退出后新进程登录 | 旧宿主拒绝、新宿主独立准入与显式绑定 | 独立工作块，不能当 R1–R3 的替代样本 |
 
 R1b 若后续获准执行，使用独立目录、稳定私有 `--token-file`、相同 pipe prefix、
@@ -101,3 +101,8 @@ journal 与指定 QQ；新 core nonce仍应改变。普通 control Stop 会结�
 
 详情与下一步（零发送只读表面探针）见
 [登录/网络持续通知面研究](../research/2026-11-21-login-network-notification-surface.md)。R2/R3 仍不执行。
+
+2026-11-21 离线实现补充：只读探针已落地——bridge 研究导出 `caligo_qq_surface_probe`（owner 泵执行
+`D8_SURFACE_PROBE_JS`，只写属性名/`typeof` 到 `surface_probe` 阶段行）+ CLI `qq-surface`（沿用状态命令
+的准入与已映射 bridge 校验，零发送、不注册 listener）+ Node VM 夹具验证有界与无泄漏。现场包
+`local-evidence/feat005-surface-probe-20261121-unbound/` 已备、未绑定；待新鲜 QQ 代次在线执行。

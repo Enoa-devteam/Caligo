@@ -857,6 +857,20 @@ pub extern "system" fn caligo_qq_entry_shutdown_observe(packed: usize) -> u32 {
     }
 }
 
+/// Research-only read-only surface probe: request one owner-tick enumeration
+/// for the R2/R3 notification work. Never sends or registers listeners.
+#[no_mangle]
+pub extern "system" fn caligo_qq_surface_probe() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_surface_probe() { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
+    }
+}
+
 /// daemon client 启动结果码。
 pub mod daemon_client_code {
     pub const OK: u32 = 0;
@@ -1048,6 +1062,14 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                     qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_exhausted_retained");
                 }
                 return 0;
+            }
+            // Read-only surface probe for the R2/R3 notification work.
+            #[cfg(feature = "research")]
+            if OWNER_INIT.load(Ordering::Relaxed) && qq_entry::take_surface_probe() {
+                match crate::qq_v8::surface_probe() {
+                    Ok(detail) => qq_entry::append_stage_simple("surface_probe", true, &detail),
+                    Err(_) => qq_entry::append_stage_simple("surface_probe", false, "unavailable"),
+                }
             }
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。

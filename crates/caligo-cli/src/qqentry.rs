@@ -1014,8 +1014,57 @@ pub fn cmd_qq_status(args: &[String]) -> ExitCode {
     if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) }
 }
 
+/// Read-only R2/R3 surface probe: trigger one owner-tick enumeration and print
+/// the bounded `surface_probe` report line. It never sends or registers a
+/// listener; the probe only records property names and typeof values.
+pub fn cmd_qq_surface(args: &[String]) -> ExitCode {
+    if args.iter().any(|arg| arg == "--stop-observe-ms") {
+        eprintln!("[qq-surface] --stop-observe-ms is only valid for qq-entry-stop");
+        return ExitCode::FAILURE;
+    }
+    let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[qq-surface] 已映射 bridge 校验失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = match unsafe {
+        remote_export(pid, remote_base, "caligo_qq_surface_probe", extra.created_filetime)
+    } {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[qq-surface] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("[qq-surface] exit={code:#x}");
+    // The command only requests the owner tick; give it a bounded moment to run.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    if let Ok(text) = std::fs::read_to_string(&report) {
+        for line in text.lines().filter(|line| line.contains("\"stage\":\"surface_probe\"")) {
+            println!("{line}");
+        }
+    }
+    if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) }
+}
+
 /// SAFETY: 前置:bridge 已加载。
 unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u64>) -> Result<u32, String> {
+    remote_export(pid, remote_base, "caligo_qq_daemon_status", expected_created)
+}
+
+/// SAFETY: bridge 已加载; export 属于本 bridge。
+unsafe fn remote_export(
+    pid: u32,
+    remote_base: usize,
+    export: &str,
+    expected_created: Option<u64>,
+) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
         CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
@@ -1040,7 +1089,7 @@ unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u
             CloseHandle(proc_h);
             return Err(error);
         }
-        let addr = match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_status")
+        let addr = match winutil::read_remote_export(proc_h, remote_base, export)
         {
             Ok(Some(a)) => a,
             Ok(None) => {
@@ -1076,7 +1125,7 @@ unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u
         CloseHandle(thread);
         CloseHandle(proc_h);
         if wr != 0 {
-            return Err(format!("status wait failed: code {wr:#x}"));
+            return Err(format!("{export} wait failed: code {wr:#x}"));
         }
         Ok(code)
     }

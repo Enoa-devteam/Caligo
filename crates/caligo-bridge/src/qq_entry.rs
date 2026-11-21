@@ -183,6 +183,9 @@ static OWNER_HOOK_FAULT: AtomicBool = AtomicBool::new(false);
 // A returned cleanup error is distinct from unwind/poison, but requires the
 // same permanent root retention and refusal of further owner/native work.
 static OWNER_CLEANUP_FAILED: AtomicBool = AtomicBool::new(false);
+/// One-shot read-only surface probe request for the R2/R3 notification work.
+#[cfg(feature = "research")]
+static SURFACE_PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn owner_fault() -> Option<EntryError> {
     #[cfg(feature = "research")]
@@ -354,6 +357,19 @@ pub fn clear_drain_hook() {
 /// Wake the owner pump through the sole cross-thread libuv operation.
 pub fn wake_owner_pump() -> bool {
     wake_trampoline()
+}
+
+/// Request one read-only JS surface probe on the owner tick.
+#[cfg(feature = "research")]
+pub fn request_surface_probe() -> bool {
+    if ENTRY.close_req.load(Ordering::Acquire) != 0 { return false; }
+    SURFACE_PROBE_REQUESTED.store(true, Ordering::Release);
+    wake_owner_pump()
+}
+
+#[cfg(feature = "research")]
+pub fn take_surface_probe() -> bool {
+    SURFACE_PROBE_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
 /// daemon 启动产物(worker 停止标志;导出侧保存)。

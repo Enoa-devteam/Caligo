@@ -1372,6 +1372,63 @@ pub fn sample_stopped_observations(identity: &crate::stop_observation::StopIdent
     Ok(crate::stop_observation::Sample { callbacks_seen:count as u64 })
 }
 
+/// Read-only surface enumeration for the R2/R3 notification work. It prints
+/// only property names and typeof values, never message data or identity
+/// strings, so the report stays bounded and auditable.
+#[cfg(feature = "research")]
+pub const D8_SURFACE_PROBE_JS: &str = r"
+(function () {
+  try {
+    var q = process._linkedBinding('QQNT');
+    var S = q.NodeIQQNTWrapperSession;
+    var s = S.getNTWrapperSession('nt_1');
+    if (!s || typeof s !== 'object') return JSON.stringify({error:'no_session'});
+    function names(o, limit) {
+      try {
+        var ks = Object.getOwnPropertyNames(o);
+        if (!Array.isArray(ks)) return [];
+        if (ks.length > limit) ks = ks.slice(0, limit);
+        var out = [];
+        for (var i = 0; i < ks.length; i++) {
+          var k = ks[i];
+          if (typeof k === 'string' && k.length > 0) out.push(k.slice(0, 64));
+        }
+        return out;
+      } catch (e) { return ['ERR:' + String((e && e.name) || 'error').slice(0, 32)]; }
+    }
+    function typeOf(v) { return v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v); }
+    function service(name) {
+      try {
+        if (typeof s[name] !== 'function') return {type:typeOf(s[name])};
+        var v = s[name]();
+        var out = {type:typeOf(v)};
+        if (v && (typeof v === 'object' || typeof v === 'function')) {
+          out.keys = names(v, 48);
+          try { out.proto = names(Object.getPrototypeOf(v), 48); } catch (e) { out.proto = []; }
+        }
+        return out;
+      } catch (e) { return {error:String((e && e.name) || 'error').slice(0, 32)}; }
+    }
+    var out = {session:names(s, 64), wrapper_class:names(S, 48), services:{}};
+    try { out.session_proto = names(Object.getPrototypeOf(s), 64); } catch (e) { out.session_proto = []; }
+    var probes = ['getLoginService','getNetworkService','getNetwork','getNTWrapperNetwork','getProfileService','getMsgService'];
+    for (var i = 0; i < probes.length; i++) out.services[probes[i]] = service(probes[i]);
+    return JSON.stringify(out);
+  } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn surface_probe() -> Result<String, V8Error> {
+    let syms = symbols().ok_or(V8Error::NoCurrentContext)?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_SURFACE_PROBE_JS) }?;
+    let mut detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if detail.len() > 3000 { detail.truncate(3000); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| V8Error::RunEmpty)?;
+    Ok(parsed.to_string())
+}
+
 #[cfg(all(test, feature = "research"))]
 mod observation_report_budget_tests {
     use super::*;
