@@ -72,7 +72,7 @@ unknown，不自动重连、不重发；恢复后必须重新核实身份并显�
 - 脚本只输出会话/服务的属性名与 `typeof`（有界：会话 64 项、服务 48 项、类 48 项），错误只保留
   `Error` 名称；不输出消息、身份、函数源码或错误文本。Node VM 夹具
   `crates/caligo-bridge/tests/surface_probe.rs` 验证有界性与无泄漏。
-- 构建（源码 `e19f4ca+surface-probe`）：EXE `D2856915…`、bridge `AEAD7024…`、caligod `3E90D692…`；
+- 构建（源码 `a422aa9`）：EXE `D2856915…`、bridge `AEAD7024…`、caligod `3E90D692…`；
   现场包见 ignored `local-evidence/feat005-surface-probe-20261121-unbound/`（未绑定、零发送）。
 - 在线执行顺序：preflight → `python -B run-field.py`（attach + self 查询 + `qq-surface` + 观察停止）。
   探针结果只用于确定接线；R2/R3 仍未准入、未执行。
