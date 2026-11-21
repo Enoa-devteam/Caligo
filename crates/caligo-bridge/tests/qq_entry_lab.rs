@@ -310,6 +310,12 @@ fn research_stop_window_samples_on_owner_before_one_close() { observation_case("
 fn research_stop_window_snapshot_failure_preserves_roots() { observation_case("sample_failure"); }
 #[cfg(feature = "research")]
 #[test]
+fn research_stop_window_reports_sample_incomplete_reason() { observation_case("sample_incomplete"); }
+#[cfg(feature = "research")]
+#[test]
+fn research_stop_window_reports_missing_binding_reason() { observation_case("identity_missing"); }
+#[cfg(feature = "research")]
+#[test]
 fn research_stop_window_identity_drift_preserves_roots() { observation_case("identity_drift"); }
 #[cfg(feature = "research")]
 #[test]
@@ -382,9 +388,12 @@ fn observation_case(mode: &'static str) {
     use caligo_bridge::stop_observation::{Sample, StopIdentity};
     let _serial=TEST_LOCK.lock().unwrap();lab_reset();
     let (_qq,base,env,_)=FakeQq::new();
-    let handle=bootstrap(&EntryConfig { qqnt_base:base,env,report_path:report_path(mode) },&fake_symbols()).unwrap();
+    let report=report_path(mode);
+    let handle=bootstrap(&EntryConfig { qqnt_base:base,env,report_path:report.clone() },&fake_symbols()).unwrap();
     let identity=StopIdentity { account:"10001".into(),host_nonce:7,wrapper_session:"nt_fixture".into(),listener_generation:1 };
     let current=Arc::new(Mutex::new(identity.clone()));
+    let missing=Arc::new(AtomicBool::new(false));
+    let missing_reader=missing.clone();
     let stops=Arc::new(AtomicUsize::new(0));let samples=Arc::new(AtomicUsize::new(0));
     let keep=Arc::new(7usize);let weak=Arc::downgrade(&keep);
     let stopped=stops.clone();
@@ -392,11 +401,13 @@ fn observation_case(mode: &'static str) {
     handle.daemon_stop_flag().store(true,Ordering::Release);
     let binding=current.clone();let seen=samples.clone();let closed=stops.clone();
     let owner=std::thread::current().id();
-    install_stop_observation_driver(Box::new(move || Some(binding.lock().unwrap().clone())),
+    install_stop_observation_driver(Box::new(move || if missing_reader.load(Ordering::SeqCst) { None } else { Some(binding.lock().unwrap().clone()) }),
         Box::new(move |_| { assert_eq!(std::thread::current().id(),owner);assert_eq!(closed.load(Ordering::SeqCst),1);
             let n=seen.fetch_add(1,Ordering::SeqCst);
             if mode=="slow_sample" { std::thread::sleep(Duration::from_millis(60)); }
-            if mode=="sample_failure" { Err("fixture") } else { Ok(Sample { callbacks_seen:n as u64 }) }
+            if mode=="sample_failure" { Err("fixture") }
+            else if mode=="sample_incomplete" { Err("observation_incomplete") }
+            else { Ok(Sample { callbacks_seen:n as u64 }) }
         })).unwrap();
     arm_stop_observation(identity,if mode=="slow_sample" { 1 } else if mode=="cancel" { 5000 } else { 80 },
         if mode=="slow_sample" { 40 } else if mode=="cancel" { 6000 } else { 1000 }).unwrap();
@@ -405,6 +416,7 @@ fn observation_case(mode: &'static str) {
     let closer=std::thread::spawn(|| caligo_bridge::caligo_qq_entry_shutdown(1000));
     rx.recv_timeout(LAB_WAIT).unwrap();
     if mode=="identity_drift" { current.lock().unwrap().host_nonce+=1; }
+    if mode=="identity_missing" { missing.store(true,Ordering::SeqCst); }
     pump_once();
     if mode=="cancel" { cancel_stop_observation().unwrap(); }
     let deadline=Instant::now()+LAB_WAIT;
@@ -423,6 +435,20 @@ fn observation_case(mode: &'static str) {
         assert_eq!(code,0x25);assert_eq!(FAKE_CLOSE_CALLS.load(Ordering::SeqCst),0);
         assert!(weak.upgrade().is_some());assert!(handle.quarantine());
         assert!(!handle.wake());pump_once();assert_eq!(caligo_bridge::caligo_qq_entry_shutdown(0),0x25);
+        let expected = match mode {
+            "sample_incomplete" => Some("observation_incomplete"),
+            "sample_failure" => Some("other"),
+            "identity_missing" => Some("identity_unavailable"),
+            _ => None,
+        };
+        if let Some(expected) = expected {
+            let report = std::fs::read_to_string(&report).unwrap();
+            let reason = report.lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|row| row.get("stage").and_then(|v| v.as_str()) == Some("stop_observation_reason"))
+                .and_then(|row| row.get("detail").and_then(|v| v.as_str()).map(str::to_owned));
+            assert_eq!(reason.as_deref(), Some(expected), "bounded stop reason must be reported");
+        }
     }
 }
 

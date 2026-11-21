@@ -25,6 +25,33 @@ fn fail() -> EntryError {
     EntryError::StopObservationFailed
 }
 
+/// Fixed labels only: a stopped-session sample failure must stay diagnosable
+/// without logging native detail. Unknown strings collapse to `other`.
+const FAIL_REASONS: [&str; 9] = [
+    "identity_unavailable",
+    "observation_incomplete",
+    "observation_binding_changed",
+    "observation_binding_invalid",
+    "observation_symbols_unavailable",
+    "observation_v8_failed",
+    "observation_shape",
+    "observation_report_poisoned",
+    "observation_report_budget",
+];
+
+fn bounded_reason(reason: &'static str) -> &'static str {
+    FAIL_REASONS
+        .iter()
+        .copied()
+        .find(|known| *known == reason)
+        .unwrap_or("other")
+}
+
+fn fail_reason(reason: &'static str) -> EntryError {
+    append_stage_simple("stop_observation_reason", false, bounded_reason(reason));
+    fail()
+}
+
 pub fn install(identity: IdentityReader, sample: SnapshotReader) -> Result<(), EntryError> {
     let _hook = lock_drain_hook()?;
     if ENTRY.close_req.load(Ordering::Acquire) != 0 { return Err(EntryError::AlreadyBootstrapped); }
@@ -97,7 +124,7 @@ pub(super) fn drive(hook: &Option<Box<dyn Fn() -> usize + Send>>) -> Result<Opti
     let started = *driver.started.as_ref().ok_or_else(fail)?;
     let elapsed = || u64::try_from(started.elapsed().as_millis()).map_err(|_| fail());
     let now = elapsed()?;
-    let identity = (driver.identity)().ok_or_else(fail)?;
+    let identity = (driver.identity)().ok_or_else(|| fail_reason("identity_unavailable"))?;
     if driver.cancelled {
         window.cancel(now, &identity).map_err(|_| fail())?;
         driver.cancelled = false;
@@ -105,14 +132,14 @@ pub(super) fn drive(hook: &Option<Box<dyn Fn() -> usize + Send>>) -> Result<Opti
     // Only Stop + initial sample + final sample + close can coalesce in one tick.
     for _ in 0..4 {
         let now = elapsed()?;
-        let identity = (driver.identity)().ok_or_else(fail)?;
+        let identity = (driver.identity)().ok_or_else(|| fail_reason("identity_unavailable"))?;
         let Some(action) = window.next_action(now, &identity).map_err(|_| fail())? else {
             return Ok(Some(false));
         };
         match action.kind {
             ActionKind::StopListener => {
                 if !invoke_drain_hook(hook) { return Err(owner_fault().unwrap_or(EntryError::StopObservationFailed)); }
-                let identity = (driver.identity)().ok_or_else(fail)?;
+                let identity = (driver.identity)().ok_or_else(|| fail_reason("identity_unavailable"))?;
                 window.accept_receipt(elapsed()?, &identity, action, Receipt::ListenerStopped).map_err(|_| fail())?;
                 append_stage_simple("stop_observation", true, "listener_stopped");
             }
@@ -126,8 +153,11 @@ pub(super) fn drive(hook: &Option<Box<dyn Fn() -> usize + Send>>) -> Result<Opti
                 if let Some(error) = owner_fault() {
                     return Err(error);
                 }
-                let sample = sample.map_err(|_| fail())?;
-                let identity = (driver.identity)().ok_or_else(fail)?;
+                let sample = match sample {
+                    Ok(sample) => sample,
+                    Err(reason) => return Err(fail_reason(reason)),
+                };
+                let identity = (driver.identity)().ok_or_else(|| fail_reason("identity_unavailable"))?;
                 window.accept_receipt(elapsed()?, &identity, action, Receipt::Observed(sample)).map_err(|_| fail())?;
                 if final_sample { append_stage_simple("stop_observation", true, "final_snapshot"); }
             }
