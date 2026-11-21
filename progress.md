@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 停止观察报告预算预留修复（research）：按 §15 的复现与决定，轮询最多记录 31 条、停止采样保留第 32 槽；`sample_stopped_observations` 不再因预算返回 `observation_report_budget`（预算满只跳过明细行，仍返回 `Ok`），并移除 `report_budget_exhausted` 标记行以免污染日志分析。新增单元测试锁定 30/31/32 边界。预期新构建在 idle 超过 4 分钟后观察停止仍通过并记录最终快照；该现场复验需要新 QQ 代次，尚未执行。普通停止路径不变，真实采样失败仍为 `0x25` 并保留根。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#16-2026-11-21-停止观察报告预算预留修复research)
+
 2026-11-21 feat-005 空闲重会话观察停止现场（零发送）：新实例 PID `6476`（创建 `2026-11-21T07:17:41.1156385Z`）通过 §11 构建准入后一次接入，仅 idle 轮询。约 230 秒后累计 32 条 `js_callback_observation`，第 32 条为 `report_budget_exhausted`；随后 1000 ms 观察停止以 `stop_observation_reason=observation_report_budget` 失败（仍为 `0x25`、隔离并保留根），helper 原始退出码未取（原生 stderr 提前退出），管理器仍持有账号并正常退出，QQ 同代响应、bridge 保留，未重试。同会话线程观察槽 `capture_incomplete=0`、最大 `sequence=49`，说明此前 §6 的 `capture_incomplete` 属于 128 槽线程观察数组而非 JS 回调库，§6/§11 已更正。结论：研究观察停止在约 4 分钟 idle 轮询耗尽 32 条诊断报告预算后必然失败，与是否发送无关；这是 `0x25` 的确定性复现，但 §6 原会话仍为 unknown。是否把诊断预算与停止门解耦需单独决定，本轮未改代码。零发送；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#15-2026-11-21-空闲重会话观察停止现场复现-0x25--observation_report_budget)
 
 2026-11-21 feat-005 满仓观察停止现场（单次私聊，未复现）：新实例 PID `37796`（创建 `2026-11-21T07:04:40.4258757Z`）通过准备包 preflight 后按授权绑定执行：一次私聊 `CALIGO-005-OVERFULL-7E2C4A19` → `3089665724` 返回 `retcode=0`、消息 ID 1，账本四态、payload hash、native ID 与 `get_msg` 回读一致，用户确认对端收到一条；随后 1000 ms 观察停止全阶段通过（helper/CLI exit 0、`closed via owner pump`），`stop_observation_reason` 行数为 0，管理器仍持有账号并正常退出，QQ 响应、bridge 保留。结论：单次发送未填满 JS 回调库，`observation_incomplete` 未复现；原因行仍为离线证据，复现需要更多回调活动（矩阵会话为两次发送 + 两条入站 + 后续查询）。零重发；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#14-2026-11-21-满仓观察停止现场单次私聊未复现满仓)

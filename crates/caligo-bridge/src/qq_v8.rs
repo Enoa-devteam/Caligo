@@ -1279,10 +1279,27 @@ static CALLBACK_OBSERVATION_REPORT: std::sync::Mutex<CallbackObservationReport> 
     });
 
 #[cfg(feature = "research")]
+const OBSERVATION_REPORTS: u8 = 32;
+/// Polling may use every slot but the last: the stop sample reserves it so a
+/// long idle session can always record its final observation.
+#[cfg(feature = "research")]
+const POLL_OBSERVATION_REPORTS: u8 = OBSERVATION_REPORTS - 1;
+
+#[cfg(feature = "research")]
+fn poll_report_allowed(reports: u8) -> bool {
+    reports < POLL_OBSERVATION_REPORTS
+}
+
+#[cfg(feature = "research")]
+fn final_report_allowed(reports: u8) -> bool {
+    reports < OBSERVATION_REPORTS
+}
+
+#[cfg(feature = "research")]
 fn report_callback_observations(syms: &V8Symbols) {
     let (source, generation) = {
         let Ok(report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
-        if report.reports >= 32 { return; }
+        if !poll_report_allowed(report.reports) { return; }
         let Some(source) = report.source.clone() else { return; };
         (source, report.generation)
     };
@@ -1290,18 +1307,13 @@ fn report_callback_observations(syms: &V8Symbols) {
     let snapshot = unsafe { exec_script(syms, isolate_addr(), &source) }.unwrap_or_default();
     let detail = crate::receive_diagnostics::sanitize_callback_observations(&snapshot, generation);
     let Ok(mut report) = CALLBACK_OBSERVATION_REPORT.lock() else { return; };
-    if report.reports >= 32 || report.generation != generation ||
+    if !poll_report_allowed(report.reports) || report.generation != generation ||
         report.source.as_deref() != Some(source.as_str()) || report.previous.as_ref() == Some(&detail) {
         return;
     }
     report.reports += 1;
-    if report.reports == 32 {
-        crate::qq_entry::append_stage_simple("js_callback_observation", false,
-            r#"{"incomplete":true,"reason":"report_budget_exhausted"}"#);
-    } else {
-        crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
-        report.previous = Some(detail);
-    }
+    crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
+    report.previous = Some(detail);
 }
 
 /// Cached binding only: safe to read before scheduling work on the owner.
@@ -1349,18 +1361,31 @@ pub fn sample_stopped_observations(identity: &crate::stop_observation::StopIdent
     if parsed.get("incomplete").and_then(|v| v.as_bool()) != Some(false) { return Err("observation_incomplete"); }
     let count = parsed.get("events").and_then(|v| v.as_array()).ok_or("observation_shape")?.len();
     let mut report = CALLBACK_OBSERVATION_REPORT.lock().map_err(|_| "observation_report_poisoned")?;
-    if report.generation != identity.listener_generation || report.reports >= 32 { return Err("observation_report_budget"); }
-    if report.previous.as_ref() != Some(&detail) {
+    if report.generation != identity.listener_generation { return Err("observation_binding_changed"); }
+    // The stop sample never fails on the report budget: polling leaves it the
+    // final slot, and a full budget only skips the detail line.
+    if report.previous.as_ref() != Some(&detail) && final_report_allowed(report.reports) {
         report.reports += 1;
-        if report.reports == 32 {
-            crate::qq_entry::append_stage_simple("js_callback_observation", false,
-                r#"{"incomplete":true,"reason":"report_budget_exhausted"}"#);
-            return Err("observation_report_budget");
-        }
         crate::qq_entry::append_stage_simple("js_callback_observation", true, &detail);
         report.previous = Some(detail);
     }
     Ok(crate::stop_observation::Sample { callbacks_seen:count as u64 })
+}
+
+#[cfg(all(test, feature = "research"))]
+mod observation_report_budget_tests {
+    use super::*;
+
+    #[test]
+    fn polling_reserves_the_final_slot() {
+        assert!(poll_report_allowed(0));
+        assert!(poll_report_allowed(POLL_OBSERVATION_REPORTS - 1));
+        assert!(!poll_report_allowed(POLL_OBSERVATION_REPORTS));
+        assert!(!poll_report_allowed(OBSERVATION_REPORTS));
+        assert!(final_report_allowed(POLL_OBSERVATION_REPORTS));
+        assert!(!final_report_allowed(OBSERVATION_REPORTS));
+        assert_eq!(POLL_OBSERVATION_REPORTS + 1, OBSERVATION_REPORTS);
+    }
 }
 
 static D8_SESSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);

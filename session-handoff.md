@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-21 feat-005 停止观察预算预留修复（research）：轮询上限 31、最终采样保留第 32 槽；`sample_stopped_observations` 不再因预算返回 `observation_report_budget`（满预算只跳过明细并返回 `Ok`），移除 `report_budget_exhausted` 标记行以免污染分析器；新增 30/31/32 边界单元测试。普通停止路径不变，真实采样失败仍 `0x25` 并保留根。下一块：新 QQ 代次上做 idle >4 分钟的观察停止复验（应通过并出现最终快照）；`6476` 已停止、bridge 保留、不可重接。原生寿命 unknown，旧请求不重发。 [验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#16-2026-11-21-停止观察报告预算预留修复research)
+
 2026-11-21 feat-005 空闲重会话观察停止现场（零发送）：新实例 `6476`（创建 `2026-11-21T07:17:41.1156385Z`）一次接入后 idle 轮询，约 230s 累计 32 条 `js_callback_observation`，第 32 条 `report_budget_exhausted`；随后 1000 ms 观察停止以 `stop_observation_reason=observation_report_budget` 失败（0x25、保根），管理器仍持账号并退出 0，QQ 响应、bridge 保留，未重试。线程槽 `capture_incomplete=0`、`sequence=49`，据此更正 §6 的 cap 归属。结论：研究观察停止在 32 条报告预算耗尽后必然失败，与发送无关；§6 原会话仍 unknown。下一块需用户决定是否把诊断报告预算与停止门解耦（例如最终采样不因预算拒绝），或保持为已知工具限制；`6476` 已停止、bridge 保留、不可重接。原生寿命 unknown，旧请求不重发。 [现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#15-2026-11-21-空闲重会话观察停止现场复现-0x25--observation_report_budget)
 
 2026-11-21 feat-005 满仓观察停止现场（单次私聊，未复现）：新实例 `37796`（创建 `2026-11-21T07:04:40.4258757Z`）通过准备包 preflight 与精确授权后执行一次私聊，发送/账本四态/`get_msg` 回读一致，用户确认对端收到一条；1000 ms 观察停止全阶段通过、exit 0、无 reason 行，管理器正常退出，QQ 响应、bridge 保留。单次发送未填满 JS 回调库，`observation_incomplete` 未复现；复现需要更多回调活动（矩阵会话为两次发送 + 两条入站 + 后续查询，另需新授权与新代次）。零重发；原生寿命仍 unknown，未证寿命不热卸载。下一块可准备“多事件”现场包或转向 R2/R3；`37796` 已停止、bridge 保留、不可重接。 [现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#14-2026-11-21-满仓观察停止现场单次私聊未复现满仓)
