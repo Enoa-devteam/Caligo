@@ -20,17 +20,30 @@
 
 ## 常驻发送路径
 
+生产路线（默认构建唯一创建常驻链路的入口）：
+
 1. [caligod](../../crates/caligo-core/src/commands/daemon.rs) 启动 core；
    [daemon](../../crates/caligo-core/src/daemon.rs) 管理 control/bridge 管道。
 2. [runtime](../../crates/caligo-core/src/runtime.rs) 维护账号 actor、请求代次及持久状态。
 3. [resident](../../crates/caligo-bridge/src/resident.rs) 接收 IPC，驱动 adapter。
-4. [native_resident](../../crates/caligo-bridge/src/native_resident.rs) 与
-   [native_session](../../crates/caligo-bridge/src/native_session.rs) 管理原生会话。
-5. [g3_ops](../../crates/caligo-bridge/src/g3_ops.rs) 提交原生发送，
-   [consumer_probe](../../crates/caligo-bridge/src/consumer_probe.rs) 接收 cookie 关联响应，
-   [native_response](../../crates/caligo-bridge/src/native_response.rs) 终结响应账本，resident 再上行结果。
+4. [qq_entry](../../crates/caligo-bridge/src/qq_entry.rs) 的 `QqOwnerAdapter` 在 QQ owner 线程执行
+   V8 脚本：[qq_v8](../../crates/caligo-bridge/src/qq_v8.rs) 的 wrapper `sendMsg`、Promise 与精确回读；
+   查询由 [qq_query](../../crates/caligo-bridge/src/qq_query.rs) 的固定 wrapper 动作执行。
+5. resident 把结果上行 core，由 [journal](../../crates/caligo-core/src/journal.rs) 持久化，
+   [message_store](../../crates/caligo-core/src/message_store.rs) 投影为 OneBot `get_msg` 数据。
 
-这是已存在的代码接线路径；现场验收范围查 progress 和对应台账。
+历史原生路线（研究资产，非生产依赖）：
+[native_msf](../../crates/caligo-bridge/src/native_msf.rs)、
+[native_session](../../crates/caligo-bridge/src/native_session.rs)、
+[g3_ops](../../crates/caligo-bridge/src/g3_ops.rs)、
+[consumer_probe](../../crates/caligo-bridge/src/consumer_probe.rs)、
+[native_response](../../crates/caligo-bridge/src/native_response.rs)、
+[native_resident](../../crates/caligo-bridge/src/native_resident.rs) 组成 MSFService 提交与 consumer 响应路线。
+普通构建由 [gate.rs](../../crates/caligo-bridge/src/gate.rs) 拒绝其入口；只有 research 构建保留。
+`QqOwnerAdapter` 与 `Resident` 之间的缝是共用部分，但两条路线的原生对象、回调与未知合同不同，证据不可互换；
+适用关系见 [feat-005 路线适用性](../acceptance/2026-11-21-feat-005-scope.md)。
+
+现场验收范围查 progress 和对应台账。
 `Queued`、`NativeStarted`、`BusinessAccepted` 与带稳定身份的业务成功是不同证据。
 consumer、会话、core 状态和 OneBot 输出都要分别核对，不能凭某个类型名推断端到端语义。
 

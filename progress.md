@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 起始块：正式/历史路线适用性与完成门判定（离线）。正式路线为 `qq_entry`/`QqOwnerAdapter` + `qq_v8`/`qq_query`，历史 native MSF/G3/consumer 路线在默认构建由 `gate.rs` 拒绝或只在 research 编译，`qq_entry`/`qq_query`/`resident` 没有对其模块的引用，故其身份/回调/寿命未决项改为研究资产，不再作为本 feature 的生产阻塞理由，固定合同与证据保留。三条完成门均已列出已有证据与缺口；本轮新增入口级单桥 LAB：同一宿主代次第二次 `bootstrap` 在任何原生调用前返回 `AlreadyBootstrapped`，首次会话保持 admitted，正常关闭后同一进程仍拒绝再次接入。`qq_entry_lab` default 16/16、research 24/24，`init.ps1 -Mode all` 的 default 497 项与 research 543 项均 0 failed，docs PASS（15 live docs、615 links、39 historical、10 features）；未接入 QQ、零发送。feat-005 由 blocked 调整为 in-progress；真实 QQ 的 core 重启/断链恢复现场与原生对象持有/最终释放/全局 drain 仍 unknown，feat-006/007 blocked 与其他 in-progress 能力不变。[路线适用性](docs/acceptance/2026-11-21-feat-005-scope.md)
+
 2026-11-21 feat-004 按功能门收口为 done。四项完成条件均有固定 QQ 9.9.36-53644 的指定样本证据：预登记先于 native 调用（同一请求依次报告 `registered → submit_enter → submit_return`）；inline、重复与旧代次只终结一次（正反 LAB，另以 `47760` 同一 `wire_seq` 的自然迟到 `promise_fulfilled`、逐条 `unchanged` 及前后账本审计得到 `corroborated` 的隔离结论）；受理与稳定身份成功区分且未确认保留 unknown（`35000` 正常发送、同 ID `get_msg`、`ConfirmedSuccess` 与对端单条确认，在途停止样本为 `DeliveryUnknown`）；超时或排空保持 unknown 且不自动重发（0x22/0x23/0x24/0x25 本地持有、结果 ACK 丢失与 worker/core 恢复 LAB、现场一次提交与 ACK 收尾门）。业务拒绝语义按此前用户决定继续是已排除的已知缺口。
 
 PR #12 原额外保留的 native ABI、线程与释放寿命未闭合：真实 QQ 的 listener 快照持有者、`Environment`/isolate/service 最终释放、成功 wait 与全局 drain 仍为 unknown；固定构建只有静态路径核对，自建夹具验证的是判据与采集方法，没有已验证的非持有式现场采集入口。经用户 2026-11-21 决定，该项记为已知缺口并由 feat-005 的原生链路证据承接，feat-004 的提升不表示它已通过。未证寿命继续保留 bridge 至 QQ 正常退出，不热卸载，也不把该策略称为全局 drain；旧请求不重发。 [收口表](docs/acceptance/2026-11-15-feat-004-observation.md#2026-11-21-按功能门收口用户决定)
