@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 满仓停止快照离线闭环（research）：`wrapper_callback_observation` 的 Node VM 用例把观察库填到 128 条并置 `overflow=true` 后停止 listener，再运行停止快照读取，断言返回仍是 128 条、`overflow=true` 且与停止前快照完全一致。结合 `sanitize_callback_observations` 的 overflow→incomplete 规则与 `sample_stopped_observations` 对 incomplete 的拒绝（§11 原因映射），构成 `0x25` 的完整离线因果链；矩阵会话的原始现场仍为 unknown，需要一次真实满仓会话才能把原因写进日志。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
+
 2026-11-21 feat-005 分析器兼容停止原因行（离线）：`analyze-callback-observation` 与 `analyze-text-stop-evidence` 都只按各自阶段名取行，新增的 `stop_observation_reason` 不改变结论；两个套件各加入含原因行的对照用例（回调分析断言输出完全一致，停止证据断言 staged 结论与 `late_callbacks` 一致）。全部 7 个 Node 套件 69 项（67 通过、2 个可选项 skip），0 failed；无生产代码改动。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
 
 2026-11-21 feat-005 停止原因白名单分支补全（离线）：`stop_driver` 新增单元测试锁定 `FAIL_REASONS` 9 项透传与未知值（`fixture`、伪账号样式串、空串）折叠为 `other`；`qq_entry_lab` 新增 7 个原因集成用例（`observation_binding_changed`、`observation_binding_invalid`、`observation_symbols_unavailable`、`observation_v8_failed`、`observation_shape`、`observation_report_poisoned`、`observation_report_budget`），连同既有 incomplete/other/identity_unavailable 覆盖全部白名单。research `qq_entry_lab` 33/33、default 16/16；全仓 `init.ps1 -Mode all` default 498 / research 554，均 0 failed。原因行语义未变：仍返回 `0x25`、隔离并保留根，不重试。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)

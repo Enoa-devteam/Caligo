@@ -226,6 +226,11 @@ const state = R => JSON.stringify([R.sends,R.sendResults,R.recv,R.recvBytes,R.re
     assert.ok(full.events.every((e,i)=>e.order===i+1));
     h.run(s.stop);
     assert.deepEqual(h.snapshot(),full);
+    r.voiceAccount='233';
+    const stopped=JSON.parse(h.run(s.stopped_read));
+    assert.equal(stopped.overflow,true,'the stopped snapshot keeps the overflow flag');
+    assert.equal(stopped.events.length,128);
+    assert.deepEqual(stopped,full,'the stopped reader returns the same overfull batch');
   }
   {
     const h=harness(false), r=h.start();
