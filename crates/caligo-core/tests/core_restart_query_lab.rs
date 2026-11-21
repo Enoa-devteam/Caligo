@@ -662,6 +662,134 @@ fn unacked_result_replays_after_core_restart_with_the_same_epoch() {
     println!("two real cores: first epoch={first_epoch}, one worker, dropped result ACK notice={notice_id}, replayed results={}, native sends=1", counts.results_sent);
 }
 
+/// A send whose native call is already in progress when the core restarts must
+/// not be dispatched again. When the blocked owner call finally returns, its
+/// NativeStarted and result may complete the same request once on the new core.
+#[test]
+fn inflight_send_across_core_restart_is_not_redispatched() {
+    use std::sync::atomic::AtomicU64;
+    use caligo_bridge::resident::ResultHandoffGate;
+
+    let _serial = SERIAL.lock().unwrap();
+    struct BlockingOwner {
+        owner: std::thread::ThreadId,
+        sends: Arc<AtomicU64>,
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl HostAdapter for BlockingOwner {
+        fn owner_thread_id(&self) -> u64 { 1 }
+        fn current_thread_id(&self) -> u64 {
+            if std::thread::current().id() == self.owner { 1 } else { 2 }
+        }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, HostError> {
+            assert_eq!(std::thread::current().id(), self.owner);
+            Ok(match op {
+                HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
+                HostOp::SendText { .. } => {
+                    self.sends.fetch_add(1, Ordering::Relaxed);
+                    let _ = self.entered.send(());
+                    let _ = self.release.lock().unwrap().recv();
+                    HostOpResult::Sent { native_id: Some("inflight-native-1".into()) }
+                }
+                _ => panic!("send-only fixture"),
+            })
+        }
+    }
+    let tag = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let dir = std::env::temp_dir().join(format!("caligo-inflight-restart-{tag}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let prefix = format!("caligo-inflight-restart-{tag}");
+    let mut first = CoreProcess::start(&dir, &prefix, "first");
+    let sends = Arc::new(AtomicU64::new(0));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (shared_tx, shared_rx) = mpsc::channel();
+    let owner_stop = Arc::new(AtomicBool::new(false));
+    let owner_stop_thread = owner_stop.clone();
+    let owner_sends = sends.clone();
+    let owner_thread = std::thread::spawn(move || {
+        let owner_id = std::thread::current().id();
+        let resident = Arc::new(Resident::new(BlockingOwner {
+            owner: owner_id,
+            sends: owner_sends,
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }, ResidentLimits::default()));
+        resident.bootstrap().unwrap();
+        let handoff = ResultHandoffGate::default();
+        let (result_tx, result_rx) = mpsc::channel();
+        shared_tx.send((resident.clone(), result_rx)).unwrap();
+        while !owner_stop_thread.load(Ordering::Relaxed) {
+            let _ = resident.drain();
+            let _ = handoff.forward(&resident, &result_tx);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let (resident, result_rx) = shared_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+    let cfg = DaemonClientConfig {
+        pipe_name: format!("{prefix}-bridge"),
+        auth_token: first.ready["auth_token"].as_str().unwrap().into(),
+        bridge_build: "inflight-restart-lab".into(), session_generation: 1,
+        account: "10001".into(), module_baseline: "qq-9.9.33-52230".into(),
+        host_nonce: 0xAA00_0002, host_process_created_utc: "synthetic-parent-generation".into(),
+        self_uid: String::new(), heartbeat_ms: 200, reconnect_backoff_ms: 100,
+    };
+    let (_events_tx, events_rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let r = resident.clone();
+    let s = stop.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let _ = done_tx.send(run_worker(cfg, r, &|| true, result_rx, events_rx, s));
+    });
+    let mut worker = WorkerGuard { stop, handle: Some(handle) };
+    wait_until(|| counters_snapshot().hellos_accepted >= 1);
+    let mut control = connect_control(&first.ready);
+    assert!(matches!(control.request(ControlMsg::SendText {
+        request_id: "inflight-send".into(),
+        target: json!({"account":"10001","kind":"private","peer":"654321"}),
+        text: "inflight restart text".into(), deadline_ms: 30_000,
+    }).unwrap(), CoreToControlMsg::SendAccepted { .. }));
+    entered_rx.recv_timeout(Duration::from_secs(10)).expect("owner native call must start");
+    assert_eq!(counters_snapshot().dispatches, 1, "exactly one dispatch before the restart");
+    assert_eq!(counters_snapshot().results_sent, 0, "no notice may precede the native return");
+    first.terminate();
+    drop(control);
+    // Start the replacement core before releasing the blocked owner: the worker
+    // is inside its disconnect cleanup, which needs the adapter lock the owner
+    // still holds. The retained notices are forwarded once the call returns.
+    let mut second = CoreProcess::start(&dir, &prefix, "second");
+    release_tx.send(()).unwrap();
+    wait_until(|| counters_snapshot().hellos_accepted >= 2);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !resident.retained_notices().is_empty() {
+        assert!(Instant::now() < deadline,
+            "the restarted core must accept the late NativeStarted/result; counts={:?}",
+            counters_snapshot());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = connect_control(&second.ready);
+    let durable = control.request(ControlMsg::QueryRequest { request_id: "inflight-send".into() }).unwrap();
+    assert!(matches!(&durable, CoreToControlMsg::QueryResult { native_id: Some(id), .. }
+        if id == "inflight-native-1"));
+    assert_eq!(sends.load(Ordering::Relaxed), 1, "one native send only");
+    assert_eq!(counters_snapshot().dispatches, 1, "the restarted core must not re-dispatch");
+    assert_eq!(counters_snapshot().results_sent, 1,
+        "the late terminal result is delivered exactly once");
+    control.request(ControlMsg::Stop {}).unwrap();
+    let (_counts, exit) = done_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+    worker.handle.take().unwrap().join().unwrap();
+    second.wait_clean();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    owner_stop.store(true, Ordering::Relaxed);
+    owner_thread.join().unwrap();
+    println!("in-flight send: dispatches=1, native sends=1, one late completion accepted after restart");
+}
+
 #[test]
 fn login_query_survives_two_core_processes_without_resuming_the_old_request() {
     run_case(false);
