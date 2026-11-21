@@ -1432,9 +1432,12 @@ pub fn surface_probe() -> Result<String, &'static str> {
         }
     })?;
     let mut detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    if detail.len() > 3000 { detail.truncate(3000); }
+    // Validate first: the bounded enumerations can exceed 3 KiB, and truncating
+    // before parsing would corrupt the JSON and hide the real surface.
+    if detail.len() > 65536 { return Err("too_large"); }
     let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
-    Ok(parsed.to_string())
+    detail = parsed.to_string();
+    Ok(detail)
 }
 
 #[cfg(all(test, feature = "research"))]
