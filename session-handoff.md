@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-21 feat-005 现场：固定 9.9.36-53644 新实例 `55544` 通过准入后一次接入，单构建四格矩阵完成（入站私聊/群 + 出站私聊/群各一条，SSE/get_msg/账本一致，用户确认两条出站各收到一条，零重发）。同轮 research 观察停止返回 `0x25 window_failed`，QQ 仍响应、bridge 保留，未重试停止或卸载；该实例已被这次 attach 消耗。runner 的群 `get_msg` `group_id` 断言为假阴性，已单独记录。现场材料在本机 ignored `local-evidence/feat005-matrix-20261121-55544/`。下一块需用户正常重启 QQ 后做零发送的干净停止与 core 重启恢复样本；原生对象寿命/全局 drain 仍 unknown。任何新现场须新鲜指定 QQ、重新准入；旧请求不重发，未证寿命不热卸载。 [现场与边界](docs/acceptance/2026-11-21-feat-005-scope.md#6-2026-11-21-单构建四格矩阵现场)
+
 2026-11-21 feat-005 起始块完成：正式/历史路线适用性与三条完成门矩阵见 [路线适用性](docs/acceptance/2026-11-21-feat-005-scope.md)；历史 native MSF/G3/consumer 路线判定为研究资产，不作生产阻塞。新增入口级单桥 LAB（第二次 bootstrap 在任何原生调用前拒绝、关闭后仍拒绝、首会话保持 admitted）。复跑 `cargo test -p caligo-bridge --test qq_entry_lab`（default 16/16、research 24/24），全量 `init.ps1 -Mode all` 为 default 497 / research 543，均 0 failed。feat-005 由 blocked 调整为 in-progress；真实 QQ 的 core 重启/断链恢复现场与原生对象持有/最终释放/全局 drain 仍待证。下一块先按文档第 4 节准备单构建四格与 core 重启恢复清单，再做现场；任何新现场须新鲜指定 QQ、重新准入与单次发送授权，旧请求不重发、未证寿命不热卸载。 [进度](progress.md#current-state)
 
 2026-11-21 用户决定按功能门收口 feat-004：四项完成条件均有固定 QQ 9.9.36-53644 的指定样本证据，`feature_list.json` 状态提升为 done；PR #12 原额外保留的 native 持有者、最终释放与全局 drain 记为已知缺口，由 feat-005 的原生链路证据承接，不计作已证。累积工作已归档（`1a30bd5` 代码/测试/工具，`a1a4404` 文档）并更新 PR #12 正文与清单。收口检查：docs PASS、default 496、research 542、7 个 Node 套件 65 项、`git diff --check` 通过。本轮未接入 QQ、零发送、未重接或卸载 bridge。下一块按 feat-005 可离线准备的原生链路证据推进；任何新现场仍须新鲜指定 QQ、重新准入与独立单次授权，旧请求不重发，未证寿命不热卸载。 [进度](progress.md#current-state)
