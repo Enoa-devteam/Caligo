@@ -207,6 +207,40 @@ fn staged_bootstrap_wake_and_owner_pump() {
 }
 
 #[test]
+fn second_bootstrap_is_rejected_before_any_native_call() {
+    let _g = TEST_LOCK.lock().unwrap();
+    lab_reset();
+    let (_qq, qqnt_base, env, _loop) = FakeQq::new();
+    let cfg = EntryConfig {
+        qqnt_base,
+        env,
+        report_path: report_path("double"),
+    };
+    let handle = bootstrap(&cfg, &fake_symbols()).unwrap();
+    let interrupts = FAKE_RI_CALLS.load(Ordering::Relaxed);
+    let inits = FAKE_INIT_CALLS.load(Ordering::Relaxed);
+    assert!(matches!(
+        bootstrap(&cfg, &fake_symbols()),
+        Err(EntryError::AlreadyBootstrapped)
+    ));
+    assert_eq!(
+        FAKE_RI_CALLS.load(Ordering::Relaxed),
+        interrupts,
+        "second bootstrap must not post another first-entry interrupt"
+    );
+    assert_eq!(
+        FAKE_INIT_CALLS.load(Ordering::Relaxed),
+        inits,
+        "second bootstrap must not install a second async handle"
+    );
+    assert!(
+        caligo_bridge::qq_entry::uv_loop_alive(),
+        "the first session must stay admitted"
+    );
+    assert!(!handle.quarantine());
+}
+
+#[test]
 fn close_completes_via_pump_and_close_callback() {
     let _g = TEST_LOCK.lock().unwrap();
     lab_reset();
@@ -245,6 +279,18 @@ fn close_completes_via_pump_and_close_callback() {
     let r = closer.join().unwrap();
     owner.join().unwrap();
     r.expect("close protocol completes");
+    let reboot = EntryConfig {
+        qqnt_base,
+        env,
+        report_path: report_path("close-reboot"),
+    };
+    assert!(
+        matches!(
+            bootstrap(&reboot, &fake_symbols()),
+            Err(EntryError::AlreadyBootstrapped)
+        ),
+        "a closed host generation must not admit a second bridge"
+    );
     assert_eq!(FAKE_CLOSE_CALLS.load(Ordering::Relaxed), 1);
     let sends = FAKE_SEND_CALLS.load(Ordering::Relaxed);
     let handle_wake = handle.wake();
