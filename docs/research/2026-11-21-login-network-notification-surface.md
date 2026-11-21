@@ -72,11 +72,12 @@ unknown，不自动重连、不重发；恢复后必须重新核实身份并显�
 - 脚本只输出会话/服务的属性名与 `typeof`（有界：会话 64 项、服务 48 项、类 48 项），错误只保留
   `Error` 名称；不输出消息、身份、函数源码或错误文本。Node VM 夹具
   `crates/caligo-bridge/tests/surface_probe.rs` 验证有界性与无泄漏。
-- 构建（源码 `0e58fbf`）：EXE `F377C02D…`、bridge `BD285427…`、caligod `854A47C1…`；
+- 构建（源码 `d2b981e`）：EXE `83342968…`、bridge `73476CA8…`、caligod `D02B07AA…`；
   现场包见 ignored `local-evidence/feat005-surface-probe-20261121-unbound/`（未绑定、零发送）。
 - 在线执行顺序：preflight → `python -B run-field.py`（attach + self 查询 + `qq-surface` + 观察停止）。
   探针结果只用于确定接线；R2/R3 仍未准入、未执行。
 - 首次在线尝试（PID `54416`，旧构建 `a422aa9`）返回 `surface_probe unavailable`，当时未细分原因；据此改为
   **仅在同一个 poll 成功的 tick 上执行**，并由 CLI 有界重试 30 次，失败写入具体码
   （`no_symbols`/`no_context`/`run_empty`/`compile_failed`/`bad_json` 等）。该实例已停止、bridge 保留，未重跑；
-  新构建 `0e58fbf`（EXE `F377C02D…`、bridge `BD285427…`、caligod `854A47C1…`）待下一次现场。
+  新构建 `d2b981e`（EXE `83342968…`、bridge `73476CA8…`、caligod `D02B07AA…`）待下一次现场。
+- 第二次在线尝试（PID 56396，构建 0e58fbf）证明 tick gating 生效、探针实际执行，但返回 bad_json：3 KiB 预截断破坏了 JSON；已改为先校验（64 KiB 上限）再序列化。该实例已停止、bridge 保留，未重跑；构建 d2b981e 待下一次现场。
