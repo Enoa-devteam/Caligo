@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 完成门复核与离线检查（离线）：汇总三条完成条件与继承 native 寿命的证据矩阵（§18），并完成复核检查：全仓 `init.ps1 -Mode all`（代码 `4911398`）default 498 / research 555、0 failed；7 个 Node 套件 69 项（67 通过、2 skip）、0 failed；`cargo clippy` default 通过，research 构建的 8 个 `not_unsafe_ptr_arg_deref` 错误位于 research-only `consumer_probe.rs`/`wirecap.rs`（既有、与本次改动无关，CI 不运行 clippy）；docs PASS、`git diff --check` 通过。结论：三条完成条件均有固定构建现场证据，但 native 寿命仍 unknown、R2/R3 未准入，不提升状态。下一轮在线建议在最终构建 `4911398` 上重跑四格矩阵 + 观察停止（两次出站授权 + 两条对端入站），以消除“矩阵来自旧构建”和“停止修复只在 idle 验证”两个边界。[复核记录](docs/acceptance/2026-11-21-feat-005-scope.md#18-2026-11-21-feat-005-完成门复核与离线检查离线)
+
 2026-11-21 feat-005 报告预算修复现场核验（idle，零发送）：新实例 PID `30356`（创建 `2026-11-21T09:31:43.0962876Z`）使用修复构建（源码 `4911398`，EXE `FB426133…`、bridge `0269BCE9…`）一次接入，零发送、仅 idle。等待 370 秒（超过旧构建约 230 秒失败点）至轮询报告 31 条上限，期间 incomplete 与线程槽 capture_incomplete 均为 0；观察停止 `armed → listener_stopped → final_snapshot(+1046 ms) → close_permitted`，helper/CLI exit 均 0、`closed via owner pump`、无 reason 行；停止后报告总数 32（31 轮询 + 最终快照）、无 `report_budget_exhausted` 标记；管理器仍持有账号并正常退出，QQ 响应、bridge 保留。对照旧构建 `6476` 的 `observation_report_budget` 失败，修复现场通过。零发送；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#17-2026-11-21-报告预算修复现场核验idle零发送)
 
 2026-11-21 feat-005 停止观察报告预算预留修复（research）：按 §15 的复现与决定，轮询最多记录 31 条、停止采样保留第 32 槽；`sample_stopped_observations` 不再因预算返回 `observation_report_budget`（预算满只跳过明细行，仍返回 `Ok`），并移除 `report_budget_exhausted` 标记行以免污染日志分析。新增单元测试锁定 30/31/32 边界。预期新构建在 idle 超过 4 分钟后观察停止仍通过并记录最终快照；该现场复验需要新 QQ 代次，尚未执行。普通停止路径不变，真实采样失败仍为 `0x25` 并保留根。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#16-2026-11-21-停止观察报告预算预留修复research)
