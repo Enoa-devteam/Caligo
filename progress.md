@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-21 feat-005 报告预算修复现场核验（idle，零发送）：新实例 PID `30356`（创建 `2026-11-21T09:31:43.0962876Z`）使用修复构建（源码 `4911398`，EXE `FB426133…`、bridge `0269BCE9…`）一次接入，零发送、仅 idle。等待 370 秒（超过旧构建约 230 秒失败点）至轮询报告 31 条上限，期间 incomplete 与线程槽 capture_incomplete 均为 0；观察停止 `armed → listener_stopped → final_snapshot(+1046 ms) → close_permitted`，helper/CLI exit 均 0、`closed via owner pump`、无 reason 行；停止后报告总数 32（31 轮询 + 最终快照）、无 `report_budget_exhausted` 标记；管理器仍持有账号并正常退出，QQ 响应、bridge 保留。对照旧构建 `6476` 的 `observation_report_budget` 失败，修复现场通过。零发送；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#17-2026-11-21-报告预算修复现场核验idle零发送)
+
 2026-11-21 feat-005 停止观察报告预算预留修复（research）：按 §15 的复现与决定，轮询最多记录 31 条、停止采样保留第 32 槽；`sample_stopped_observations` 不再因预算返回 `observation_report_budget`（预算满只跳过明细行，仍返回 `Ok`），并移除 `report_budget_exhausted` 标记行以免污染日志分析。新增单元测试锁定 30/31/32 边界。预期新构建在 idle 超过 4 分钟后观察停止仍通过并记录最终快照；该现场复验需要新 QQ 代次，尚未执行。普通停止路径不变，真实采样失败仍为 `0x25` 并保留根。[验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#16-2026-11-21-停止观察报告预算预留修复research)
 
 2026-11-21 feat-005 空闲重会话观察停止现场（零发送）：新实例 PID `6476`（创建 `2026-11-21T07:17:41.1156385Z`）通过 §11 构建准入后一次接入，仅 idle 轮询。约 230 秒后累计 32 条 `js_callback_observation`，第 32 条为 `report_budget_exhausted`；随后 1000 ms 观察停止以 `stop_observation_reason=observation_report_budget` 失败（仍为 `0x25`、隔离并保留根），helper 原始退出码未取（原生 stderr 提前退出），管理器仍持有账号并正常退出，QQ 同代响应、bridge 保留，未重试。同会话线程观察槽 `capture_incomplete=0`、最大 `sequence=49`，说明此前 §6 的 `capture_incomplete` 属于 128 槽线程观察数组而非 JS 回调库，§6/§11 已更正。结论：研究观察停止在约 4 分钟 idle 轮询耗尽 32 条诊断报告预算后必然失败，与是否发送无关；这是 `0x25` 的确定性复现，但 §6 原会话仍为 unknown。是否把诊断预算与停止门解耦需单独决定，本轮未改代码。零发送；原生寿命仍 unknown。[现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#15-2026-11-21-空闲重会话观察停止现场复现-0x25--observation_report_budget)
