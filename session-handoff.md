@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-21 feat-005 满仓观察停止现场（单次私聊，未复现）：新实例 `37796`（创建 `2026-11-21T07:04:40.4258757Z`）通过准备包 preflight 与精确授权后执行一次私聊，发送/账本四态/`get_msg` 回读一致，用户确认对端收到一条；1000 ms 观察停止全阶段通过、exit 0、无 reason 行，管理器正常退出，QQ 响应、bridge 保留。单次发送未填满 JS 回调库，`observation_incomplete` 未复现；复现需要更多回调活动（矩阵会话为两次发送 + 两条入站 + 后续查询，另需新授权与新代次）。零重发；原生寿命仍 unknown，未证寿命不热卸载。下一块可准备“多事件”现场包或转向 R2/R3；`37796` 已停止、bridge 保留、不可重接。 [现场记录](docs/acceptance/2026-11-21-feat-005-scope.md#14-2026-11-21-满仓观察停止现场单次私聊未复现满仓)
+
 2026-11-21 feat-005 满仓观察停止现场准备包（未绑定）：本机 `local-evidence/feat005-overfull-stop-20261121-unbound/` 已备 preflight、host-op（attach + 1000 ms 观察停止）、run-field（一次授权私聊 + get_msg + 账本四态 + 原因采集）、preparation、staged_evidence 与 README；构建固定 `63bdd01`（`2AB16751…`/`FE301F2F…`），包清单 SHA-256 `C52E9A3E…30E6`。未绑定、未授权、未执行；`run-field.py` 在缺 state/grant 时 exit 1（已离线验证）。下一块：用户重启 QQ 后按 README 执行 preflight、绑定 grant、跑一次；失败时读 `stop_observation_reason`，不重试不卸载。R2/R3 仍受合同限制；原生寿命 unknown，旧请求不重发。 [验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#13-2026-11-21-满仓观察停止现场准备包未绑定)
 
 2026-11-21 feat-005 满仓停止快照离线闭环（research）：Node VM 观察库填满 128 条 + `overflow=true` 后停止 listener，停止快照读取仍返回 128 条、`overflow=true` 且与停止前一致；结合 sanitizer 的 overflow→incomplete 与采样器拒绝 incomplete（§11 原因映射），0x25 的离线因果链完整。矩阵会话现场仍为 unknown，需要一次真实满仓会话把固定原因写进日志。下一块：现场满仓样本（发送需单次授权）或 R2/R3（合同 blocked）；原生寿命仍 unknown，未证寿命不热卸载，旧请求不重发。 [验收记录](docs/acceptance/2026-11-21-feat-005-scope.md#11-2026-11-21-停止观察失败原因诊断research)
