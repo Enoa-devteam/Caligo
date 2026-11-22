@@ -313,3 +313,13 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
   现有 `session_revocation_contract` 与 `core` 代次隔离测试覆盖其离线契约，现场需在新实例上做显式重绑。
 - 自动撤权链路（`identity_state`/`network_status` → `daemon-control revoke-*`）未在本实例触发；可通过 R2
   网络变化现场或合成测试继续验证。
+
+### 6.19 R3 跨进程新代次与账本隔离契约（离线，2026-11-22）
+
+- daemon 的 bridge Hello 会拒绝与配置不符的账号（单账号 daemon 设计），因此“同一 daemon 内换身份”不可行；
+  R3 的跨身份验证应以**新 daemon + 新 journal** 进行。
+- 新增契约测试（`session_revocation_contract` 第 3 条）：旧 actor 绑定代次 1、提交请求并写入事件后，
+  新 actor 绑定代次 2 使用**独立 journal**——旧请求不可见、旧事件不在队列、旧 journal 字节不变。
+- 离线验证：`session_revocation_contract` 3/3；串行全仓 default **502** / research **562**，0 failed。
+- R3 现场计划（新实例登录第二身份）：新 core/journal 显式以新代次绑定；旧实例保留旧 journal；
+  验证旧代次/旧请求不进入新账本，再执行显式重绑后的可查询/发送准入。
