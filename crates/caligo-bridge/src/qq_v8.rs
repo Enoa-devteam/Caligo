@@ -1452,6 +1452,8 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
     try { out.session_proto = names(Object.getPrototypeOf(s), 64); } catch (e) { out.session_proto = []; }
     var probes = ['getLoginService','getNetworkService','getNetwork','getNTWrapperNetwork','getProfileService','getMsgService'];
     for (var i = 0; i < probes.length; i++) out.services[probes[i]] = service(probes[i]);
+    var R = globalThis.__caligo_d8;
+    out.network_observer = (R && R.networkObserver) ? Object.keys(R.networkObserver).sort() : [];
     return JSON.stringify(out);
   } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
 })()
@@ -1634,11 +1636,6 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
             report.source = account.and_then(|_| build_callback_observations_js(session, generation));
             report.generation = generation;
             report.previous = None;
-        }
-        #[cfg(feature = "research")]
-        match network_observer_status() {
-            Ok(status) => crate::qq_entry::append_stage_simple("network_observer", true, &status),
-            Err(_) => crate::qq_entry::append_stage_simple("network_observer", false, "unavailable"),
         }
     }
     Ok(result)
