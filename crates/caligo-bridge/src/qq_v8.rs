@@ -1501,6 +1501,35 @@ pub fn drain_network_events() -> Result<Option<String>, &'static str> {
 }
 
 #[cfg(feature = "research")]
+pub const D8_NETWORK_OBSERVER_STATUS_JS: &str = r"
+(function () {
+  try {
+    var R = globalThis.__caligo_d8;
+    if (!R || !R.networkObserver) return 'NONE';
+    var keys = Object.keys(R.networkObserver);
+    return keys.length ? keys.sort().join(',') : 'EMPTY';
+  } catch (e) { return 'ERR'; }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn network_observer_status() -> Result<String, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread call; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_NETWORK_OBSERVER_STATUS_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw.len() > 128 { return Err("too_large"); }
+    Ok(raw)
+}
+
+#[cfg(feature = "research")]
 pub const D8_NETWORK_EVENTS_JS: &str = r"
 (function () {
   try {
@@ -1605,6 +1634,11 @@ pub(crate) fn start_listener_with_voice(account: Option<&str>) -> Result<String,
             report.source = account.and_then(|_| build_callback_observations_js(session, generation));
             report.generation = generation;
             report.previous = None;
+        }
+        #[cfg(feature = "research")]
+        match network_observer_status() {
+            Ok(status) => crate::qq_entry::append_stage_simple("network_observer", true, &status),
+            Err(_) => crate::qq_entry::append_stage_simple("network_observer", false, "unavailable"),
         }
     }
     Ok(result)

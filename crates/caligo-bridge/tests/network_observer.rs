@@ -1,6 +1,6 @@
 #![cfg(feature = "research")]
 
-use caligo_bridge::qq_v8::{D8_NETWORK_EVENTS_JS, D8_START_JS, D8_STOP_JS};
+use caligo_bridge::qq_v8::{D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS, D8_START_JS, D8_STOP_JS};
 use std::process::{Command, Stdio};
 
 /// The network observer records only bounded argument shapes (type, number,
@@ -12,6 +12,7 @@ fn network_observer_captures_bounded_shapes_only() {
         "start": D8_START_JS,
         "stop": D8_STOP_JS,
         "drain": D8_NETWORK_EVENTS_JS,
+        "status": D8_NETWORK_OBSERVER_STATUS_JS,
     });
     let fixture = format!(
         r#"
@@ -40,6 +41,7 @@ const context = vm.createContext({{
 }});
 const run = script => vm.runInContext(script, context);
 assert.equal(run(scripts.start), 'ARMED sid=nt_0 lidRet=15');
+assert.equal(run(scripts.status), 'setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
 assert.equal(run(scripts.drain), 'NONE');
 callbacks.network({{code:2, nested:{{a:1}}}}, 'PRIVATE_TEXT_SHOULD_NOT_LEAK', true);
 callbacks.msf('PRIVATE_MSF_TEXT', 7);
