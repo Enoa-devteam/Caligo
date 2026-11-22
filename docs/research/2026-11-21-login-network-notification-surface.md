@@ -117,10 +117,21 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 
 ### 6.2 R2 网络观察现场包（离线准备，2026-11-22）
 
-- 构建：源码 `c87c7f2`，EXE `15C019E7…`、bridge `D6FDB281…`、caligod `8FF07279…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
-- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `E54BC71D…B612`），未绑定、零发送。
+- 构建：源码 `00dbc7f`，EXE `C928D9BC…`、bridge `40CBD258…`、caligod `7F8C1BE1…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
+- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `EE7F4266…8BFF`），未绑定、零发送。
 - 流程：一次准入/attach → 等待 `listener_armed` → `qq-surface` 确认 `network_observer` 含三个 setter → self 查询 → 打印 `READY_NETWORK` →
   操作员对测试 QQ 做一次网络状态变化（回环 IPC 保持可用，QQ 不退出）→ 采集有界 `network_state` 行（最多 600 秒）→
   1000 ms 观察停止。
 - 失败语义：observer 未 armed 直接失败；600 秒无事件超时失败；停止非零保根；全程不重发、不重试干预。
 - 未执行：R2 现场需操作员干预；`network_state` 的实际参数形状与触发条件仍待首次样本。
+
+### 6.3 R2 首次在线尝试（无干预）与注册诊断（2026-11-22）
+
+- 实例 `8036`（创建 `2026-11-22T01:30:07.8931547Z`），构建 `c87c7f2`：准入 PASS、一次 attach、self 查询通过；
+  `qq-surface` 显示观察者只注册了 `setOnNetworkChanged`/`setOnWeakNetChanged`（`setOnMsfStatusChanged` 缺失）。
+- 操作员确认 600 秒窗口内**没有执行网络断开**，因此 `network_state` 行为 0、runner 超时失败；观察停止仍全阶段通过、
+  exit 0、无 reason；零发送。该样本**不构成**对观察者的负结论。
+- 诊断增强（构建 `00dbc7f`）：观察者记录每个 setter 的注册错误类名（`missing` 或异常类名）与声明 arity，并通过
+  `qq-surface` 的 `network_observer_errors`/`network_observer_arity` 字段输出；R2 runner 把它们记入 summary。
+- 现场包更新：pins `C928D9BC…`/`40CBD258…`/`7F8C1BE1…`，清单 `EE7F4266…8BFF`；首次尝试证据归档在包内
+  `attempt1-pid8036-nointervention/`。重跑需新 QQ 代次并在 `READY_NETWORK` 后真正断网 20–60 秒再恢复。
