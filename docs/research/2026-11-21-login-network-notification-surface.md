@@ -117,8 +117,8 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 
 ### 6.2 R2 网络观察现场包（离线准备，2026-11-22）
 
-- 构建：源码 `ce0d0cd`，EXE `F432CD20…`、bridge `42A1EFFD…`、caligod `A20CBEB2…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
-- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `B0DBCE31…6EA3`），未绑定、零发送。
+- 构建：源码 `52d05a1`，EXE `AE301239…`、bridge `6822935E…`、caligod `E017BCF0…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
+- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `BAEF5400…4634`），未绑定、零发送。
 - 流程：一次准入/attach → 等待 `listener_armed` → `qq-surface` 确认 `network_observer` 含三个 setter → self 查询 → 打印 `READY_NETWORK` →
   操作员对测试 QQ 做一次网络状态变化（回环 IPC 保持可用，QQ 不退出）→ 采集有界 `network_state` 行（最多 600 秒）→
   1000 ms 观察停止。
@@ -149,3 +149,13 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 目前判断：session 的 `setOnNetworkChanged`/`setOnWeakNetChanged` 在完整断网下没有可观测回调（或注册被 QQ 覆盖）；
   `setOnMsfStatusChanged` 需要 3 个参数。下一步优先看绑定层是否暴露 `NodeIQQNTWrapperNetwork`
   （`addNetworkListener`），或改用拉取式状态源（`getMsgService().getOnLineDev`、`ProfileService.getSelfStatus`）。
+
+### 6.5 探测 v2：绑定层与拉取式状态源（离线准备，2026-11-22）
+
+- `qq-surface` 新增：`binding_classes`（`NodeIQQNTWrapperNetwork`/`NodeIKernelLoginService`/`NodeIKernelLoginListener` 的
+  keys/proto，若绑定层网络类有 `getNetworkStatus` 则记录其返回形状）；`status_probe`（`ProfileService.getSelfStatus`
+  的返回类型/数值、`getStatusInfo`/`getCoreInfo`/`getOnLineDev` 的 arity）；保留 `network_observer_calls`。
+- R2 runner 新增 `--probe-only`：完成准入、attach、self 查询与 surface 后直接观察停止，不等待网络干预、零发送。
+- 构建：源码 `52d05a1`，EXE `AE301239…`、bridge `6822935E…`、caligod `E017BCF0…`；现场包清单 `BAEF5400…4634`。
+- 下一步现场（一次）：`python -B run-field.py --probe-only`，读取绑定层是否存在网络类及其方法、`getSelfStatus` 形状；
+  据此决定 R2/R3 的观察源（绑定 listener 或周期拉取），再实现撤权/重绑。
