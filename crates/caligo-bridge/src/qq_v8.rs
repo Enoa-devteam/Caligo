@@ -797,6 +797,8 @@ pub const D8_START_JS: &str = r"
       R.networkEvents = [];
       R.networkEventOverflow = false;
       R.networkObserver = {};
+      R.networkObserverErrors = {};
+      R.networkObserverArity = {};
       var captureNetwork = function (kind, args) {
         try {
           if (R.stopped) return;
@@ -822,11 +824,16 @@ pub const D8_START_JS: &str = r"
       };
       var installNetwork = function (name, kind) {
         try {
-          if (typeof live[name] === 'function') {
-            live[name](function () { captureNetwork(kind, arguments); });
-            R.networkObserver[name] = true;
+          if (typeof live[name] !== 'function') {
+            R.networkObserverErrors[name] = 'missing';
+            return;
           }
-        } catch (e) {}
+          R.networkObserverArity[name] = live[name].length;
+          live[name](function () { captureNetwork(kind, arguments); });
+          R.networkObserver[name] = true;
+        } catch (e) {
+          R.networkObserverErrors[name] = String((e && e.name) || 'error').slice(0, 32);
+        }
       };
       installNetwork('setOnNetworkChanged', 'network');
       installNetwork('setOnMsfStatusChanged', 'msf');
@@ -1454,6 +1461,8 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
     for (var i = 0; i < probes.length; i++) out.services[probes[i]] = service(probes[i]);
     var R = globalThis.__caligo_d8;
     out.network_observer = (R && R.networkObserver) ? Object.keys(R.networkObserver).sort() : [];
+    out.network_observer_errors = (R && R.networkObserverErrors) ? R.networkObserverErrors : {};
+    out.network_observer_arity = (R && R.networkObserverArity) ? R.networkObserverArity : {};
     return JSON.stringify(out);
   } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
 })()
