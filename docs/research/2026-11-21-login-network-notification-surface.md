@@ -200,3 +200,16 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建：源码 `293267c`，EXE `4891BCB3…`、bridge `80C5724D…`、caligod `98BB27F1…`；现场包清单 `E6D06C78…0839`。
 - 下一步（一次零发送）：`python -B run-field.py --probe-only`，读取 `self_status_result` 与 `network_service`
   形状，作为 R3 身份观察的输入；R2 真实断网样本等流式传输结束后补。
+
+### 6.9 网络服务状态拉取与 self-status 探针修正（2026-11-22）
+
+- 实例 `47988` 的首次 `--probe-only` 在 runner 解析阶段失败（报告 detail 为单引号 JSON，`ast.literal_eval`
+  无法处理 `null`）；已改为单引号→双引号后走 `json.loads`。该次 attach 已捕获关键 surface：
+  - `network_service.proto` 含 `startGetNetworkStatus`、`stopGetNetworkStatus`、`getNetworkStatus`、
+    `addNetworkServiceListener`、`removedNetworkServiceListener`；
+  - `getNetworkStatus()` 同步返回 **number=1**；`self_status` 仍为 Promise（首次调用未结算）。
+- 新构建 `1cb3954`：owner 泵每 tick 拉取一次 `networkService.getNetworkStatus()`，仅当值变化时写
+  `network_status` 行（`{previous,current}`，有界）；`self_status_result` 由第二次 surface 读取。
+- 构建 pin：EXE `C32A5701…`、bridge `2F2D6724…`、caligod `B42C1715…`；现场包清单 `EC7F602D…D86C`。
+- 下一步（零发送）：`--probe-only` 读取 `network_status`（初始值）、`self_status_result`、`network_service`；
+  之后实现 R3 身份核对与 R2 状态变化 → 撤权接线。
