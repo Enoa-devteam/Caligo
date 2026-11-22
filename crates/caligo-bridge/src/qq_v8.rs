@@ -801,6 +801,20 @@ pub const D8_START_JS: &str = r"
       R.networkObserverArity = {};
       R.networkObserverCalls = 0;
       R.lastNetworkStatus = null;
+      R.identityEvents = [];
+      R.identityEventOverflow = false;
+      R.identityPollCounter = 0;
+      R.identitySessionId = null;
+      R.lastSelfStatusLoaded = false;
+      R.lastSelfStatusResult = null;
+      try {
+        if (typeof live.getSessionId === 'function') {
+          var initialSessionId = live.getSessionId();
+          if (typeof initialSessionId === 'number' || typeof initialSessionId === 'string') {
+            R.identitySessionId = initialSessionId;
+          }
+        }
+      } catch (e) {}
       var captureNetwork = function (kind, args) {
         try {
           R.networkObserverCalls = (R.networkObserverCalls || 0) + 1;
@@ -1725,6 +1739,89 @@ pub fn drain_network_status() -> Result<Option<String>, &'static str> {
     if raw == "ERR" { return Err("script_error"); }
     let detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     if detail.len() > 1024 { return Err("too_large"); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
+    Ok(Some(parsed.to_string()))
+}
+
+#[cfg(feature = "research")]
+pub const D8_IDENTITY_POLL_JS: &str = r"
+(function () {
+  try {
+    var R = globalThis.__caligo_d8;
+    if (!R || !Array.isArray(R.identityEvents)) return 'NONE';
+    R.identityPollCounter = (R.identityPollCounter || 0) + 1;
+    if (R.identityPollCounter % 20 !== 0) return 'NONE';
+    var push = function (row) {
+      if (R.identityEvents.length >= 16) { R.identityEventOverflow = true; return; }
+      R.identityEvents.push(row);
+    };
+    try {
+      if (R.session && typeof R.session.getSessionId === 'function') {
+        var sid = R.session.getSessionId();
+        if (typeof sid === 'number' || typeof sid === 'string') {
+          if (R.identitySessionId !== null && R.identitySessionId !== sid) {
+            push({kind:'session_id', previous:R.identitySessionId, current:sid});
+          }
+          R.identitySessionId = sid;
+        }
+      }
+    } catch (e) {}
+    try {
+      var ps = R.session && R.session.getProfileService ? R.session.getProfileService() : null;
+      if (ps && typeof ps.getSelfStatus === 'function') {
+        var record = function (value) {
+          try {
+            var result = null;
+            if (value && typeof value === 'object' && typeof value.result === 'number') result = value.result;
+            else if (typeof value === 'number') result = value;
+            if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== result) {
+              push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:result});
+              R.lastSelfStatusResult = result;
+              R.lastSelfStatusLoaded = true;
+            }
+          } catch (e) {}
+        };
+        var v = ps.getSelfStatus();
+        if (v && typeof v.then === 'function') {
+          v.then(record, function () {
+            try {
+              if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== 'rejected') {
+                push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:'rejected'});
+                R.lastSelfStatusResult = 'rejected';
+                R.lastSelfStatusLoaded = true;
+              }
+            } catch (e) {}
+          });
+        } else { record(v); }
+      }
+    } catch (e) {}
+    if (!R.identityEvents.length) return 'NONE';
+    var events = R.identityEvents;
+    R.identityEvents = [];
+    var overflow = R.identityEventOverflow === true;
+    R.identityEventOverflow = false;
+    return JSON.stringify({events:events, overflow:overflow});
+  } catch (e) { return 'ERR'; }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn drain_identity_events() -> Result<Option<String>, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_IDENTITY_POLL_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw == "NONE" { return Ok(None); }
+    if raw == "ERR" { return Err("script_error"); }
+    let detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if detail.len() > 4096 { return Err("too_large"); }
     let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
     Ok(Some(parsed.to_string()))
 }

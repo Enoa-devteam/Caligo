@@ -1228,6 +1228,22 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             }
             #[cfg(feature = "research")]
             if poll_context_ok {
+                match crate::qq_v8::drain_identity_events() {
+                    Ok(Some(detail)) => qq_entry::append_stage_simple("identity_state", true, &detail),
+                    Ok(None) => {}
+                    Err(code) => {
+                        static ID_OBS_ERR: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let n = ID_OBS_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 {
+                            qq_entry::append_stage_simple(
+                                "identity_state", false, &format!("unavailable:{code}"));
+                        }
+                    }
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
                 match crate::qq_v8::drain_network_events() {
                     Ok(Some(detail)) => qq_entry::append_stage_simple("network_state", true, &detail),
                     Ok(None) => {}

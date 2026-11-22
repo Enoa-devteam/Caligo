@@ -1,8 +1,8 @@
 #![cfg(feature = "research")]
 
 use caligo_bridge::qq_v8::{
-    D8_NET_OFFLINE_JS, D8_NET_ONLINE_JS, D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS,
-    D8_NETWORK_STATUS_JS, D8_START_JS, D8_STOP_JS,
+    D8_IDENTITY_POLL_JS, D8_NET_OFFLINE_JS, D8_NET_ONLINE_JS, D8_NETWORK_EVENTS_JS,
+    D8_NETWORK_OBSERVER_STATUS_JS, D8_NETWORK_STATUS_JS, D8_START_JS, D8_STOP_JS,
 };
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -30,6 +30,7 @@ fn network_observer_captures_bounded_shapes_only() {
         "drain": D8_NETWORK_EVENTS_JS,
         "status": D8_NETWORK_OBSERVER_STATUS_JS,
         "netstatus": D8_NETWORK_STATUS_JS,
+        "identity": D8_IDENTITY_POLL_JS,
     });
     let fixture = format!(
         r#"
@@ -43,9 +44,12 @@ const ms = {{
   removeKernelMsgListener(id) {{ assert.equal(id, 15); return 'ok'; }},
   sendMsg() {{ throw new Error('send is not part of this fixture'); }},
 }};
+let sessionId = 7;
+let selfStatus = 0;
 const session = {{
-  getSessionId: () => 1,
+  getSessionId: () => sessionId,
   getMsgService: () => ms,
+  getProfileService: () => ({{getSelfStatus: () => ({{result:selfStatus}})}}),
   setOnNetworkChanged(cb) {{ callbacks.network = cb; }},
   setOnMsfStatusChanged(cb) {{ callbacks.msf = cb; }},
   setOnWeakNetChanged(cb) {{ callbacks.weak = cb; }},
@@ -68,6 +72,15 @@ assert.equal(run(scripts.start), 'ARMED sid=nt_0 lidRet=15');
 assert.equal(run(scripts.status), 'addNetworkServiceListener,setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
 assert.deepEqual(JSON.parse(run(scripts.netstatus)), {{previous:null, current:1}});
 assert.equal(run(scripts.netstatus), 'NONE');
+context.__caligo_d8.identityPollCounter = 19;
+let idRows = JSON.parse(run(scripts.identity));
+assert.equal(idRows.events[0].kind, 'self_status');
+sessionId = 8;
+selfStatus = 3;
+context.__caligo_d8.identityPollCounter = 19;
+idRows = JSON.parse(run(scripts.identity));
+assert.ok(idRows.events.some(e => e.kind === 'session_id'));
+assert.ok(idRows.events.some(e => e.kind === 'self_status'));
 assert.equal(run(scripts.drain), 'NONE');
 callbacks.network({{code:2, nested:{{a:1}}}}, 'PRIVATE_TEXT_SHOULD_NOT_LEAK', true);
 callbacks.msf('PRIVATE_MSF_TEXT', 7);
