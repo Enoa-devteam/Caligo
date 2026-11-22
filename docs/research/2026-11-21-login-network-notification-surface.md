@@ -253,3 +253,14 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 修正（构建 `71302cf`）：采样仍为第 1 与每 20 tick，但**每个 tick 都排空**已入队的身份行。
 - 构建 pin：EXE `2E643C6F…`、bridge `EF52E979…`、caligod `0D0218AF…`；现场包清单 `B329A9FC…EEC3`。
 - 下一步（一次零发送）：`--probe-only` 确认 `identity_state` 基线行出现；之后 R3 换号现场。
+
+### 6.14 身份基线现场确认（2026-11-22）
+
+- 实例 `17472`，构建 `71302cf`，`--probe-only`：`identity_state` 出现基线行
+  `{events:[{kind:'self_status', previous:'unset', current:0}], overflow:false}`；`IDENTITY_STATE 1`；
+  `self_status_result.result=0`、`network_status current=1`；停止通过、零发送。
+- 观察者语义：`session_id` 只在变化时记录（arm 时取初值），`self_status` 首次记录 `unset→0`；
+  行数上限 16 + 溢出标记。
+- 现场包清单更新为 `A33247A6…8928`（同源码 `71302cf` 与 pins）。
+- 下一步：R3 换号现场需要操作员退出当前测试号并登录**另一测试身份**；建议新增 `--identity-watch`
+  模式（保持 attach 等待 `identity_state` 变化后停止），再执行该现场。
