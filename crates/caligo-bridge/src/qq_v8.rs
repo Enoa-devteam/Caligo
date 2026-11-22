@@ -1750,7 +1750,7 @@ pub const D8_IDENTITY_POLL_JS: &str = r"
     var R = globalThis.__caligo_d8;
     if (!R || !Array.isArray(R.identityEvents)) return 'NONE';
     R.identityPollCounter = (R.identityPollCounter || 0) + 1;
-    if (R.identityPollCounter % 20 !== 0) return 'NONE';
+    if (R.identityPollCounter !== 1 && R.identityPollCounter % 20 !== 0) return 'NONE';
     var push = function (row) {
       if (R.identityEvents.length >= 16) { R.identityEventOverflow = true; return; }
       R.identityEvents.push(row);

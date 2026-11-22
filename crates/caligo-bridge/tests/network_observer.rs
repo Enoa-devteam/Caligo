@@ -72,7 +72,7 @@ assert.equal(run(scripts.start), 'ARMED sid=nt_0 lidRet=15');
 assert.equal(run(scripts.status), 'addNetworkServiceListener,setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
 assert.deepEqual(JSON.parse(run(scripts.netstatus)), {{previous:null, current:1}});
 assert.equal(run(scripts.netstatus), 'NONE');
-context.__caligo_d8.identityPollCounter = 19;
+context.__caligo_d8.identityPollCounter = 0;
 let idRows = JSON.parse(run(scripts.identity));
 assert.equal(idRows.events[0].kind, 'self_status');
 sessionId = 8;
