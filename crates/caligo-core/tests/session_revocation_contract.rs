@@ -106,6 +106,26 @@ fn network_revoke_cancels_unsent_and_requires_same_identity() {
 }
 
 #[test]
+fn new_generation_uses_a_fresh_ledger() {
+    let old_path = tmp_path("gen-old");
+    let (mut old, _) = AccountActor::open(&old_path, RuntimeConfig::default()).unwrap();
+    old.attach_session(session(1)).unwrap();
+    old.mark_connection_ready(conn(1)).unwrap();
+    old.submit_send(req("old-request", 1)).unwrap();
+    old.on_event(event("old-event", 1)).unwrap();
+    let old_bytes = std::fs::read(&old_path).unwrap();
+
+    let new_path = tmp_path("gen-new");
+    let (mut new, _) = AccountActor::open(&new_path, RuntimeConfig::default()).unwrap();
+    new.attach_session(session(2)).unwrap();
+    new.mark_connection_ready(conn(1)).unwrap();
+    assert_eq!(new.session().unwrap().session_generation, 2);
+    assert!(new.query_request("old-request").is_none(), "old request must not enter the new ledger");
+    assert_eq!(new.pending_event_queue_len(), 0, "old event must not enter the new ledger");
+    assert_eq!(std::fs::read(&old_path).unwrap(), old_bytes, "old journal must stay untouched");
+}
+
+#[test]
 fn identity_revoke_requires_new_generation_and_audits_old_events() {
     let mut actor = active("identity");
     actor.submit_send(req("pending", 1)).unwrap();
