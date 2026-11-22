@@ -250,18 +250,18 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 
 - 实例 `19996`，构建 `2171360`，`--probe-only`：`identity_state` 仍为 0。原因是首 tick 只**调度**了
   `getSelfStatus()` 的 Promise，而排空脚本在非采样 tick 提前返回，已解析的行要等第 20 tick 才被读出。
-- 修正（构建 `71302cf`）：采样仍为第 1 与每 20 tick，但**每个 tick 都排空**已入队的身份行。
+- 修正（构建 `8439a45`）：采样仍为第 1 与每 20 tick，但**每个 tick 都排空**已入队的身份行。
 - 构建 pin：EXE `2E643C6F…`、bridge `EF52E979…`、caligod `0D0218AF…`；现场包清单 `B329A9FC…EEC3`。
 - 下一步（一次零发送）：`--probe-only` 确认 `identity_state` 基线行出现；之后 R3 换号现场。
 
 ### 6.14 身份基线现场确认（2026-11-22）
 
-- 实例 `17472`，构建 `71302cf`，`--probe-only`：`identity_state` 出现基线行
+- 实例 `17472`，构建 `8439a45`，`--probe-only`：`identity_state` 出现基线行
   `{events:[{kind:'self_status', previous:'unset', current:0}], overflow:false}`；`IDENTITY_STATE 1`；
   `self_status_result.result=0`、`network_status current=1`；停止通过、零发送。
 - 观察者语义：`session_id` 只在变化时记录（arm 时取初值），`self_status` 首次记录 `unset→0`；
   行数上限 16 + 溢出标记。
-- 现场包清单更新为 `A33247A6…8928`（同源码 `71302cf` 与 pins）。
+- 现场包清单更新为 `8AEDCBE1…A05D`（同源码 `8439a45` 与 pins）。
 - 下一步：R3 换号现场需要操作员退出当前测试号并登录**另一测试身份**；建议新增 `--identity-watch`
   模式（保持 attach 等待 `identity_state` 变化后停止），再执行该现场。
 
@@ -290,3 +290,13 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 验证：模型 serde 往返 1 条；串行全仓 default **501** / research **561**，0 failed。
 - **剩余缺口**：runner 还没有把 `network_status`/`identity_state` 行自动映射为撤权调用；
   现场可由操作员在观察到行后手动执行 CLI 动作，或下一块加自动触发（含防抖与单次语义）。
+
+### 6.17 自动撤权触发与 R2n 现场包（离线，2026-11-22）
+
+- R2 runner 新增 `--watch-revoke identity|network`：attach 后监听 report 行；
+  `identity_state` 的 `session_id`/`self_status` 变化或 `network_status` 偏离 1（或任意 `network_state`）
+  触发对应 `daemon-control revoke-network|revoke-identity`，记录 `RevokeAck` 后停止；零发送，无变化即失败。
+- 新增 `--classify-test`：离线校验分类逻辑（无需 preflight/QQ），输出 `CLASSIFY_TEST_OK`。
+- 现场包重建为 R2n：源码 `8439a45`（含控制面撤权 CLI），EXE `A40A81E5…`、bridge `4A25B810…`、
+  caligod `CDCF8A79…`；包清单 `8AEDCBE1…A05D`。
+- 剩余：撤权后的**重新核实/重绑**未自动化；R3 换号与 R2 真实断网现场仍需在该模式执行后处理恢复。
