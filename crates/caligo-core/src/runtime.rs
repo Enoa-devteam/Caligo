@@ -15,7 +15,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::journal::{GapRecord, Journal, JournalError, JournalRecord, RequestRecord, SyncMode};
+use crate::journal::{
+    GapRecord, Journal, JournalError, JournalRecord, RequestRecord, SessionRevokedRecord, SyncMode,
+};
 use crate::message_store::MessageStore;
 use crate::onebot::StoreReader;
 use caligo_model::{
@@ -283,13 +285,46 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Why the current session was revoked and what the next bind must satisfy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevokeReason {
+    /// Network state changed: the same account must be re-verified.
+    NetworkChanged,
+    /// Identity changed: only a newer session generation may bind.
+    IdentityChanged,
+}
+
+impl RevokeReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RevokeReason::NetworkChanged => "network_changed",
+            RevokeReason::IdentityChanged => "identity_changed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RevokeRequirement {
+    reason: RevokeReason,
+    session: SessionIdentity,
+}
+
+/// Outcome of `revoke_session`; no request is replayed by revocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevokeReport {
+    pub cancelled_unsent: usize,
+    pub delivery_unknown: usize,
+    pub session_generation: u64,
+}
+
 /// 账号 actor(计划 §6.2 状态机的 owner)。
-pub struct AccountActor {
-    pub(crate) phase: Phase,
+pub struct AccountActor {    pub(crate) phase: Phase,
     #[cfg(feature = "research")]
     send_admission_closed: bool,
     session: Option<SessionIdentity>,
     conn: Option<ConnectionIdentity>,
+    /// Set by `revoke_session`; the next `attach_session` must satisfy it.
+    revoke_requirement: Option<RevokeRequirement>,
     journal: Journal,
     requests: HashMap<String, RequestEntry>,
     pending: VecDeque<String>,
@@ -348,6 +383,7 @@ impl AccountActor {
             send_admission_closed: false,
             session: None,
             conn: None,
+            revoke_requirement: None,
             journal,
             requests: HashMap::new(),
             pending: VecDeque::new(),
@@ -403,7 +439,11 @@ impl AccountActor {
                         actor.gaps.pop_front();
                     }
                 }
-                JournalRecord::ReceiptAudit(a) => {
+                JournalRecord::SessionRevoked(_) => {
+                // Revocation is an audit boundary; recovery needs no action
+                // beyond the conservative states already recorded per request.
+            }
+            JournalRecord::ReceiptAudit(a) => {
                     report.recovered_receipt_audits += 1;
                     actor.receipt_audits.push_back(ReceiptAuditEntry {
                         request_id: a.request_id,
@@ -525,8 +565,27 @@ impl AccountActor {
         if !matches!(self.phase, Phase::Detached | Phase::Bootstrapping) {
             return Err(RejectReason::NotActive { phase: self.phase });
         }
+        if let Some(requirement) = &self.revoke_requirement {
+            let same_account = session.host == requirement.session.host
+                && session.account == requirement.session.account;
+            match requirement.reason {
+                RevokeReason::NetworkChanged => {
+                    if !same_account
+                        || session.session_generation != requirement.session.session_generation
+                    {
+                        return Err(RejectReason::SessionStale);
+                    }
+                }
+                RevokeReason::IdentityChanged => {
+                    if session.session_generation <= requirement.session.session_generation {
+                        return Err(RejectReason::SessionStale);
+                    }
+                }
+            }
+        }
         self.phase = Phase::Bound;
         self.session = Some(session);
+        self.revoke_requirement = None;
         Ok(())
     }
 
@@ -563,6 +622,49 @@ impl AccountActor {
     pub fn degrade(&mut self, reason: impl Into<String>) {
         self.phase = Phase::Degraded;
         self.degraded_reason = Some(reason.into());
+    }
+
+    /// 撤权当前会话(网络/身份变化):停止新动作,取消可证明未派发的排队项,
+    /// 把已派发项标为结果未知,并要求下一次 `attach_session` 重新核实身份。
+    /// 撤权本身不重发任何请求。
+    pub fn revoke_session(&mut self, reason: RevokeReason) -> Result<RevokeReport, RejectReason> {
+        if !matches!(self.phase, Phase::Active | Phase::Degraded | Phase::Bound) {
+            return Err(RejectReason::NotActive { phase: self.phase });
+        }
+        let session = self.session.clone().ok_or(RejectReason::SessionStale)?;
+        let mut cancelled_unsent = 0;
+        let mut delivery_unknown = 0;
+        let ids: Vec<String> = self.pending.iter().cloned().collect();
+        for id in ids {
+            let state = self.requests.get(&id).map(|entry| entry.state.clone());
+            match state {
+                Some(ActionState::Queued | ActionState::Accepted) => {
+                    self.transition(&id, ActionState::CancelledUnsent, None)?;
+                    cancelled_unsent += 1;
+                }
+                Some(ActionState::DispatchIntent | ActionState::NativeStarted) => {
+                    self.transition(&id, ActionState::DeliveryUnknown, None)?;
+                    delivery_unknown += 1;
+                }
+                _ => {}
+            }
+        }
+        self.phase = Phase::Detached;
+        self.conn = None;
+        self.degraded_reason = None;
+        self.revoke_requirement = Some(RevokeRequirement { reason, session: session.clone() });
+        let _ = self.journal.append(&JournalRecord::SessionRevoked(SessionRevokedRecord {
+            v: 1,
+            account: session.account.0.clone(),
+            session_generation: session.session_generation,
+            reason: reason.as_str().into(),
+            at_unix_ms: now_ms(),
+        }));
+        Ok(RevokeReport {
+            cancelled_unsent,
+            delivery_unknown,
+            session_generation: session.session_generation,
+        })
     }
 
     /// 停止入口(计划 §6.7):关新动作准入;可证明未执行的排队项取消。

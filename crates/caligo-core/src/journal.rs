@@ -39,6 +39,17 @@ pub enum JournalRecord {
     Gap(GapRecord),
     /// 迟到/重复/旧代次回执的幂等审计(不改变动作状态)。
     ReceiptAudit(ReceiptAuditRecord),
+    /// 会话撤权:网络或身份变化后旧会话不可继续准入;恢复需重新核实。
+    SessionRevoked(SessionRevokedRecord),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionRevokedRecord {
+    pub v: u32,
+    pub account: String,
+    pub session_generation: u64,
+    pub reason: String,
+    pub at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
