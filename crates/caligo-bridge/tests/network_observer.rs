@@ -1,6 +1,7 @@
 #![cfg(feature = "research")]
 
 use caligo_bridge::qq_v8::{D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS, D8_START_JS, D8_STOP_JS};
+use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 /// The network observer records only bounded argument shapes (type, number,
@@ -33,15 +34,22 @@ const session = {{
   setOnMsfStatusChanged(cb) {{ callbacks.msf = cb; }},
   setOnWeakNetChanged(cb) {{ callbacks.weak = cb; }},
 }};
+const networkService = {{
+  addNetworkServiceListener(cb) {{ callbacks.netservice = cb; }},
+  getNetworkStatus() {{ return 1; }},
+}};
 const context = vm.createContext({{
-  process: {{_linkedBinding: () => ({{NodeIQQNTWrapperSession: {{getNTWrapperSession: () => session}}}})}},
+  process: {{_linkedBinding: () => ({{
+    NodeIQQNTWrapperSession: {{getNTWrapperSession: () => session}},
+    NodeIQQNTWrapperNetwork: {{openNetworkService: () => networkService}}
+  }})}},
   caligoNetworkObserverReady: true,
   caligoSendTrace: false,
   Buffer,
 }});
 const run = script => vm.runInContext(script, context);
 assert.equal(run(scripts.start), 'ARMED sid=nt_0 lidRet=15');
-assert.equal(run(scripts.status), 'setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
+assert.equal(run(scripts.status), 'addNetworkServiceListener,setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
 assert.equal(run(scripts.drain), 'NONE');
 callbacks.network({{code:2, nested:{{a:1}}}}, 'PRIVATE_TEXT_SHOULD_NOT_LEAK', true);
 callbacks.msf('PRIVATE_MSF_TEXT', 7);
@@ -53,20 +61,25 @@ assert.deepEqual(batch.events[0].args[2], {{type:'boolean', value:true}});
 assert.deepEqual(batch.events[1].args, [{{type:'string', length:16}}, {{type:'number', value:7}}]);
 assert.equal(JSON.stringify(batch).includes('PRIVATE'), false);
 assert.equal(run(scripts.drain), 'NONE');
+callbacks.netservice({{status:3}});
+const netBatch = JSON.parse(run(scripts.drain));
+assert.equal(netBatch.events.length, 1);
+assert.deepEqual(netBatch.events[0].args[0], {{type:'object', keys:['status']}});
 assert.equal(run(scripts.stop), 'STOPPED sid=nt_0 remove=ok');
 callbacks.network(1);
 assert.equal(run(scripts.drain), 'NONE');
 console.log('NETWORK_OBSERVER_OK');
 "#
     );
-    let output = Command::new("node")
-        .arg("-e")
-        .arg(&fixture)
-        .stdin(Stdio::null())
+    let mut child = Command::new("node")
+        .arg("-")
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .expect("node available");
+    child.stdin.take().expect("stdin").write_all(fixture.as_bytes()).expect("write fixture");
+    let output = child.wait_with_output().expect("node exit");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stdout).contains("NETWORK_OBSERVER_OK"));
 }

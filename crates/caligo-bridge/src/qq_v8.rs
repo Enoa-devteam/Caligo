@@ -840,6 +840,23 @@ pub const D8_START_JS: &str = r"
       installNetwork('setOnNetworkChanged', 'network');
       installNetwork('setOnMsfStatusChanged', 'msf');
       installNetwork('setOnWeakNetChanged', 'weak');
+      try {
+        var netClass = q.NodeIQQNTWrapperNetwork;
+        if (netClass && typeof netClass.openNetworkService === 'function') {
+          R.networkObserverArity['openNetworkService'] = netClass.openNetworkService.length;
+          var net = netClass.openNetworkService();
+          if (net && (typeof net === 'object' || typeof net === 'function')) {
+            R.networkService = net;
+            if (typeof net.addNetworkServiceListener === 'function') {
+              R.networkObserverArity['addNetworkServiceListener'] = net.addNetworkServiceListener.length;
+              net.addNetworkServiceListener(function () { captureNetwork('netservice', arguments); });
+              R.networkObserver['addNetworkServiceListener'] = true;
+            }
+          }
+        }
+      } catch (e) {
+        R.networkObserverErrors['openNetworkService'] = String((e && e.name) || 'error').slice(0, 32);
+      }
     }
     R.listenerId = ms.addKernelMsgListener(R.listener);
     G.__caligo_res = R;
@@ -1490,6 +1507,15 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
     out.network_observer_errors = (R && R.networkObserverErrors) ? R.networkObserverErrors : {};
     out.network_observer_arity = (R && R.networkObserverArity) ? R.networkObserverArity : {};
     out.network_observer_calls = (R && R.networkObserverCalls) || 0;
+    if (R && R.networkService) {
+      try {
+        out.network_service = {
+          keys: names(R.networkService, 48),
+          proto: names(Object.getPrototypeOf(R.networkService), 48),
+          status: callShape(R.networkService, 'getNetworkStatus')
+        };
+      } catch (e) { out.network_service = {error:String((e && e.name) || 'error').slice(0, 32)}; }
+    }
     out.binding_keys = names(q, 64);
     out.binding_types = {};
     var bindingProbe = ['NodeIQQNTWrapperNetwork','NodeIKernelLoginService','NodeIKernelLoginListener'];
