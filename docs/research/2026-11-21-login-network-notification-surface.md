@@ -159,3 +159,17 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建：源码 `52d05a1`，EXE `AE301239…`、bridge `6822935E…`、caligod `E017BCF0…`；现场包清单 `BAEF5400…4634`。
 - 下一步现场（一次）：`python -B run-field.py --probe-only`，读取绑定层是否存在网络类及其方法、`getSelfStatus` 形状；
   据此决定 R2/R3 的观察源（绑定 listener 或周期拉取），再实现撤权/重绑。
+
+### 6.6 探测 v2 现场结果与网络服务监听（2026-11-22）
+
+- 实例 `7036`（创建 `2026-11-22T04:03:37.8628779Z`），构建 `52d05a1`，`--probe-only` 零发送：
+  - 绑定层暴露 `NodeIQQNTWrapperNetwork`（静态 `openNetworkService`，0 参）与 `NodeIKernelLoginService`（静态 `get`）；
+    `NodeIKernelLoginListener` 为 `undefined`；
+  - `status_probe.self_status` 返回 **Promise**（异步），`getStatusInfo`/`getCoreInfo`/`getOnLineDev` 均为 0 参函数；
+  - 观察者 `network_observer_calls=0`（本次无网络干预，符合预期）。
+- 据此构建 `5527c68`：arm 时调用 `NodeIQQNTWrapperNetwork.openNetworkService()`，在返回对象上注册
+  `addNetworkServiceListener`（1 参）并复用同一有界采集；surface 输出 `network_service` 的 keys/proto 与
+  `getNetworkStatus` 形状；`--probe-only` 仍为零发送。
+- 构建 pin：EXE `1DDB9123…`、bridge `39111BAB…`、caligod `69C1E2FE…`；现场包清单 `7CC648DF…4D56`。
+- 下一步：新代次上重跑 R2（真正断网 20–60 秒），观察 `addNetworkServiceListener` 是否产生 `network_state`；
+  若仍无事件，则改用 `getNetworkStatus`/`getSelfStatus` 周期拉取。
