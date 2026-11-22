@@ -213,3 +213,14 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建 pin：EXE `C32A5701…`、bridge `2F2D6724…`、caligod `B42C1715…`；现场包清单 `EC7F602D…D86C`。
 - 下一步（零发送）：`--probe-only` 读取 `network_status`（初始值）、`self_status_result`、`network_service`；
   之后实现 R3 身份核对与 R2 状态变化 → 撤权接线。
+
+### 6.10 状态拉取现场结果（2026-11-22）
+
+- 实例 `55444`，构建 `1cb3954`，`--probe-only`：`network_status` 行 `{previous:null,current:1}`（拉取生效）；
+  `network_service.status` 为 number=1；第二次 surface 的 `self_status_result` 为
+  `{type:'object', keys:['result','errMsg']}`；观察者 calls=0（无干预）；停止通过、零发送。
+- 已补：runner 把每次成功 surface 写入 `surface.private.json`；`valueShape` 额外记录对象内 `result`
+  的数值/长度，便于读取身份状态码。
+- 构建：源码 `314539c`，EXE `0371397D…`、bridge `D32C258B…`、caligod `615D5AC3…`；现场包清单 `970380D9…0FB3`。
+- 下一步（一次零发送）：读取 `self_status_result.result` 的实际数值与 `network_status` 初始值；
+  之后实现 R3 周期身份核对（`getSelfStatus().result` / `getSessionId`）与 R2 状态变化撤权。
