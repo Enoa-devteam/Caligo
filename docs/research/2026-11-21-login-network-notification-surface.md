@@ -187,3 +187,16 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
   Node VM 夹具覆盖 offLine/onLine 成功、无会话与抛错路径。
 - 语义边界：这是**合成状态注入**，验证“网络状态通知 → 观察者”的链路，不是真实丢包或 OS 断网；
   等流式传输结束后仍应补一次真实断网样本。
+
+### 6.8 合成切换尝试与异步 self-status 探测（2026-11-22）
+
+- 实例 `34040`，构建 `e3328b1`，`--synthetic-toggle`：`session.offLine()` / `onLine()` 以 0 参调用均返回
+  `ERR:Error`；固定构建断言这两个方法**需要 1 个参数**，因此合成切换暂不可用，`network_state` 为 0；
+  观察停止仍通过、零发送。证据归档 `attempt4-pid34040-synthetic-toggle/`。
+- 静态补注：`NodeIQQNTWrapperSession::offLine/onLine/offLineSync` 均 `needs 1 arguments`；参数语义待定，
+  不再盲试。
+- 转向 R3 的拉取源：`qq-surface` 现在调用 `ProfileService.getSelfStatus()`（Promise）并把解析后的
+  有界形状存入 `self_status_result`/`self_status_error`；`--probe-only` 会二次读取。
+- 构建：源码 `293267c`，EXE `4891BCB3…`、bridge `80C5724D…`、caligod `98BB27F1…`；现场包清单 `E6D06C78…0839`。
+- 下一步（一次零发送）：`python -B run-field.py --probe-only`，读取 `self_status_result` 与 `network_service`
+  形状，作为 R3 身份观察的输入；R2 真实断网样本等流式传输结束后补。
