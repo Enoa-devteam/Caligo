@@ -300,3 +300,16 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 现场包重建为 R2n：源码 `8439a45`（含控制面撤权 CLI），EXE `A40A81E5…`、bridge `4A25B810…`、
   caligod `CDCF8A79…`；包清单 `8AEDCBE1…A05D`。
 - 剩余：撤权后的**重新核实/重绑**未自动化；R3 换号与 R2 真实断网现场仍需在该模式执行后处理恢复。
+
+### 6.18 R3 现场中止与桌面 QQ 限制（2026-11-22）
+
+- 实例 `31800`（创建 `2026-11-22T14:25:57.9185900Z`），构建 `8439a45`：preflight PASS、attach、观察者与
+  `READY_WATCH identity` 均通过；操作员随后说明**桌面 QQ 不支持在同一实例内退出并登录另一账号**，
+  因此该窗口无法产生 `identity_state` 换号事件。按操作员要求中止，未发生身份变化、零发送。
+- 中止时进程被直接结束，**未执行观察停止**；QQ `31800` 仍加载 `caligo_bridge.dll`，按合同保留、不热卸载、
+  不再重接；该实例消耗。
+- 结论：R3 的“同一实例换号”在桌面 QQ 上不可执行。R3 需要改为**跨进程新代次**验证：新实例登录另一测试身份、
+  显式新 `session_generation` 绑定，验证旧代次被拒、旧事件只审计、旧请求不重放（cancelled/unknown 不重发）；
+  现有 `session_revocation_contract` 与 `core` 代次隔离测试覆盖其离线契约，现场需在新实例上做显式重绑。
+- 自动撤权链路（`identity_state`/`network_status` → `daemon-control revoke-*`）未在本实例触发；可通过 R2
+  网络变化现场或合成测试继续验证。

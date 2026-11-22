@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-22 feat-005 R3 现场中止（桌面 QQ 限制）：实例 `31800`（创建 `2026-11-22T14:25:57.9185900Z`）preflight PASS、attach、观察者与 `READY_WATCH identity` 通过；操作员说明桌面 QQ 不支持同实例退出并登录另一账号，无法产生换号事件，按操作员要求中止，零发送。中止未执行观察停止，QQ 仍加载 `caligo_bridge.dll`（保留、不热卸载、不重接），实例消耗。R3 改为跨进程新代次验证（新实例登录另一测试身份、显式新代次绑定；旧代次拒绝/旧事件审计/旧请求不重放），离线契约见 `session_revocation_contract`。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#618-r3-现场中止与桌面-qq-限制2026-11-22)
+
 2026-11-22 feat-005 自动撤权触发与 R2n 现场包（离线）：runner 新增 `--watch-revoke identity|network`（检测 `identity_state`/`network_status` 变化后调用 `daemon-control revoke-*` 并记录 `RevokeAck`）与 `--classify-test`；包重建为 R2n：源码 `8439a45`、EXE `A40A81E5…`、bridge `4A25B810…`、caligod `CDCF8A79…`，清单 `8AEDCBE1…A05D`。剩余：撤权后的重新核实/重绑未自动化；R3 换号与 R2 真实断网现场待执行。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#617-自动撤权触发与-r2n-现场包离线2026-11-22)
 
 2026-11-22 feat-005 控制面撤权接线（离线）：新增 `ControlMsg::RevokeSession`/`CoreToControlMsg::RevokeAck`，daemon 将 `network_changed`/`identity_changed` 映射到 `revoke_session` 并返回取消/未知计数；CLI `daemon-control ... revoke-network|revoke-identity` 在拒绝时 exit 2。serde 往返 1 条，串行全仓 default **501** / research **561**、0 failed。剩余：runner 尚未把 `network_status`/`identity_state` 行自动映射为撤权调用；现场可先手动执行 CLI 动作。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#616-控制面撤权接线离线2026-11-22)
