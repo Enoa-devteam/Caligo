@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-22 feat-005 控制面撤权接线（离线）：新增 `ControlMsg::RevokeSession`/`CoreToControlMsg::RevokeAck`，daemon 将 `network_changed`/`identity_changed` 映射到 `revoke_session` 并返回取消/未知计数；CLI `daemon-control ... revoke-network|revoke-identity` 在拒绝时 exit 2。serde 往返 1 条，串行全仓 default **501** / research **561**、0 failed。剩余：runner 尚未把 `network_status`/`identity_state` 行自动映射为撤权调用；现场可先手动执行 CLI 动作。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#616-控制面撤权接线离线2026-11-22)
+
 2026-11-22 feat-005 会话撤权原语与契约测试（离线）：AccountActor::revoke_session(RevokeReason) 支持 NetworkChanged（要求同宿主/账号/代次重绑）与 IdentityChanged（要求更新的 session_generation）；撤权把 Queued/Accepted → CancelledUnsent、DispatchIntent/NativeStarted → DeliveryUnknown，写 SessionRevoked 审计；恢复不重放，旧代次事件只审计。新增 session_revocation_contract 2/2，串行全仓 default **500** / research **560**、0 failed。**接线缺口**：观察者行目前只写研究报告 JSONL，core 控制面还没有撤权消息/CLI 动作；下一步新增 ControlMsg/CLI 动作，由 runner 在
 etwork_status/identity_state 变化时触发撤权，再显式重绑。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#615-会话撤权原语与契约测试离线2026-11-22)
 

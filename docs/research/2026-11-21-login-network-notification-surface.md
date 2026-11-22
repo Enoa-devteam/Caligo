@@ -279,3 +279,14 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - **接线缺口（未完成）**：观察者行目前只写研究报告 JSONL，core 控制面（`ControlMsg`）还没有撤权消息；
   下一步需新增控制消息/CLI 动作，并由 runner 在 `network_status`/`identity_state` 变化时触发撤权，
   然后重新核实身份（`qq-self`/`qq-login`）并显式重绑，才能进入 R2/R3 现场。
+
+### 6.16 控制面撤权接线（离线，2026-11-22）
+
+- 协议：`ControlMsg::RevokeSession { reason }`（`network_changed` / `identity_changed`）与
+  `CoreToControlMsg::RevokeAck { accepted, cancelled_unsent, delivery_unknown, session_generation, reject_reason }`。
+- daemon：`serve_control` 将原因映射到 `AccountActor::revoke_session`，返回取消/未知计数；未知原因拒绝。
+- CLI：`caligo-cli daemon-control --pipe ... --auth ... revoke-network|revoke-identity`，
+  拒绝的 ack 以 exit 2 失败；成功打印完整 JSON。
+- 验证：模型 serde 往返 1 条；串行全仓 default **501** / research **561**，0 failed。
+- **剩余缺口**：runner 还没有把 `network_status`/`identity_state` 行自动映射为撤权调用；
+  现场可由操作员在观察到行后手动执行 CLI 动作，或下一块加自动触发（含防抖与单次语义）。
