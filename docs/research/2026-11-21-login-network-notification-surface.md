@@ -245,3 +245,11 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
   Node VM 夹具覆盖首 tick 行与后续 session_id/self_status 变化。
 - 构建 pin：EXE `B03F3EF5…`、bridge `AA6A0432…`、caligod `D7B8E2E8…`；现场包清单 `D1AF7001…20DB`。
 - 下一步（一次零发送）：`--probe-only` 读取 `identity_state` 基线行；之后 R3 换号现场需另一测试身份。
+
+### 6.13 身份行仍为 0 与“随时排空”修正（2026-11-22）
+
+- 实例 `19996`，构建 `2171360`，`--probe-only`：`identity_state` 仍为 0。原因是首 tick 只**调度**了
+  `getSelfStatus()` 的 Promise，而排空脚本在非采样 tick 提前返回，已解析的行要等第 20 tick 才被读出。
+- 修正（构建 `71302cf`）：采样仍为第 1 与每 20 tick，但**每个 tick 都排空**已入队的身份行。
+- 构建 pin：EXE `2E643C6F…`、bridge `EF52E979…`、caligod `0D0218AF…`；现场包清单 `B329A9FC…EEC3`。
+- 下一步（一次零发送）：`--probe-only` 确认 `identity_state` 基线行出现；之后 R3 换号现场。
