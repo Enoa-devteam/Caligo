@@ -236,3 +236,12 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建 pin：EXE `8F46208A…`、bridge `0BB81AEF…`、caligod `3A2F6E64…`；现场包清单 `77C26C23…D711`；
   Node VM 夹具覆盖 session_id/self_status 变化与行数上限。
 - 下一步（一次零发送）：`--probe-only` 观察 `identity_state` 基线行；R3 换号现场仍需用户操作另一测试身份。
+
+### 6.12 身份基线首次未触发与首 tick 修正（2026-11-22）
+
+- 实例 `28952`，构建 `adfd0e8`，`--probe-only`：`self_status_result.result=0`、`network_status current=1`，
+  但 `identity_state` 行为 0——身份轮询只在第 20 个 owner tick 执行，短窗口内没等到。
+- 修正（构建 `2171360`）：第 **1** 个 tick 先采样一次（记录 `self_status` 初始 `unset→0`），之后每 20 tick；
+  Node VM 夹具覆盖首 tick 行与后续 session_id/self_status 变化。
+- 构建 pin：EXE `B03F3EF5…`、bridge `AA6A0432…`、caligod `D7B8E2E8…`；现场包清单 `D1AF7001…20DB`。
+- 下一步（一次零发送）：`--probe-only` 读取 `identity_state` 基线行；之后 R3 换号现场需另一测试身份。
