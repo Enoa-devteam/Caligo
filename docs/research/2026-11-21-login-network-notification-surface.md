@@ -173,3 +173,17 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建 pin：EXE `1DDB9123…`、bridge `39111BAB…`、caligod `69C1E2FE…`；现场包清单 `7CC648DF…4D56`。
 - 下一步：新代次上重跑 R2（真正断网 20–60 秒），观察 `addNetworkServiceListener` 是否产生 `network_state`；
   若仍无事件，则改用 `getNetworkStatus`/`getSelfStatus` 周期拉取。
+
+### 6.7 合成会话网络切换（离线实现，2026-11-22）
+
+物理断网会中断操作员的流式传输，因此新增**会话层合成切换**作为 R2 的折中干预：
+
+- bridge 研究导出 `caligo_qq_net_offline` / `caligo_qq_net_online`：置一次性模式并唤醒 owner 泵；
+  owner 在 poll 成功的 tick 上调用 `session.offLine()` / `session.onLine()`，把结果写入 `network_toggle` 阶段行。
+- CLI `qq-net-offline` / `qq-net-online`：沿用状态命令的准入与已映射 bridge 校验，只发一次请求并打印该行。
+- R2 runner 新增 `--synthetic-toggle`：attach → 确认观察者 → self 查询 → `qq-net-offline` → 等待
+  `network_state`（≤120 秒）→ `qq-net-online` → 再等 30 秒 → 观察停止；零发送。
+- 构建：源码 `e3328b1`，EXE `ED1990DE…`、bridge `E629A73E…`、caligod `EC486513…`；现场包清单 `CE3BB394…854C`；
+  Node VM 夹具覆盖 offLine/onLine 成功、无会话与抛错路径。
+- 语义边界：这是**合成状态注入**，验证“网络状态通知 → 观察者”的链路，不是真实丢包或 OS 断网；
+  等流式传输结束后仍应补一次真实断网样本。
