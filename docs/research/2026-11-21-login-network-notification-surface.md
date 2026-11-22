@@ -117,8 +117,8 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 
 ### 6.2 R2 网络观察现场包（离线准备，2026-11-22）
 
-- 构建：源码 `00dbc7f`，EXE `C928D9BC…`、bridge `40CBD258…`、caligod `7F8C1BE1…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
-- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `EE7F4266…8BFF`），未绑定、零发送。
+- 构建：源码 `ce0d0cd`，EXE `F432CD20…`、bridge `42A1EFFD…`、caligod `A20CBEB2…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
+- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `B0DBCE31…6EA3`），未绑定、零发送。
 - 流程：一次准入/attach → 等待 `listener_armed` → `qq-surface` 确认 `network_observer` 含三个 setter → self 查询 → 打印 `READY_NETWORK` →
   操作员对测试 QQ 做一次网络状态变化（回环 IPC 保持可用，QQ 不退出）→ 采集有界 `network_state` 行（最多 600 秒）→
   1000 ms 观察停止。
@@ -135,3 +135,17 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
   `qq-surface` 的 `network_observer_errors`/`network_observer_arity` 字段输出；R2 runner 把它们记入 summary。
 - 现场包更新：pins `C928D9BC…`/`40CBD258…`/`7F8C1BE1…`，清单 `EE7F4266…8BFF`；首次尝试证据归档在包内
   `attempt1-pid8036-nointervention/`。重跑需新 QQ 代次并在 `READY_NETWORK` 后真正断网 20–60 秒再恢复。
+
+### 6.4 R2 第二次在线尝试（完整断网，仍无回调）与调用计数（2026-11-22）
+
+- 实例 `31808`（创建 `2026-11-22T02:43:33.0342589Z`），构建 `ce0d0cd` 前的 `00dbc7f`：准入 PASS、attach、self 查询通过；
+  `qq-surface` 显示 `setOnNetworkChanged`/`setOnWeakNetChanged` 注册、`setOnMsfStatusChanged` 抛错；操作员确认
+  **完全断开 Wi-Fi+以太网 20–60 秒**且 QQ 显示离线/重连，但 600 秒窗口内 `network_state` 仍为 0。
+- 诊断增强（构建 `ce0d0cd`）：观察者新增 `networkObserverCalls` 计数；`qq-surface` 输出
+  `network_observer_calls`、绑定类名与 `NodeIQQNTWrapperNetwork`/`NodeIKernelLoginService` 类型；
+  R2 runner 在网络窗口结束后再读一次 surface，区分“回调从未触发”与“采集/排空问题”。
+- 现场包更新：pins `F432CD20…`/`42A1EFFD…`/`A20CBEB2…`，清单 `B0DBCE31…6EA3`；两次尝试分别归档为
+  `attempt1-pid8036-nointervention/`、`attempt2-pid31808-full-disconnect/`。
+- 目前判断：session 的 `setOnNetworkChanged`/`setOnWeakNetChanged` 在完整断网下没有可观测回调（或注册被 QQ 覆盖）；
+  `setOnMsfStatusChanged` 需要 3 个参数。下一步优先看绑定层是否暴露 `NodeIQQNTWrapperNetwork`
+  （`addNetworkListener`），或改用拉取式状态源（`getMsgService().getOnLineDev`、`ProfileService.getSelfStatus`）。
