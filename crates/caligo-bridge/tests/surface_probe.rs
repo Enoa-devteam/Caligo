@@ -32,7 +32,7 @@ const login = {{addKernelLoginListener: () => 1, removeKernelLoginListener: () =
 const session = {{
   getLoginService: () => login,
   getNetworkService: undefined,
-  getProfileService: () => ({{getSelfStatus: () => Promise.resolve(2), getStatusInfo: () => 0, getCoreInfo: () => 0}}),
+  getProfileService: () => ({{getSelfStatus: () => Promise.resolve({{result:2, errMsg:'ok'}}), getStatusInfo: () => 0, getCoreInfo: () => 0}}),
   getMsgService: () => ({{sendMsg: () => 0, getOnLineDev: () => 0}}),
   secret: 'PRIVATE_SHOULD_NOT_LEAK'
 }};
@@ -51,7 +51,7 @@ const session = {{
   assert.equal(JSON.stringify(out).includes('PRIVATE_SHOULD_NOT_LEAK'), false);
   await new Promise(resolve => setImmediate(resolve));
   const second = JSON.parse(run(session));
-  assert.deepEqual(second.self_status_result, {{type:'number', value:2}});
+  assert.deepEqual(second.self_status_result, {{type:'object', keys:['result','errMsg'], result:2}});
   const missing = JSON.parse(run(null));
   assert.equal(missing.error, 'no_session');
   const throwing = {{getLoginService: () => {{ throw new Error('PRIVATE_ERROR_TEXT'); }}}};

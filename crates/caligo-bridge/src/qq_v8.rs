@@ -1473,6 +1473,11 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
           var ks = Object.keys(v);
           if (ks.length > 16) ks = ks.slice(0, 16);
           for (var i = 0; i < ks.length; i++) out.keys.push(String(ks[i]).slice(0, 32));
+          if (Object.prototype.hasOwnProperty.call(v, 'result')) {
+            var resultValue = v.result;
+            if (typeof resultValue === 'number' || typeof resultValue === 'boolean') out.result = resultValue;
+            else if (typeof resultValue === 'string') out.result_length = resultValue.length;
+          }
         } catch (e) {}
       }
       return out;
