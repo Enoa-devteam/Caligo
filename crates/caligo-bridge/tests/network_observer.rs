@@ -1,8 +1,23 @@
 #![cfg(feature = "research")]
 
-use caligo_bridge::qq_v8::{D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS, D8_START_JS, D8_STOP_JS};
+use caligo_bridge::qq_v8::{
+    D8_NET_OFFLINE_JS, D8_NET_ONLINE_JS, D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS,
+    D8_START_JS, D8_STOP_JS,
+};
 use std::io::Write as _;
 use std::process::{Command, Stdio};
+
+fn node_stdin(fixture: &str) -> std::process::Output {
+    let mut child = Command::new("node")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("node available");
+    child.stdin.take().expect("stdin").write_all(fixture.as_bytes()).expect("write fixture");
+    child.wait_with_output().expect("node exit")
+}
 
 /// The network observer records only bounded argument shapes (type, number,
 /// string length, object keys). It must never leak string content, and after
@@ -82,4 +97,37 @@ console.log('NETWORK_OBSERVER_OK');
     let output = child.wait_with_output().expect("node exit");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stdout).contains("NETWORK_OBSERVER_OK"));
+}
+
+#[test]
+fn network_toggle_scripts_report_state() {
+    let scripts = serde_json::json!({
+        "off": D8_NET_OFFLINE_JS,
+        "on": D8_NET_ONLINE_JS,
+    });
+    let fixture = format!(
+        r#"
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const scripts = {scripts};
+function run(script, session) {{
+  const context = vm.createContext({{
+    process: {{_linkedBinding: () => ({{NodeIQQNTWrapperSession: {{getNTWrapperSession: () => session}}}})}},
+    Buffer
+  }});
+  return vm.runInContext(script, context);
+}}
+const session = {{offLine() {{ return 1; }}, onLine() {{ return 0; }}}};
+assert.equal(run(scripts.off, session), 'OK:number');
+assert.equal(run(scripts.on, session), 'OK:number');
+assert.equal(run(scripts.off, null), 'NO_SESSION');
+const broken = {{offLine() {{ throw new Error('PRIVATE'); }}, onLine() {{ return 0; }}}};
+assert.equal(run(scripts.off, broken), 'ERR:Error');
+assert.equal(run(scripts.off, broken).includes('PRIVATE'), false);
+console.log('NETWORK_TOGGLE_OK');
+"#
+    );
+    let output = node_stdin(&fixture);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("NETWORK_TOGGLE_OK"));
 }

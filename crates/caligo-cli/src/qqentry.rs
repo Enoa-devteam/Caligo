@@ -1066,6 +1066,58 @@ pub fn cmd_qq_surface(args: &[String]) -> ExitCode {
     if ok { ExitCode::SUCCESS } else { ExitCode::from(2) }
 }
 
+/// Research-only synthetic session network transition (offline/online).
+pub fn cmd_qq_net_offline(args: &[String]) -> ExitCode {
+    cmd_qq_network(args, false)
+}
+
+pub fn cmd_qq_net_online(args: &[String]) -> ExitCode {
+    cmd_qq_network(args, true)
+}
+
+fn cmd_qq_network(args: &[String], online: bool) -> ExitCode {
+    let name = if online { "qq-net-online" } else { "qq-net-offline" };
+    if args.iter().any(|arg| arg == "--stop-observe-ms") {
+        eprintln!("[{name}] --stop-observe-ms is only valid for qq-entry-stop");
+        return ExitCode::FAILURE;
+    }
+    let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[{name}] 已映射 bridge 校验失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let export = if online { "caligo_qq_net_online" } else { "caligo_qq_net_offline" };
+    match unsafe { remote_export(pid, remote_base, export, extra.created_filetime) } {
+        Ok(0) => {}
+        Ok(code) => {
+            eprintln!("[{name}] request exit={code:#x}");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("[{name}] {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let mut last_line: Option<String> = None;
+    if let Ok(text) = std::fs::read_to_string(&report) {
+        for line in text.lines().filter(|line| line.contains("\"stage\":\"network_toggle\"")) {
+            last_line = Some(line.to_string());
+        }
+    }
+    if let Some(line) = &last_line {
+        println!("{line}");
+    }
+    let ok = last_line.as_deref().is_some_and(|line| line.contains("\"ok\":true"));
+    if ok { ExitCode::SUCCESS } else { ExitCode::from(2) }
+}
+
 /// SAFETY: 前置:bridge 已加载。
 unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u64>) -> Result<u32, String> {
     remote_export(pid, remote_base, "caligo_qq_daemon_status", expected_created)

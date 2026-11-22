@@ -871,6 +871,31 @@ pub extern "system" fn caligo_qq_surface_probe() -> u32 {
     }
 }
 
+/// Research-only synthetic session network transition (offline/online).
+#[no_mangle]
+pub extern "system" fn caligo_qq_net_offline() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_network_toggle(false) { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn caligo_qq_net_online() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_network_toggle(true) { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
+    }
+}
+
 /// daemon client 启动结果码。
 pub mod daemon_client_code {
     pub const OK: u32 = 0;
@@ -1170,6 +1195,19 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                     Ok(detail) => qq_entry::append_stage_simple("surface_probe", true, &detail),
                     Err(code) => qq_entry::append_stage_simple(
                         "surface_probe", false, &format!("unavailable:{code}")),
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                let mode = qq_entry::take_network_toggle();
+                if mode != 0 {
+                    match crate::qq_v8::toggle_network(mode == 2) {
+                        Ok(result) if result.starts_with("OK:") =>
+                            qq_entry::append_stage_simple("network_toggle", true, &result),
+                        Ok(result) => qq_entry::append_stage_simple("network_toggle", false, &result),
+                        Err(code) => qq_entry::append_stage_simple(
+                            "network_toggle", false, &format!("unavailable:{code}")),
+                    }
                 }
             }
             #[cfg(feature = "research")]

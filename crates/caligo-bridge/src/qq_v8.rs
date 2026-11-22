@@ -1622,6 +1622,50 @@ pub fn network_observer_status() -> Result<String, &'static str> {
 }
 
 #[cfg(feature = "research")]
+pub const D8_NET_OFFLINE_JS: &str = r"
+(function () {
+  try {
+    var s = process._linkedBinding('QQNT').NodeIQQNTWrapperSession.getNTWrapperSession('nt_1');
+    if (!s) return 'NO_SESSION';
+    if (typeof s.offLine !== 'function') return 'NO_OFFLINE';
+    var r = s.offLine();
+    return 'OK:' + (r && typeof r.then === 'function' ? 'promise' : typeof r);
+  } catch (e) { return 'ERR:' + String((e && e.name) || 'error').slice(0, 32); }
+})()
+";
+
+#[cfg(feature = "research")]
+pub const D8_NET_ONLINE_JS: &str = r"
+(function () {
+  try {
+    var s = process._linkedBinding('QQNT').NodeIQQNTWrapperSession.getNTWrapperSession('nt_1');
+    if (!s) return 'NO_SESSION';
+    if (typeof s.onLine !== 'function') return 'NO_ONLINE';
+    var r = s.onLine();
+    return 'OK:' + (r && typeof r.then === 'function' ? 'promise' : typeof r);
+  } catch (e) { return 'ERR:' + String((e && e.name) || 'error').slice(0, 32); }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn toggle_network(online: bool) -> Result<String, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    let script = if online { D8_NET_ONLINE_JS } else { D8_NET_OFFLINE_JS };
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), script) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw.len() > 128 { return Err("too_large"); }
+    Ok(raw)
+}
+
+#[cfg(feature = "research")]
 pub const D8_NETWORK_EVENTS_JS: &str = r"
 (function () {
   try {

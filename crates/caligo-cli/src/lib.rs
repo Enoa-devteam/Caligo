@@ -44,6 +44,8 @@ caligo-cli <K1 probe>
   caligo-cli observe-msf --pid <n> [--out <report.json>] [--self-test]
   caligo-cli qq-status [options]
   caligo-cli qq-surface [options]
+  caligo-cli qq-net-offline [options]
+  caligo-cli qq-net-online [options]
   caligo-cli qq-entry [options]
   caligo-cli qq-entry-stop [options]
   caligo-cli daemon-control --pipe <control-pipe> --auth <token> <action>
@@ -117,6 +119,8 @@ pub fn run(args: &[String], command: &str) -> ExitCode {
         Some("qq-entry-stop") => qqentry::cmd_qq_entry_stop(&args[1..]),
         Some("qq-status") => qqentry::cmd_qq_status(&args[1..]),
         Some("qq-surface") => qqentry::cmd_qq_surface(&args[1..]),
+        Some("qq-net-offline") => qqentry::cmd_qq_net_offline(&args[1..]),
+        Some("qq-net-online") => qqentry::cmd_qq_net_online(&args[1..]),
         Some("daemon-control") => cmd_daemon_control(&args[1..]),
         Some("observe-msf") => {
             match observe_msf::cmd_observe_msf(&args[1..]) {

@@ -186,6 +186,9 @@ static OWNER_CLEANUP_FAILED: AtomicBool = AtomicBool::new(false);
 /// One-shot read-only surface probe request for the R2/R3 notification work.
 #[cfg(feature = "research")]
 static SURFACE_PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// 0 = none, 1 = request offline, 2 = request online (owner tick).
+#[cfg(feature = "research")]
+static NETWORK_TOGGLE_REQUESTED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn owner_fault() -> Option<EntryError> {
     #[cfg(feature = "research")]
@@ -370,6 +373,19 @@ pub fn request_surface_probe() -> bool {
 #[cfg(feature = "research")]
 pub fn take_surface_probe() -> bool {
     SURFACE_PROBE_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+/// Request one synthetic session network transition on the owner tick.
+#[cfg(feature = "research")]
+pub fn request_network_toggle(online: bool) -> bool {
+    if ENTRY.close_req.load(Ordering::Acquire) != 0 { return false; }
+    NETWORK_TOGGLE_REQUESTED.store(if online { 2 } else { 1 }, Ordering::Release);
+    wake_owner_pump()
+}
+
+#[cfg(feature = "research")]
+pub fn take_network_toggle() -> u8 {
+    NETWORK_TOGGLE_REQUESTED.swap(0, Ordering::AcqRel)
 }
 
 /// daemon 启动产物(worker 停止标志;导出侧保存)。
