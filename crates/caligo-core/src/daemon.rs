@@ -1352,6 +1352,42 @@ impl Daemon {
                             },
                         )?;
                     }
+                    ControlMsg::RevokeSession { reason } => {
+                        let reason = match reason.as_str() {
+                            "network_changed" => Some(crate::runtime::RevokeReason::NetworkChanged),
+                            "identity_changed" => Some(crate::runtime::RevokeReason::IdentityChanged),
+                            _ => None,
+                        };
+                        let reply = match reason {
+                            None => CoreToControlMsg::RevokeAck {
+                                accepted: false,
+                                cancelled_unsent: 0,
+                                delivery_unknown: 0,
+                                session_generation: 0,
+                                reject_reason: Some("unknown revoke reason".into()),
+                            },
+                            Some(reason) => {
+                                let mut actor = self.actor.lock().unwrap();
+                                match actor.revoke_session(reason) {
+                                    Ok(report) => CoreToControlMsg::RevokeAck {
+                                        accepted: true,
+                                        cancelled_unsent: report.cancelled_unsent,
+                                        delivery_unknown: report.delivery_unknown,
+                                        session_generation: report.session_generation,
+                                        reject_reason: None,
+                                    },
+                                    Err(error) => CoreToControlMsg::RevokeAck {
+                                        accepted: false,
+                                        cancelled_unsent: 0,
+                                        delivery_unknown: 0,
+                                        session_generation: 0,
+                                        reject_reason: Some(format!("{error:?}")),
+                                    },
+                                }
+                            }
+                        };
+                        send_json(&conn, &reply)?;
+                    }
                     ControlMsg::DrainEvents { max } => {
                         let mut actor = self.actor.lock().unwrap();
                         let events: Vec<EventPayload> = actor

@@ -2292,7 +2292,7 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
         i += 1;
     }
     let (Some(pipe), action) = (pipe, cmd.first().map(String::as_str)) else {
-        eprintln!("daemon-control --pipe <control-pipe> --auth <token> <health|stop|query <id>|drain [n]>");
+        eprintln!("daemon-control --pipe <control-pipe> --auth <token> <health|stop|query <id>|drain [n]|revoke-network|revoke-identity>");
         return ExitCode::FAILURE;
     };
     // 连接 + Hello(重试等待 server 就绪)。短名自动补管道根(规避跨 shell
@@ -2329,6 +2329,12 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
         Some("drain") => ControlMsg::DrainEvents {
             max: cmd.get(1).and_then(|s| s.parse().ok()).unwrap_or(16),
         },
+        Some("revoke-network") => ControlMsg::RevokeSession {
+            reason: "network_changed".into(),
+        },
+        Some("revoke-identity") => ControlMsg::RevokeSession {
+            reason: "identity_changed".into(),
+        },
         // D7-b:发送链路探针。格式:send <request-id> <kind> <peer> <text...>
         // LAB/现场验证 Dispatch→SendResult 全链;真实业务发送属 D9 准入。
         Some("send") => {
@@ -2361,6 +2367,12 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
             match action {
                 Some("stop") if matches!(reply, CoreToControlMsg::Stopped { .. }) => ExitCode::SUCCESS,
                 Some("health") if matches!(reply, CoreToControlMsg::HealthAck { .. }) => ExitCode::SUCCESS,
+                Some("revoke-network") | Some("revoke-identity")
+                    if matches!(reply, CoreToControlMsg::RevokeAck { accepted: true, .. }) =>
+                {
+                    ExitCode::SUCCESS
+                }
+                Some("revoke-network") | Some("revoke-identity") => ExitCode::from(2),
                 _ => ExitCode::SUCCESS,
             }
         }

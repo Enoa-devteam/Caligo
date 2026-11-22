@@ -177,6 +177,24 @@ pub use super::ipc_v2::{ControlMsg, CoreToControlMsg};
 mod tests {
     use super::*;
 
+    #[test]
+    fn revoke_control_messages_roundtrip() {
+        let request = ControlMsg::RevokeSession { reason: "identity_changed".into() };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(serde_json::from_slice::<ControlMsg>(&bytes).unwrap(), request);
+
+        let ack = CoreToControlMsg::RevokeAck {
+            accepted: true,
+            cancelled_unsent: 2,
+            delivery_unknown: 1,
+            session_generation: 7,
+            reject_reason: None,
+        };
+        let bytes = serde_json::to_vec(&ack).unwrap();
+        assert_eq!(serde_json::from_slice::<CoreToControlMsg>(&bytes).unwrap(), ack);
+        assert!(String::from_utf8_lossy(&bytes).contains("revoke_ack"));
+    }
+
     /// v2 Hello 缺少 v3 必填字段 → 反序列化必须失败(不允许默认值放行)。
     #[test]
     fn v2_hello_without_host_identity_fails_to_decode() {

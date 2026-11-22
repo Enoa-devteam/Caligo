@@ -120,6 +120,10 @@ pub enum ControlMsg {
     DrainEvents {
         max: usize,
     },
+    /// 撤权当前会话:network_changed 需同身份重新核实,identity_changed 需新代次。
+    RevokeSession {
+        reason: String,
+    },
     Health {},
     Stop {},
 }
@@ -152,6 +156,14 @@ pub enum CoreToControlMsg {
     },
     EventsBatch {
         events: Vec<EventPayload>,
+    },
+    /// 撤权结果:撤权本身不重放请求;恢复仍需显式重绑。
+    RevokeAck {
+        accepted: bool,
+        cancelled_unsent: usize,
+        delivery_unknown: usize,
+        session_generation: u64,
+        reject_reason: Option<String>,
     },
     HealthAck {},
     Stopped {},
