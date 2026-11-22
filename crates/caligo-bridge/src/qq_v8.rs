@@ -1750,51 +1750,53 @@ pub const D8_IDENTITY_POLL_JS: &str = r"
     var R = globalThis.__caligo_d8;
     if (!R || !Array.isArray(R.identityEvents)) return 'NONE';
     R.identityPollCounter = (R.identityPollCounter || 0) + 1;
-    if (R.identityPollCounter !== 1 && R.identityPollCounter % 20 !== 0) return 'NONE';
+    var sample = R.identityPollCounter === 1 || R.identityPollCounter % 20 === 0;
     var push = function (row) {
       if (R.identityEvents.length >= 16) { R.identityEventOverflow = true; return; }
       R.identityEvents.push(row);
     };
-    try {
-      if (R.session && typeof R.session.getSessionId === 'function') {
-        var sid = R.session.getSessionId();
-        if (typeof sid === 'number' || typeof sid === 'string') {
-          if (R.identitySessionId !== null && R.identitySessionId !== sid) {
-            push({kind:'session_id', previous:R.identitySessionId, current:sid});
-          }
-          R.identitySessionId = sid;
-        }
-      }
-    } catch (e) {}
-    try {
-      var ps = R.session && R.session.getProfileService ? R.session.getProfileService() : null;
-      if (ps && typeof ps.getSelfStatus === 'function') {
-        var record = function (value) {
-          try {
-            var result = null;
-            if (value && typeof value === 'object' && typeof value.result === 'number') result = value.result;
-            else if (typeof value === 'number') result = value;
-            if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== result) {
-              push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:result});
-              R.lastSelfStatusResult = result;
-              R.lastSelfStatusLoaded = true;
+    if (sample) {
+      try {
+        if (R.session && typeof R.session.getSessionId === 'function') {
+          var sid = R.session.getSessionId();
+          if (typeof sid === 'number' || typeof sid === 'string') {
+            if (R.identitySessionId !== null && R.identitySessionId !== sid) {
+              push({kind:'session_id', previous:R.identitySessionId, current:sid});
             }
-          } catch (e) {}
-        };
-        var v = ps.getSelfStatus();
-        if (v && typeof v.then === 'function') {
-          v.then(record, function () {
+            R.identitySessionId = sid;
+          }
+        }
+      } catch (e) {}
+      try {
+        var ps = R.session && R.session.getProfileService ? R.session.getProfileService() : null;
+        if (ps && typeof ps.getSelfStatus === 'function') {
+          var record = function (value) {
             try {
-              if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== 'rejected') {
-                push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:'rejected'});
-                R.lastSelfStatusResult = 'rejected';
+              var result = null;
+              if (value && typeof value === 'object' && typeof value.result === 'number') result = value.result;
+              else if (typeof value === 'number') result = value;
+              if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== result) {
+                push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:result});
+                R.lastSelfStatusResult = result;
                 R.lastSelfStatusLoaded = true;
               }
             } catch (e) {}
-          });
-        } else { record(v); }
-      }
-    } catch (e) {}
+          };
+          var v = ps.getSelfStatus();
+          if (v && typeof v.then === 'function') {
+            v.then(record, function () {
+              try {
+                if (!R.lastSelfStatusLoaded || R.lastSelfStatusResult !== 'rejected') {
+                  push({kind:'self_status', previous:R.lastSelfStatusLoaded ? R.lastSelfStatusResult : 'unset', current:'rejected'});
+                  R.lastSelfStatusResult = 'rejected';
+                  R.lastSelfStatusLoaded = true;
+                }
+              } catch (e) {}
+            });
+          } else { record(v); }
+        }
+      } catch (e) {}
+    }
     if (!R.identityEvents.length) return 'NONE';
     var events = R.identityEvents;
     R.identityEvents = [];
