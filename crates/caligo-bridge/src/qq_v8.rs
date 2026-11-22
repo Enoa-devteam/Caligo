@@ -1445,6 +1445,30 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
       } catch (e) { return ['ERR:' + String((e && e.name) || 'error').slice(0, 32)]; }
     }
     function typeOf(v) { return v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v); }
+    function callShape(obj, name) {
+      try {
+        if (!obj || typeof obj[name] !== 'function') return {type:typeof (obj && obj[name])};
+        var v = obj[name]();
+        var out = {type:(v && typeof v.then === 'function') ? 'promise' : typeOf(v)};
+        if (typeof v === 'number' || typeof v === 'boolean') out.value = v;
+        else if (typeof v === 'string') out.length = v.length;
+        else if (v && typeof v === 'object' && out.type !== 'promise') {
+          out.keys = [];
+          try {
+            var ks = Object.keys(v);
+            if (ks.length > 16) ks = ks.slice(0, 16);
+            for (var i = 0; i < ks.length; i++) out.keys.push(String(ks[i]).slice(0, 32));
+          } catch (e) {}
+        }
+        return out;
+      } catch (e) { return {error:String((e && e.name) || 'error').slice(0, 32)}; }
+    }
+    function shapeOrType(obj, name) {
+      try {
+        if (!obj || typeof obj[name] !== 'function') return {type:typeof (obj && obj[name])};
+        return {type:'function', arity:obj[name].length};
+      } catch (e) { return {error:String((e && e.name) || 'error').slice(0, 32)}; }
+    }
     function service(name) {
       try {
         if (typeof s[name] !== 'function') return {type:typeOf(s[name])};
@@ -1470,6 +1494,30 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
     out.binding_types = {};
     var bindingProbe = ['NodeIQQNTWrapperNetwork','NodeIKernelLoginService','NodeIKernelLoginListener'];
     for (var j = 0; j < bindingProbe.length; j++) out.binding_types[bindingProbe[j]] = typeof q[bindingProbe[j]];
+    out.binding_classes = {};
+    for (var b = 0; b < bindingProbe.length; b++) {
+      (function (key) {
+        try {
+          var c = q[key];
+          var entry = {type:typeof c};
+          if (c && (typeof c === 'function' || typeof c === 'object')) {
+            entry.keys = names(c, 48);
+            try { entry.proto = names(Object.getPrototypeOf(c), 48); } catch (e) { entry.proto = []; }
+            if (typeof c.getNetworkStatus === 'function') entry.network_status = callShape(c, 'getNetworkStatus');
+          }
+          out.binding_classes[key] = entry;
+        } catch (e) { out.binding_classes[key] = {error:String((e && e.name) || 'error').slice(0, 32)}; }
+      })(bindingProbe[b]);
+    }
+    var ps = null, ms = null;
+    try { ps = s.getProfileService(); } catch (e) {}
+    try { ms = s.getMsgService(); } catch (e) {}
+    out.status_probe = {
+      self_status: callShape(ps, 'getSelfStatus'),
+      status_info: shapeOrType(ps, 'getStatusInfo'),
+      core_info: shapeOrType(ps, 'getCoreInfo'),
+      online_dev: shapeOrType(ms, 'getOnLineDev')
+    };
     return JSON.stringify(out);
   } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
 })()

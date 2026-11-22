@@ -15,7 +15,11 @@ const assert = require('node:assert/strict');
 const probe = {probe};
 function run(session) {{
   const context = vm.createContext({{
-    process: {{_linkedBinding: () => ({{NodeIQQNTWrapperSession: {{getNTWrapperSession: () => session}}}})}},
+    process: {{_linkedBinding: () => ({{
+      NodeIQQNTWrapperSession: {{getNTWrapperSession: () => session}},
+      NodeIQQNTWrapperNetwork: function FakeNetwork() {{}},
+      NodeIKernelLoginService: function FakeLogin() {{}}
+    }})}},
     Buffer
   }});
   return vm.runInContext(probe, context);
@@ -24,8 +28,8 @@ const login = {{addKernelLoginListener: () => 1, removeKernelLoginListener: () =
 const session = {{
   getLoginService: () => login,
   getNetworkService: undefined,
-  getProfileService: () => ({{}}),
-  getMsgService: () => ({{sendMsg: () => 0}}),
+  getProfileService: () => ({{getSelfStatus: () => 2, getStatusInfo: () => 0, getCoreInfo: () => 0}}),
+  getMsgService: () => ({{sendMsg: () => 0, getOnLineDev: () => 0}}),
   secret: 'PRIVATE_SHOULD_NOT_LEAK'
 }};
 const out = JSON.parse(run(session));
@@ -34,6 +38,11 @@ assert.equal(out.services.getLoginService.type, 'object');
 assert.deepEqual(out.services.getLoginService.keys.slice().sort(),
   ['addKernelLoginListener','removeKernelLoginListener']);
 assert.equal(out.services.getNetworkService.type, 'undefined');
+assert.equal(out.binding_types.NodeIQQNTWrapperNetwork, 'function');
+assert.equal(out.binding_classes.NodeIQQNTWrapperNetwork.type, 'function');
+assert.deepEqual(out.status_probe.self_status, {{type:'number', value:2}});
+assert.deepEqual(out.status_probe.status_info, {{type:'function', arity:0}});
+assert.deepEqual(out.status_probe.online_dev, {{type:'function', arity:0}});
 assert.equal(JSON.stringify(out).includes('PRIVATE_SHOULD_NOT_LEAK'), false);
 const missing = JSON.parse(run(null));
 assert.equal(missing.error, 'no_session');
