@@ -1462,22 +1462,24 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
       } catch (e) { return ['ERR:' + String((e && e.name) || 'error').slice(0, 32)]; }
     }
     function typeOf(v) { return v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v); }
+    function valueShape(v) {
+      var out = {type:(v && typeof v.then === 'function') ? 'promise' : typeOf(v)};
+      if (typeof v === 'number' || typeof v === 'boolean') out.value = v;
+      else if (typeof v === 'string') out.length = v.length;
+      else if (v && typeof v === 'object' && out.type !== 'promise') {
+        out.keys = [];
+        try {
+          var ks = Object.keys(v);
+          if (ks.length > 16) ks = ks.slice(0, 16);
+          for (var i = 0; i < ks.length; i++) out.keys.push(String(ks[i]).slice(0, 32));
+        } catch (e) {}
+      }
+      return out;
+    }
     function callShape(obj, name) {
       try {
         if (!obj || typeof obj[name] !== 'function') return {type:typeof (obj && obj[name])};
-        var v = obj[name]();
-        var out = {type:(v && typeof v.then === 'function') ? 'promise' : typeOf(v)};
-        if (typeof v === 'number' || typeof v === 'boolean') out.value = v;
-        else if (typeof v === 'string') out.length = v.length;
-        else if (v && typeof v === 'object' && out.type !== 'promise') {
-          out.keys = [];
-          try {
-            var ks = Object.keys(v);
-            if (ks.length > 16) ks = ks.slice(0, 16);
-            for (var i = 0; i < ks.length; i++) out.keys.push(String(ks[i]).slice(0, 32));
-          } catch (e) {}
-        }
-        return out;
+        return valueShape(obj[name]());
       } catch (e) { return {error:String((e && e.name) || 'error').slice(0, 32)}; }
     }
     function shapeOrType(obj, name) {
@@ -1544,6 +1546,24 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
       core_info: shapeOrType(ps, 'getCoreInfo'),
       online_dev: shapeOrType(ms, 'getOnLineDev')
     };
+    try {
+      var psStatus = s.getProfileService();
+      if (psStatus && typeof psStatus.getSelfStatus === 'function') {
+        var statusValue = psStatus.getSelfStatus();
+        if (statusValue && typeof statusValue.then === 'function') {
+          out.self_status_pending = true;
+          statusValue.then(function (value) {
+            try { R.self_status_result = valueShape(value); } catch (e) {}
+          }, function () {
+            try { R.self_status_error = 'rejected'; } catch (e) {}
+          });
+        } else {
+          out.self_status_now = valueShape(statusValue);
+        }
+      }
+    } catch (e) {}
+    out.self_status_result = (R && R.self_status_result) ? R.self_status_result : null;
+    out.self_status_error = (R && R.self_status_error) ? R.self_status_error : null;
     return JSON.stringify(out);
   } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
 })()
