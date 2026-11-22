@@ -264,3 +264,18 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 现场包清单更新为 `A33247A6…8928`（同源码 `71302cf` 与 pins）。
 - 下一步：R3 换号现场需要操作员退出当前测试号并登录**另一测试身份**；建议新增 `--identity-watch`
   模式（保持 attach 等待 `identity_state` 变化后停止），再执行该现场。
+
+### 6.15 会话撤权原语与契约测试（离线，2026-11-22）
+
+- `caligo-core::runtime::AccountActor::revoke_session(RevokeReason)`：
+  - `NetworkChanged`：进入 `Detached`；`Queued/Accepted` → `CancelledUnsent`，`DispatchIntent/NativeStarted`
+    → `DeliveryUnknown`；连接清空、写 `SessionRevoked` 审计；下一次 `attach_session` 必须同宿主、同账号、同代次。
+  - `IdentityChanged`：同样撤权，但下一次 `attach_session` 必须使用**更新的** `session_generation`（旧代次返回
+    `SessionStale`）；旧代次事件仍走审计、不入业务队列。
+  - 撤权不重发任何请求，`pending_queries` 不因恢复而重新排队。
+- 新增契约测试 `crates/caligo-core/tests/session_revocation_contract.rs`（2 条）：网络撤权后的取消/未知/同身份重绑；
+  身份撤权后的旧代次拒绝、新代次绑定、旧事件审计。
+- 离线验证：串行全仓 default 500 / research 560，0 failed。
+- **接线缺口（未完成）**：观察者行目前只写研究报告 JSONL，core 控制面（`ControlMsg`）还没有撤权消息；
+  下一步需新增控制消息/CLI 动作，并由 runner 在 `network_status`/`identity_state` 变化时触发撤权，
+  然后重新核实身份（`qq-self`/`qq-login`）并显式重绑，才能进入 R2/R3 现场。
