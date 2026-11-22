@@ -114,3 +114,13 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 限制与风险：setter 可能覆盖 QQ 自身网络处理器，仅研究构建启用；本轮除已有点击监听器外不注册 message listener、不发送消息；
   尚未接入撤权/重绑动作，也未调用 ProfileService 轮询。
 - 构建：源码 `02c15b0`，EXE `4303D964…`、bridge `DAD17EEE…`、caligod `5837BAE7…`。R2 现场需安装该构建后断网/恢复。
+
+### 6.2 R2 网络观察现场包（离线准备，2026-11-22）
+
+- 构建：源码 `c87c7f2`，EXE `15C019E7…`、bridge `D6FDB281…`、caligod `8FF07279…`；观察者由 `qq-surface` 的 `network_observer` 字段确认（不再在 attach 时新增执行，避免破坏 lab 的 last-script 合同）。
+- 现场包：ignored `local-evidence/feat005-r2-network-20261122-unbound/`（6 文件，清单 SHA-256 `E54BC71D…B612`），未绑定、零发送。
+- 流程：一次准入/attach → 等待 `listener_armed` → `qq-surface` 确认 `network_observer` 含三个 setter → self 查询 → 打印 `READY_NETWORK` →
+  操作员对测试 QQ 做一次网络状态变化（回环 IPC 保持可用，QQ 不退出）→ 采集有界 `network_state` 行（最多 600 秒）→
+  1000 ms 观察停止。
+- 失败语义：observer 未 armed 直接失败；600 秒无事件超时失败；停止非零保根；全程不重发、不重试干预。
+- 未执行：R2 现场需操作员干预；`network_state` 的实际参数形状与触发条件仍待首次样本。
