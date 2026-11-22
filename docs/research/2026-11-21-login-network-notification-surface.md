@@ -224,3 +224,15 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 构建：源码 `314539c`，EXE `0371397D…`、bridge `D32C258B…`、caligod `615D5AC3…`；现场包清单 `970380D9…0FB3`。
 - 下一步（一次零发送）：读取 `self_status_result.result` 的实际数值与 `network_status` 初始值；
   之后实现 R3 周期身份核对（`getSelfStatus().result` / `getSessionId`）与 R2 状态变化撤权。
+
+### 6.11 身份状态值与 R3 拉取观察者（2026-11-22）
+
+- 实例 `50040`，构建 `314539c`，`--probe-only`：`self_status_result` 为
+  `{type:'object', keys:['result','errMsg'], result:0}`（身份状态码 0）；`network_status` 为
+  `{previous:null,current:1}`；`network_service.status` number=1；停止通过、零发送。
+- 新构建 `adfd0e8`：研究型身份观察者每 20 个 owner tick 拉取一次：
+  `session.getSessionId()`（变化才记录）与 `ProfileService.getSelfStatus()`（`result` 数值或 rejected，
+  首次记录 `previous:'unset'`），事件写入 `identity_state`（≤16 行 + 溢出标记），不触发任何账号操作。
+- 构建 pin：EXE `8F46208A…`、bridge `0BB81AEF…`、caligod `3A2F6E64…`；现场包清单 `77C26C23…D711`；
+  Node VM 夹具覆盖 session_id/self_status 变化与行数上限。
+- 下一步（一次零发送）：`--probe-only` 观察 `identity_state` 基线行；R3 换号现场仍需用户操作另一测试身份。
