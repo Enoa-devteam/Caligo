@@ -799,8 +799,10 @@ pub const D8_START_JS: &str = r"
       R.networkObserver = {};
       R.networkObserverErrors = {};
       R.networkObserverArity = {};
+      R.networkObserverCalls = 0;
       var captureNetwork = function (kind, args) {
         try {
+          R.networkObserverCalls = (R.networkObserverCalls || 0) + 1;
           if (R.stopped) return;
           if (R.networkEvents.length >= 32) { R.networkEventOverflow = true; return; }
           var row = {kind:kind, args:[]};
@@ -1463,6 +1465,11 @@ pub const D8_SURFACE_PROBE_JS: &str = r"
     out.network_observer = (R && R.networkObserver) ? Object.keys(R.networkObserver).sort() : [];
     out.network_observer_errors = (R && R.networkObserverErrors) ? R.networkObserverErrors : {};
     out.network_observer_arity = (R && R.networkObserverArity) ? R.networkObserverArity : {};
+    out.network_observer_calls = (R && R.networkObserverCalls) || 0;
+    out.binding_keys = names(q, 64);
+    out.binding_types = {};
+    var bindingProbe = ['NodeIQQNTWrapperNetwork','NodeIKernelLoginService','NodeIKernelLoginListener'];
+    for (var j = 0; j < bindingProbe.length; j++) out.binding_types[bindingProbe[j]] = typeof q[bindingProbe[j]];
     return JSON.stringify(out);
   } catch (e) { return JSON.stringify({error:String((e && e.name) || 'error').slice(0, 32)}); }
 })()
