@@ -800,6 +800,7 @@ pub const D8_START_JS: &str = r"
       R.networkObserverErrors = {};
       R.networkObserverArity = {};
       R.networkObserverCalls = 0;
+      R.lastNetworkStatus = null;
       var captureNetwork = function (kind, args) {
         try {
           R.networkObserverCalls = (R.networkObserverCalls || 0) + 1;
@@ -1683,6 +1684,44 @@ pub fn toggle_network(online: bool) -> Result<String, &'static str> {
     })?;
     if raw.len() > 128 { return Err("too_large"); }
     Ok(raw)
+}
+
+#[cfg(feature = "research")]
+pub const D8_NETWORK_STATUS_JS: &str = r"
+(function () {
+  try {
+    var R = globalThis.__caligo_d8;
+    if (!R || !R.networkService || typeof R.networkService.getNetworkStatus !== 'function') return 'NONE';
+    var value = R.networkService.getNetworkStatus();
+    var kind = typeof value;
+    if (kind !== 'number' && kind !== 'boolean' && kind !== 'string') return 'NONE';
+    if (R.lastNetworkStatus === value) return 'NONE';
+    var previous = R.lastNetworkStatus;
+    R.lastNetworkStatus = value;
+    return JSON.stringify({previous:previous, current:kind === 'string' ? 'str:' + value.length : value});
+  } catch (e) { return 'ERR'; }
+})()
+";
+
+#[cfg(feature = "research")]
+pub fn drain_network_status() -> Result<Option<String>, &'static str> {
+    let syms = symbols().ok_or("no_symbols")?;
+    // SAFETY: owner-thread hook; the V8 ladder re-checks owner/context.
+    let raw = unsafe { exec_script(&syms, isolate_addr(), D8_NETWORK_STATUS_JS) }.map_err(|error| {
+        match error {
+            V8Error::NoCurrentContext => "no_context",
+            V8Error::StringEmpty => "string_empty",
+            V8Error::CompileFailed => "compile_failed",
+            V8Error::RunEmpty => "run_empty",
+            V8Error::Utf8Failed => "utf8_failed",
+        }
+    })?;
+    if raw == "NONE" { return Ok(None); }
+    if raw == "ERR" { return Err("script_error"); }
+    let detail: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if detail.len() > 1024 { return Err("too_large"); }
+    let parsed: serde_json::Value = serde_json::from_str(&detail).map_err(|_| "bad_json")?;
+    Ok(Some(parsed.to_string()))
 }
 
 #[cfg(feature = "research")]

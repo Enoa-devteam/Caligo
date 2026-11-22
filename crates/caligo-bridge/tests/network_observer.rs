@@ -2,7 +2,7 @@
 
 use caligo_bridge::qq_v8::{
     D8_NET_OFFLINE_JS, D8_NET_ONLINE_JS, D8_NETWORK_EVENTS_JS, D8_NETWORK_OBSERVER_STATUS_JS,
-    D8_START_JS, D8_STOP_JS,
+    D8_NETWORK_STATUS_JS, D8_START_JS, D8_STOP_JS,
 };
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -29,6 +29,7 @@ fn network_observer_captures_bounded_shapes_only() {
         "stop": D8_STOP_JS,
         "drain": D8_NETWORK_EVENTS_JS,
         "status": D8_NETWORK_OBSERVER_STATUS_JS,
+        "netstatus": D8_NETWORK_STATUS_JS,
     });
     let fixture = format!(
         r#"
@@ -65,6 +66,8 @@ const context = vm.createContext({{
 const run = script => vm.runInContext(script, context);
 assert.equal(run(scripts.start), 'ARMED sid=nt_0 lidRet=15');
 assert.equal(run(scripts.status), 'addNetworkServiceListener,setOnMsfStatusChanged,setOnNetworkChanged,setOnWeakNetChanged');
+assert.deepEqual(JSON.parse(run(scripts.netstatus)), {{previous:null, current:1}});
+assert.equal(run(scripts.netstatus), 'NONE');
 assert.equal(run(scripts.drain), 'NONE');
 callbacks.network({{code:2, nested:{{a:1}}}}, 'PRIVATE_TEXT_SHOULD_NOT_LEAK', true);
 callbacks.msf('PRIVATE_MSF_TEXT', 7);
