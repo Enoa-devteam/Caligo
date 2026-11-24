@@ -1,5 +1,7 @@
 # Session handoff
 
+2026-11-24 feat-005 R3 跨进程新代次现场（部分）：`21844`（创建 `2026-11-24T11:33:24.5363966Z`）preflight PASS，以显式 `session_generation=2` 完成一次 attach（观察者、self 查询、1000 ms 观察停止通过、零发送）；新 journal 只含 gen2 事件，旧 gen1 journal（SHA-256 `87B4E8A9…D6D6A`）未变、native ID 无交集。另一账号实例 `20304` 因多登录标记被 preflight 拒绝，无法形成第二个可 attach 主根；“旧身份失效”仍只由旧实例停止 + 新代次绑定间接体现，R3 不宣称通过。现场包 `feat005-r3-rebind-20261124-unbound/`（清单 `74190B92…CE31`）。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#620-r3-跨进程现场显式新代次与账本隔离2026-11-24)
+
 2026-11-22 feat-005 R3 账本隔离契约（离线）：`session_revocation_contract` 新增第 3 条——新 actor 绑定代次 2 使用独立 journal 时，旧请求不可见、旧事件不在队列、旧 journal 字节不变；测试 3/3，串行全仓 default **502** / research **562**、0 failed。daemon 单账号设计拒绝改账号 Hello，R3 现场因此改为“新 daemon + 新 journal + 新代次绑定”，旧实例保留旧账本。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#619-r3-跨进程新代次与账本隔离契约离线2026-11-22)
 
 2026-11-22 feat-005 R3 现场中止（桌面 QQ 限制）：实例 `31800`（创建 `2026-11-22T14:25:57.9185900Z`）preflight PASS、attach、观察者与 `READY_WATCH identity` 通过；操作员说明桌面 QQ 不支持同实例退出并登录另一账号，无法产生换号事件，按操作员要求中止，零发送。中止未执行观察停止，QQ 仍加载 `caligo_bridge.dll`（保留、不热卸载、不重接），实例消耗。R3 改为跨进程新代次验证（新实例登录另一测试身份、显式新代次绑定；旧代次拒绝/旧事件审计/旧请求不重放），离线契约见 `session_revocation_contract`。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#618-r3-现场中止与桌面-qq-限制2026-11-22)

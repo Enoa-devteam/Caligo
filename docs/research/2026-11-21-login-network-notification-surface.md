@@ -323,3 +323,14 @@ ProfileService 轮询，未知码只审计、不自动恢复），用 Node VM �
 - 离线验证：`session_revocation_contract` 3/3；串行全仓 default **502** / research **562**，0 failed。
 - R3 现场计划（新实例登录第二身份）：新 core/journal 显式以新代次绑定；旧实例保留旧 journal；
   验证旧代次/旧请求不进入新账本，再执行显式重绑后的可查询/发送准入。
+
+### 6.20 R3 跨进程现场：显式新代次与账本隔离（2026-11-24）
+
+- 两个 QQ 窗口：`21844`（创建 `2026-11-24T11:33:24.5363966Z`，第二测试身份）与 `20304`（另一账号）。
+  `21844` preflight PASS；`20304` 因命令行带多登录标记（非 designated main root）被 preflight 拒绝，不可 attach。
+- 在 `21844` 上以**显式 `session_generation=2`** 完成一次 attach（预检、观察者、self 查询、1000 ms 观察停止全通过，
+  零发送）；新 core/journal 只含 `session_generation:2` 的事件，无 generation 1 行。
+- 旧代次样本 journal（`attempt1` 的 generation 1，SHA-256 `87B4E8A9…D6D6A`）未被写入；新旧 native ID 集合无交集
+  （旧 13、新 1）。现场包 `feat005-r3-rebind-20261124-unbound/`，6 文件，清单 `74190B92…CE31`。
+- 限制：同一桌面无法在可 attach 的两个主根间切换身份（`20304` 为多登录实例）；R3 的“旧身份失效”仍只能由
+  旧实例停止 + 新实例新代次绑定间接体现，现场未覆盖同一 daemon 内的换身份（daemon 单账号设计本身拒绝）。
