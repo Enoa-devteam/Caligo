@@ -71,6 +71,7 @@ fn run_http_post_inner(
     let handler = action_handler(Arc::clone(&daemon));
     let stop = daemon.stop_flag();
     let mut delivered = 0usize;
+    let mut failed = 0usize;
     while !stop.load(Ordering::Relaxed) {
         match events.recv_timeout(Duration::from_millis(100)) {
             Ok(event) => {
@@ -80,7 +81,10 @@ fn run_http_post_inner(
                         delivered += 1;
                     }
                     Ok(None) => delivered += 1,
-                    Err(_) => eprintln!("[onebot] HTTP POST event delivery failed"),
+                    Err(_) => {
+                        failed += 1;
+                        eprintln!("[onebot] HTTP POST event delivery failed");
+                    }
                 }
                 // OneBot V11 specifies POST handling before forwarding the
                 // same event to connected forward/reverse WebSocket clients.
@@ -90,7 +94,15 @@ fn run_http_post_inner(
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
+    let dropped = daemon
+        .onebot_http_post_event_subscriber_dropped(subscription)
+        .unwrap_or(0);
     daemon.unsubscribe_onebot_http_post_events(subscription);
+    if failed > 0 || dropped > 0 {
+        eprintln!(
+            "[onebot] HTTP POST transport stopped with loss: delivered={delivered} failed={failed} dropped={dropped}"
+        );
+    }
     delivered
 }
 
@@ -380,7 +392,7 @@ fn serve_forward_connection(stream: TcpStream, daemon: Arc<Daemon>, token: Optio
     let _ = stream.set_read_timeout(Some(WS_READ_POLL));
     let _ = stream.set_write_timeout(Some(WS_WRITE_TIMEOUT));
     let handler = action_handler(Arc::clone(&daemon));
-    let _ = serve_ws_socket(
+    let outcome = serve_ws_socket(
         &mut socket,
         role,
         events.as_ref(),
@@ -388,6 +400,18 @@ fn serve_forward_connection(stream: TcpStream, daemon: Arc<Daemon>, token: Optio
         daemon.stop_flag(),
     );
     if let Some(subscription) = subscription {
+        let dropped = daemon
+            .onebot_event_subscriber_dropped(subscription)
+            .unwrap_or(0);
+        match outcome {
+            Err(error) => eprintln!(
+                "[onebot] forward WebSocket disconnected ({role:?}): {error}; dropped events={dropped}"
+            ),
+            Ok(()) if dropped > 0 => eprintln!(
+                "[onebot] forward WebSocket closed with queue loss ({role:?}): dropped events={dropped}"
+            ),
+            Ok(()) => {}
+        }
         daemon.unsubscribe_onebot_events(subscription);
     }
 }
@@ -467,13 +491,21 @@ pub fn run_reverse_ws(daemon: Arc<Daemon>, config: ReverseWsConfig) -> usize {
             Ok(mut socket) => {
                 connected += 1;
                 set_reverse_timeouts(socket.get_mut());
-                let _ = serve_ws_socket(
+                let outcome = serve_ws_socket(
                     &mut socket,
                     WsRole::Universal,
                     Some(&events),
                     &handler,
                     Arc::clone(&stop),
                 );
+                if let Err(error) = outcome {
+                    let dropped = daemon
+                        .onebot_event_subscriber_dropped(subscription)
+                        .unwrap_or(0);
+                    eprintln!(
+                        "[onebot] reverse WebSocket delivery failed: {error}; dropped events={dropped}; reconnecting"
+                    );
+                }
             }
             Err(_) => eprintln!("[onebot] reverse WebSocket connection failed"),
         }
@@ -840,5 +872,325 @@ mod tests {
         *captured.lock().unwrap() = None;
         execute_http_quick_operation(&handler, event, serde_json::json!({"reply":"hello"}));
         assert!(captured.lock().unwrap().is_none(), "at_sender defaults true for group events and unsupported mention replies must not be sent as plain text");
+    }
+
+    /// Deterministic T17 stand-in for a stalled network client. Windows
+    /// loopback absorbs real socket backpressure (see the SSE lab record), so
+    /// the "slow client" is a transport writer that blocks after accepting the
+    /// first frame. The publish path must stay non-blocking and the loss must
+    /// stay observable instead of being silently retried.
+    struct BlockingWriter {
+        release: std::sync::mpsc::Receiver<()>,
+        blocked_once: bool,
+    }
+
+    impl Read for BlockingWriter {
+        fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "no inbound application data",
+            ))
+        }
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buffer: &[u8]) -> Result<usize, std::io::Error> {
+            if !self.blocked_once {
+                self.blocked_once = true;
+                let _ = self.release.recv();
+            }
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stalled_websocket_writer_does_not_block_publish_and_drop_count_is_visible() {
+        use crate::onebot_events::SUBSCRIBER_QUEUE_CAP;
+
+        let daemon = test_daemon("slow-ws");
+        let (subscription, events) = daemon.subscribe_onebot_events("slow-ws");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let mut socket = WebSocket::from_raw_socket(
+            BlockingWriter {
+                release: release_rx,
+                blocked_once: false,
+            },
+            tungstenite::protocol::Role::Server,
+            None,
+        );
+        let worker_daemon = Arc::clone(&daemon);
+        let worker_stop = daemon.stop_flag();
+        let worker = thread::spawn(move || {
+            let handler = action_handler(worker_daemon);
+            serve_ws_socket(
+                &mut socket,
+                WsRole::Event,
+                Some(&events),
+                &handler,
+                worker_stop,
+            )
+        });
+
+        let started = std::time::Instant::now();
+        for index in 0..(SUBSCRIBER_QUEUE_CAP * 2) {
+            daemon.publish_onebot_ws_event_json(&format!(r#"{{"seq":{index}}}"#));
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a stalled transport writer must not block the fanout"
+        );
+        let dropped = daemon
+            .onebot_event_subscriber_dropped(subscription)
+            .expect("subscription is still registered while the writer is stalled");
+        assert!(
+            dropped > 0,
+            "queue overflow behind a stalled writer must be counted"
+        );
+
+        release_tx.send(()).unwrap();
+        // Let the released writer drain one bounded batch before shutdown.
+        thread::sleep(Duration::from_millis(50));
+        daemon.stop_flag().store(true, Ordering::Relaxed);
+        assert!(worker.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn http_post_failure_still_forwards_the_event_and_reports_loss() {
+        let daemon = test_daemon("post-failure");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            let mut body = vec![0; content_length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            let mut stream = reader.into_inner();
+            stream
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+        let worker_daemon = Arc::clone(&daemon);
+        let worker = thread::spawn(move || {
+            run_http_post_ready(
+                worker_daemon,
+                HttpPostConfig {
+                    url: format!("http://{address}/events"),
+                    secret: None,
+                    timeout: Duration::from_millis(500),
+                },
+                ready_tx,
+            )
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (_subscription, ws_events) = daemon.subscribe_onebot_events("post-failure-ws");
+        let event = r#"{"self_id":10001,"post_type":"message","message_id":21}"#;
+        daemon.publish_onebot_event_json(event);
+        assert_eq!(
+            ws_events.recv_timeout(Duration::from_secs(2)).unwrap(),
+            event,
+            "a failed POST must not suppress the same event for WebSocket clients"
+        );
+        daemon.stop_flag().store(true, Ordering::Relaxed);
+        receiver.join().unwrap();
+        assert_eq!(worker.join().unwrap(), 0, "failed POST is not a delivery");
+    }
+
+    fn ws_request(url: &str, token: Option<&str>) -> tungstenite::handshake::client::Request {
+        let mut request = url.into_client_request().unwrap();
+        if let Some(token) = token {
+            request
+                .headers_mut()
+                .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        request
+    }
+
+    /// Assert that a control-plane client receives no frame within a short
+    /// bounded wait; a timed-out read is tungstenite's no-message state.
+    fn expect_no_message(socket: &mut WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>) {
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .unwrap();
+        }
+        let result = socket.read();
+        assert!(
+            matches!(&result, Err(WsError::Io(error)) if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )),
+            "role must not receive this frame: {result:?}"
+        );
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            stream.set_read_timeout(None).unwrap();
+        }
+    }
+
+    #[test]
+    fn forward_websocket_enforces_auth_paths_roles_and_echo() {
+        let daemon = test_daemon("forward-matrix");
+        let listener = crate::onebot_server::bind_loopback("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_daemon = Arc::clone(&daemon);
+        let server =
+            thread::spawn(move || serve_forward_ws(server_daemon, listener, Some("token".into())));
+
+        // Unauthorized and unknown paths fail before a session exists.
+        match tungstenite::connect(ws_request(&format!("ws://{address}/"), Some("wrong"))) {
+            Err(WsError::Http(response)) => assert_eq!(response.status().as_u16(), 401),
+            other => panic!("expected 401 handshake rejection, got {other:?}"),
+        }
+        match tungstenite::connect(ws_request(&format!("ws://{address}/nope"), Some("token"))) {
+            Err(WsError::Http(response)) => assert_eq!(response.status().as_u16(), 404),
+            other => panic!("expected 404 handshake rejection, got {other:?}"),
+        }
+
+        // /api: shared action layer with opaque echo, never events.
+        let (mut api, _) =
+            tungstenite::connect(ws_request(&format!("ws://{address}/api"), Some("token")))
+                .unwrap();
+        api.send(Message::Text(
+            r#"{"action":"get_version_info","params":{},"echo":{"id":7,"nested":{"a":[1,2]}}}"#
+                .into(),
+        ))
+        .unwrap();
+        let response: Value =
+            serde_json::from_str(api.read().unwrap().into_text().unwrap().as_str()).unwrap();
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["retcode"], 0);
+        assert_eq!(response["data"]["protocol_version"], "v11");
+        assert_eq!(
+            response["echo"],
+            serde_json::json!({"id":7,"nested":{"a":[1,2]}})
+        );
+        daemon.publish_onebot_event_json(r#"{"post_type":"message","message_id":31}"#);
+        expect_no_message(&mut api);
+
+        // /event: events only; an action frame earns no reply.
+        let (mut event, _) =
+            tungstenite::connect(ws_request(&format!("ws://{address}/event"), Some("token")))
+                .unwrap();
+        daemon.publish_onebot_event_json(r#"{"post_type":"message","message_id":32}"#);
+        assert_eq!(
+            serde_json::from_str::<Value>(event.read().unwrap().into_text().unwrap().as_str())
+                .unwrap()["message_id"],
+            32
+        );
+        event
+            .send(Message::Text(
+                r#"{"action":"get_version_info","params":{},"echo":1}"#.into(),
+            ))
+            .unwrap();
+        expect_no_message(&mut event);
+
+        // /: Universal carries both directions.
+        let (mut universal, _) =
+            tungstenite::connect(ws_request(&format!("ws://{address}/"), Some("token"))).unwrap();
+        universal
+            .send(Message::Text(
+                r#"{"action":"get_version_info","params":{},"echo":"universal"}"#.into(),
+            ))
+            .unwrap();
+        let reply: Value =
+            serde_json::from_str(universal.read().unwrap().into_text().unwrap().as_str()).unwrap();
+        assert_eq!(reply["echo"], "universal");
+        daemon.publish_onebot_event_json(r#"{"post_type":"message","message_id":33}"#);
+        assert_eq!(
+            serde_json::from_str::<Value>(universal.read().unwrap().into_text().unwrap().as_str())
+                .unwrap()["message_id"],
+            33
+        );
+
+        let _ = api.close(None);
+        let _ = event.close(None);
+        let _ = universal.close(None);
+        daemon.stop_flag().store(true, Ordering::Relaxed);
+        assert!(server.join().unwrap() >= 3);
+    }
+
+    #[test]
+    fn reverse_websocket_reconnects_after_application_close_and_delivers_again() {
+        let daemon = test_daemon("reverse-reconnect");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_daemon = Arc::clone(&daemon);
+        let server = thread::spawn(move || {
+            for attempt in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut socket =
+                    tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
+                        assert_eq!(request.headers()["x-self-id"], "10001");
+                        assert_eq!(request.headers()["x-client-role"], "Universal");
+                        assert_eq!(request.headers()["authorization"], "Bearer app-token");
+                        assert_eq!(request.headers()["user-agent"], "OneBot/11 Caligo");
+                        Ok(response)
+                    })
+                    .unwrap();
+                socket
+                    .send(Message::Text(
+                        format!(
+                            r#"{{"action":"get_version_info","params":{{}},"echo":"conn-{attempt}"}}"#
+                        )
+                        .into(),
+                    ))
+                    .unwrap();
+                let reply: Value =
+                    serde_json::from_str(socket.read().unwrap().into_text().unwrap().as_str())
+                        .unwrap();
+                assert_eq!(reply["status"], "ok");
+                assert_eq!(reply["echo"], format!("conn-{attempt}"));
+                server_daemon.publish_onebot_event_json(&format!(
+                    r#"{{"post_type":"message","message_id":{}}}"#,
+                    40 + attempt
+                ));
+                let event: Value =
+                    serde_json::from_str(socket.read().unwrap().into_text().unwrap().as_str())
+                        .unwrap();
+                assert_eq!(event["message_id"], 40 + attempt);
+                if attempt == 0 {
+                    // Application-side graceful close must be retried, not
+                    // treated as a permanent transport failure.
+                    let _ = socket.close(None);
+                }
+            }
+            server_daemon.stop_flag().store(true, Ordering::Relaxed);
+        });
+        let client_daemon = Arc::clone(&daemon);
+        let client = thread::spawn(move || {
+            run_reverse_ws(
+                client_daemon,
+                ReverseWsConfig {
+                    url: format!("ws://{address}/reverse"),
+                    access_token: Some("app-token".into()),
+                    self_id: 10001,
+                    reconnect_interval: Duration::from_millis(100),
+                },
+            )
+        });
+        server.join().unwrap();
+        assert!(
+            client.join().unwrap() >= 2,
+            "reverse client must reconnect after the application closes the socket"
+        );
     }
 }

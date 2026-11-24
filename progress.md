@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-24 feat-006 文本 MVP 解阻（issue #15）：逐项核对 issue 列出的三个阻塞点，确认均不再是正式文本链路阻塞。D8 wrapper 记录直接携带并校验 sender/peer UIN，core 由 wrapper envelope 派生持久 OneBot 投影（`wrapper_message_chain` 回归同时断言 wire `projection=None`、`get_msg` 与标准事件身份一致）；三份 Crashpad 属旧 research V8 uid-map 探针路径，保留为研究 unknown。离线补强传输证据：正向 WS 鉴权/路径/角色/任意 JSON echo、反向 WS 应用关闭后重连、阻塞写端不拖住 fanout 且丢弃计数可见、HTTP POST 失败仍向 WS fanout；运行期新增 transport 断开/丢失日志与 HTTP POST 停止统计。`onebot_transport` 定向 10/10，`init.ps1 -Mode all` PASS（docs 15 live docs / 690 links；default 506 passed、research 566 passed，各 69 个 test binary、0 failed）。真实第三方 OneBot 应用与现场慢连接仍未验收，feat-006 由 blocked 调整为 in-progress，产品状态不变。[证据与剩余最小现场包](docs/acceptance/2026-11-24-feat-006-text-mvp.md)
+
 2026-11-24 feat-005 缺口转 issue：生产链路已打通，R2（网络撤权现场）与 R3（身份切换现场）按项目决定暂不补齐，转 issue #13/#14 跟踪；feat-006–feat-010 拆为 issue #15–#19，避免 PR #12 过大。本 PR 保持已交付范围。
 
 2026-11-24 feat-005 R3 跨进程新代次现场（部分）：`21844`（创建 `2026-11-24T11:33:24.5363966Z`）preflight PASS，以显式 `session_generation=2` 完成一次 attach（观察者、self 查询、1000 ms 观察停止通过、零发送）；新 journal 只含 gen2 事件，旧 gen1 journal（SHA-256 `87B4E8A9…D6D6A`）未变、native ID 无交集。另一账号实例 `20304` 因多登录标记被 preflight 拒绝，无法形成第二个可 attach 主根；“旧身份失效”仍只由旧实例停止 + 新代次绑定间接体现，R3 不宣称通过。现场包 `feat005-r3-rebind-20261124-unbound/`（清单 `74190B92…CE31`）。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#620-r3-跨进程现场显式新代次与账本隔离2026-11-24)
