@@ -1,5 +1,9 @@
 # Session handoff
 
+2026-11-24 feat-006 现场 attempt 2 通过（issue #15）：新 QQ `31584` 一次 attach，NoneBot2 经反向 WS 收到私聊 36 / 群 41，各回复一次（37/42）；应用与 Caligo `get_msg` 均成功，账本与发送方一致；同一消息有签名 HTTP POST 与正向 WS 证据。慢阶段 90 在慢 POST/超时下仍到达应用（积压后约 38 秒），daemon 记录 23 failed / 66 delivered / 0 dropped；该阶段自动回复请求 `onebot-85939363ae79fe15-4` 为 `DeliveryUnknown`（账本另存自发消息 106），未重发。控制停止 daemon；默认 bridge 无 research owner-stop（0xe0），bridge 保留、QQ 响应。runner 的 `app_get_msg` 误报已由 `verify-evidence.py` 离线更正，9/9 criteria true。操作者已确认 A 收到 37、42、106；issue #15 按证据关闭；feat-006 保持 in-progress（依赖 feat-005 未 done），慢 POST 积压延迟 WS 投递列为后续风险。证据见 [acceptance §6.2](docs/acceptance/2026-11-24-feat-006-text-mvp.md#62-现场-attempt-2通过单构建)。
+
+2026-11-24 PR #20（`codex/feat-006-text-mvp` → `main`）：issue #15 阻塞点判定、传输协议/慢连接回归与可观测日志、现场包与 attempt 记录已提交推送；分支含 `3d2ef1b`/`cfc9168`/`109140e`/`6983f77`/`a7b62d6` 及现场记录提交。GitNexus 刷新索引后 detect 8 files / 34 symbols / 14 flows / high、`impact serve_ws_socket` CRITICAL 已核对（改动为日志/测试路径）。全仓 default 506 / research 566，0 failed。
+
 2026-11-24 feat-005 缺口转 issue：生产链路已打通，R2（网络撤权现场）与 R3（身份切换现场）按项目决定暂不补齐，转 issue #13/#14 跟踪；feat-006–feat-010 拆为 issue #15–#19，避免 PR #12 过大。本 PR 保持已交付范围。
 
 2026-11-24 feat-005 R3 跨进程新代次现场（部分）：`21844`（创建 `2026-11-24T11:33:24.5363966Z`）preflight PASS，以显式 `session_generation=2` 完成一次 attach（观察者、self 查询、1000 ms 观察停止通过、零发送）；新 journal 只含 gen2 事件，旧 gen1 journal（SHA-256 `87B4E8A9…D6D6A`）未变、native ID 无交集。另一账号实例 `20304` 因多登录标记被 preflight 拒绝，无法形成第二个可 attach 主根；“旧身份失效”仍只由旧实例停止 + 新代次绑定间接体现，R3 不宣称通过。现场包 `feat005-r3-rebind-20261124-unbound/`（清单 `74190B92…CE31`）。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#620-r3-跨进程现场显式新代次与账本隔离2026-11-24)

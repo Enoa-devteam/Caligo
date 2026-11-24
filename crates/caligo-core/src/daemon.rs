@@ -649,6 +649,14 @@ impl Daemon {
         self.onebot_events.lock().unwrap().subscriber_dropped(id)
     }
 
+    /// Same observation for the HTTP POST transport's independent queue.
+    pub fn onebot_http_post_event_subscriber_dropped(&self, id: u64) -> Option<u64> {
+        self.onebot_http_post_events
+            .lock()
+            .unwrap()
+            .subscriber_dropped(id)
+    }
+
     pub(crate) fn publish_onebot_event_json(&self, event_json: &str) {
         if self.onebot_http_post_ordered.load(Ordering::Relaxed) {
             let _ = self
