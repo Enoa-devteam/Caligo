@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-24 feat-006 现场 attempt 2 准入：重新登录的 QQ `31584`（创建 `2026-11-24T13:40:42.5671257Z`，登记账号 B `1694717255`）通过固定 manifest、三个已加载模块 hash、PE/backend 审计与唯一 Environment，接入前无 bridge，四类 OneBot 端口空闲。preflight PASS，已生成新 marker/auth 模板与打包状态；现场执行进行中，结果未定。
+
 2026-11-24 feat-006 现场 attempt 1（失败，零发送）：新 QQ `34608` preflight PASS，`cli qq-entry` 实际接入成功（bridge 映射、`listener_armed`、daemon 客户端启动），但 `attach.ps1` 用 attach 前缓存的进程模块快照复查映射而误报失败；runner 按失败路径正常停止 core。正常 Stop 使 bridge 的 daemon worker 收到 `CoreStopped` 后退出，同 pipe 重启 core 60 秒无 Hello，实例消耗。默认生产 bridge 不提供 research owner-stop（退出码 `0xe0`），按边界保留映射、未热卸载，QQ 仍响应；全程零发送、零入站、零账本业务记录。已修：attach 后刷新进程快照；attach 非零但 bridge 已映射时记录 `attach_script_warning` 并继续；owner-stop 在默认 bridge 上归类为 `unavailable_default_bridge`，不作为重试理由。细节在 ignored `local-evidence/feat006-field-20261124-unbound/attempt-1.private.md`；下一轮使用重新登录的新实例，不复用 `34608`。
 
 2026-11-24 feat-006 现场包准备（离线，issue #15）：本机 ignored `local-evidence/feat006-field-20261124-unbound/` 已准备未绑定现场包——preflight（固定 manifest/模块/PE/Environment/端口唯一）、`caligo.exe daemon` 四类 listener、`cli qq-entry` 单次接入、NoneBot2 2.5.0 应用（反向 WS 收事件、HTTP 发送/`get_msg`、每个入站 marker 恰一次回复）、标准 HTTP POST 接收器（HMAC + 慢应答）、正向 WS 记录器、非读取 WS 客户端、控制管道正常停止与 owner stop。离线排练通过：四类 listener、NoneBot 反向 WS 与 `get_version_info`、正向 WS 动作、POST HMAC 204、无 bridge 时 LoginInfo 诚实失败、控制停止；打包清单 aggregate `d95f22b0…598694`（13 文件）。现场仍需新鲜指定 QQ 的 PID/创建时间、操作者单次回复授权与 B 的两条入站 marker，未执行前不构成现场证据。[准备记录](docs/acceptance/2026-11-24-feat-006-text-mvp.md#7-现场包准备未绑定2026-11-24)
