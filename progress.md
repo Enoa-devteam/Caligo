@@ -2,6 +2,8 @@
 
 ## Current State
 
+2026-11-24 feat-005 缺口转 issue：生产链路已打通，R2（网络撤权现场）与 R3（身份切换现场）按项目决定暂不补齐，转 issue #13/#14 跟踪；feat-006–feat-010 拆为 issue #15–#19，避免 PR #12 过大。本 PR 保持已交付范围。
+
 2026-11-24 feat-005 R3 跨进程新代次现场（部分）：`21844`（创建 `2026-11-24T11:33:24.5363966Z`）preflight PASS，以显式 `session_generation=2` 完成一次 attach（观察者、self 查询、1000 ms 观察停止通过、零发送）；新 journal 只含 gen2 事件，旧 gen1 journal（SHA-256 `87B4E8A9…D6D6A`）未变、native ID 无交集。另一账号实例 `20304` 因多登录标记被 preflight 拒绝，无法形成第二个可 attach 主根；“旧身份失效”仍只由旧实例停止 + 新代次绑定间接体现，R3 不宣称通过。现场包 `feat005-r3-rebind-20261124-unbound/`（清单 `74190B92…CE31`）。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#620-r3-跨进程现场显式新代次与账本隔离2026-11-24)
 
 2026-11-22 feat-005 R3 账本隔离契约（离线）：`session_revocation_contract` 新增第 3 条——新 actor 绑定代次 2 使用独立 journal 时，旧请求不可见、旧事件不在队列、旧 journal 字节不变；测试 3/3，串行全仓 default **502** / research **562**、0 failed。daemon 单账号设计拒绝改账号 Hello，R3 现场因此改为“新 daemon + 新 journal + 新代次绑定”，旧实例保留旧账本。 [研究记录](docs/research/2026-11-21-login-network-notification-surface.md#619-r3-跨进程新代次与账本隔离契约离线2026-11-22)
