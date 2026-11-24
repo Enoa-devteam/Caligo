@@ -275,6 +275,10 @@ pub enum WorkerExit {
     LocalStop,
     /// Hello 被拒(认证/身份):不可重试。
     HelloRejected,
+    /// Another worker already owns this resident.
+    WorkerAlreadyRunning,
+    /// A previous worker panicked; this resident generation is quarantined.
+    WorkerQuarantined,
 }
 
 /// 上行事件未确认窗口:满(项数或字节)→ 记 Gap 丢最旧(计数如实)。
@@ -283,6 +287,7 @@ const EVENT_WINDOW_MAX_BYTES: usize = 8 * 1024 * 1024;
 const RESULT_OUTBOX_MAX_ITEMS: usize = 256;
 
 struct PendingNotice {
+    notice_id: u64,
     notice: ResidentNotice,
     sent_epoch: Option<u64>,
 }
@@ -299,7 +304,27 @@ fn notice_request_id(notice: &ResidentNotice) -> &str {
     }
 }
 
-fn notice_message(notice: &ResidentNotice) -> (BridgeMsg, bool) {
+// Match an ACK to its exact sent outbox entry in this resident lifetime.
+fn take_acked_result(
+    outbox: &mut VecDeque<PendingNotice>,
+    request_id: &str,
+    terminal: bool,
+    epoch: u64,
+    notice_id: u64,
+) -> Option<ResidentNotice> {
+    let index = outbox.iter().position(|item| {
+        let kind_matches = match &item.notice {
+            ResidentNotice::Outcome(SendOutcome::AcceptedUnconfirmed { .. }) => !terminal,
+            ResidentNotice::Outcome(_) => terminal,
+            ResidentNotice::NativeStarted { .. } => false,
+        };
+        notice_id != 0 && item.notice_id == notice_id && kind_matches
+            && item.sent_epoch == Some(epoch) && notice_request_id(&item.notice) == request_id
+    })?;
+    outbox.remove(index).map(|item| item.notice)
+}
+
+fn notice_message(notice: &ResidentNotice, notice_id: u64) -> (BridgeMsg, bool) {
     match notice {
         ResidentNotice::NativeStarted { request_id } => (
             BridgeMsg::NativeStarted {
@@ -313,16 +338,19 @@ fn notice_message(notice: &ResidentNotice) -> (BridgeMsg, bool) {
                     request_id,
                     native_id,
                 } => BridgeMsg::SendResult {
+                    notice_id,
                     request_id: request_id.clone(),
                     outcome: OutcomePayload::Success {
                         native_id: native_id.clone(),
                     },
                 },
                 SendOutcome::AcceptedUnconfirmed { request_id } => BridgeMsg::SendResult {
+                    notice_id,
                     request_id: request_id.clone(),
                     outcome: OutcomePayload::AcceptedUnconfirmed,
                 },
                 SendOutcome::Failure { request_id, reason } => BridgeMsg::SendResult {
+                    notice_id,
                     request_id: request_id.clone(),
                     outcome: OutcomePayload::Failure {
                         reason: reason.clone(),
@@ -331,6 +359,7 @@ fn notice_message(notice: &ResidentNotice) -> (BridgeMsg, bool) {
                 SendOutcome::Unknown {
                     request_id, reason, ..
                 } => BridgeMsg::SendResult {
+                    notice_id,
                     request_id: request_id.clone(),
                     outcome: OutcomePayload::Unknown {
                         reason: reason.clone(),
@@ -653,7 +682,24 @@ pub fn run_worker<A: crate::host_adapter::HostAdapter>(
     cfg: DaemonClientConfig,
     resident: Arc<Resident<A>>,
     wake: &dyn Fn() -> bool,
-    result_rx: mpsc::Receiver<ResidentNotice>,
+    result_rx: mpsc::Receiver<crate::resident::RetainedNotice>,
+    events_rx: mpsc::Receiver<crate::resident::OwnedEvent>,
+    stop: Arc<AtomicBool>,
+) -> (WorkerCounters, WorkerExit) {
+    let _lease = match resident.acquire_worker() {
+        Ok(lease) => lease,
+        Err(crate::resident::WorkerLeaseError::Busy) => return (WorkerCounters::default(), WorkerExit::WorkerAlreadyRunning),
+        Err(crate::resident::WorkerLeaseError::Quarantined) => return (WorkerCounters::default(), WorkerExit::WorkerQuarantined),
+    };
+    // Keep the lease through inner teardown, including dropping both receivers.
+    run_worker_active(cfg, resident.clone(), wake, result_rx, events_rx, stop)
+}
+
+fn run_worker_active<A: crate::host_adapter::HostAdapter>(
+    cfg: DaemonClientConfig,
+    resident: Arc<Resident<A>>,
+    wake: &dyn Fn() -> bool,
+    result_rx: mpsc::Receiver<crate::resident::RetainedNotice>,
     events_rx: mpsc::Receiver<crate::resident::OwnedEvent>,
     stop: Arc<AtomicBool>,
 ) -> (WorkerCounters, WorkerExit) {
@@ -668,7 +714,12 @@ pub fn run_worker<A: crate::host_adapter::HostAdapter>(
     let mut unacked_bytes: usize = 0;
     // Native lifecycle notices survive connection teardown until the core
     // confirms durable application. Resident reserves at most two slots/send.
-    let mut result_outbox: VecDeque<PendingNotice> = VecDeque::new();
+    // Reconstruct from resident before accepting channel hints. The resident
+    // owns IDs and payloads independently of any one worker lifetime.
+    let mut result_outbox: VecDeque<PendingNotice> = resident.retained_notices()
+        .into_iter()
+        .map(|item| PendingNotice { notice_id: item.notice_id, notice: item.notice, sent_epoch: None })
+        .collect();
     macro_rules! publish {
         () => {
             c.publish();
@@ -884,7 +935,7 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
     cfg: &DaemonClientConfig,
     resident: &Arc<Resident<A>>,
     wake: &dyn Fn() -> bool,
-    result_rx: &mpsc::Receiver<ResidentNotice>,
+    result_rx: &mpsc::Receiver<crate::resident::RetainedNotice>,
     events_rx: &mpsc::Receiver<crate::resident::OwnedEvent>,
     tick: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
@@ -930,6 +981,11 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             Err(_) => return SessionEnd::Broken,
         }
     };
+    // A fresh pipe always requires replay: a restarted core can reuse the same
+    // numeric epoch. Keep notice identities, but forget the old pipe's sends.
+    for pending in result_outbox.iter_mut() {
+        pending.sent_epoch = None;
+    }
     let query_scope = caligo_model::capability::QueryScope {
         account: cfg.account.clone(),
         host_nonce: cfg.host_nonce,
@@ -977,8 +1033,9 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                 _ => break, // 仍未就绪:保留队列,下轮再试
             }
         }
-        // 1) 收入有界 outbox。其上限与 Resident 的默认预留结果槽对齐;
-        // 已满则不再消费源队列,结果仍由 Resident 保留。
+        // 1) Move notices from the owner channel into the worker's bounded outbox.
+        // Channel items are hints; resident holds the authoritative copies.
+        // Resident memory still does not survive host exit.
         for (request_id, scope, outcome) in resident.take_query_results() {
             if scope.connection_epoch != connection_epoch
                 || scope.account != cfg.account
@@ -1001,20 +1058,21 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
             }
         }
         while result_outbox.len() < RESULT_OUTBOX_MAX_ITEMS {
-            match result_rx.try_recv() {
-                Ok(notice) => result_outbox.push_back(PendingNotice {
-                    notice,
-                    sent_epoch: None,
-                }),
-                Err(_) => break,
+            let Ok(item) = result_rx.try_recv() else { break };
+            if !resident.contains_retained_notice(&item)
+                || result_outbox.iter().any(|pending| pending.notice_id == item.notice_id) {
+                continue;
             }
+            result_outbox.push_back(PendingNotice {
+                notice_id: item.notice_id, notice: item.notice, sent_epoch: None,
+            });
         }
         // 首次发送或新连接重放。FIFO 保证 NativeStarted 排在终态之前。
         for pending in result_outbox.iter_mut() {
             if pending.sent_epoch == Some(connection_epoch) {
                 continue;
             }
-            let (msg, is_result) = notice_message(&pending.notice);
+            let (msg, is_result) = notice_message(&pending.notice, pending.notice_id);
             if send_json(conn, &msg).is_err() {
                 return SessionEnd::Broken;
             }
@@ -1152,7 +1210,7 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                     request_id:request_id.clone(),wire_seq,scope,peer_uin,chat_type,png,
                     deadline:Instant::now()+Duration::from_millis(timeout_ms),
                 }) == crate::resident::SubmitVerdict::Accepted { wake(); }
-                else if send_json(conn,&BridgeMsg::SendResult {request_id,
+                else if send_json(conn,&BridgeMsg::SendResult {request_id, notice_id: 0,
                     outcome:OutcomePayload::Failure {reason:"image dispatch rejected before submission".into()},
                 }).is_err() {return SessionEnd::Broken;}
             }
@@ -1177,6 +1235,7 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                     wake();
                 } else if send_json(conn, &BridgeMsg::SendResult {
                     request_id,
+                    notice_id: 0,
                     outcome: OutcomePayload::Failure { reason: "voice dispatch rejected before submission".into() },
                 }).is_err() {
                     return SessionEnd::Broken;
@@ -1233,24 +1292,25 @@ fn session_loop<A: crate::host_adapter::HostAdapter>(
                 heartbeat_misses = 0;
             }
             Ok(CoreToBridgeMsg::NativeStartedAck { request_id }) => {
-                resident.ack_notice(&request_id, true);
                 if let Some(index) = result_outbox.iter().position(|item| {
-                    matches!(&item.notice, ResidentNotice::NativeStarted { request_id: id } if id == &request_id)
+                    item.sent_epoch == Some(connection_epoch)
+                        && matches!(&item.notice, ResidentNotice::NativeStarted { request_id: id } if id == &request_id)
                 }) {
-                    result_outbox.remove(index);
+                    if let Some(item) = result_outbox.remove(index) {
+                        resident.ack_retained_notice(&crate::resident::RetainedNotice {
+                            notice_id: item.notice_id, notice: item.notice,
+                        });
+                    }
                 }
                 heartbeat_misses = 0;
             }
             Ok(CoreToBridgeMsg::SendResultAck {
                 request_id,
+                notice_id,
                 terminal,
             }) => {
-                resident.ack_result_notice(&request_id, terminal);
-                if let Some(index) = result_outbox.iter().position(|item| {
-                    matches!(&item.notice, ResidentNotice::Outcome(_))
-                        && notice_request_id(&item.notice) == request_id
-                }) {
-                    result_outbox.remove(index);
+                if let Some(notice) = take_acked_result(result_outbox, &request_id, terminal, connection_epoch, notice_id) {
+                    resident.ack_retained_notice(&crate::resident::RetainedNotice { notice_id, notice });
                 }
                 heartbeat_misses = 0;
             }
@@ -1294,6 +1354,47 @@ fn peer_uid_from_target(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result_notice(outcome: SendOutcome, epoch: Option<u64>, notice_id: u64) -> PendingNotice {
+        PendingNotice { notice_id, notice: ResidentNotice::Outcome(outcome), sent_epoch: epoch }
+    }
+
+    #[test]
+    fn result_ack_rejects_old_kind_and_unsent_or_old_epoch() {
+        let success = SendOutcome::Success { request_id: "r".into(), native_id: "n".into() };
+        let mut outbox = VecDeque::from([result_notice(success, Some(7), 2)]);
+        assert!(take_acked_result(&mut outbox, "r", false, 7, 2).is_none());
+        assert!(take_acked_result(&mut outbox, "r", true, 8, 2).is_none());
+        outbox[0].sent_epoch = None;
+        assert!(take_acked_result(&mut outbox, "r", true, 7, 2).is_none());
+        assert_eq!(outbox.len(), 1);
+        outbox[0].sent_epoch = Some(7);
+        assert!(take_acked_result(&mut outbox, "r", true, 7, 2).is_some());
+        assert!(take_acked_result(&mut outbox, "r", true, 7, 2).is_none());
+    }
+
+    #[test]
+    fn result_ack_removes_only_matching_result_kind() {
+        let mid = SendOutcome::AcceptedUnconfirmed { request_id: "r".into() };
+        let success = SendOutcome::Success { request_id: "r".into(), native_id: "n".into() };
+        let mut outbox = VecDeque::from([result_notice(mid.clone(), Some(7), 1), result_notice(success.clone(), Some(7), 2)]);
+        assert_eq!(take_acked_result(&mut outbox, "r", true, 7, 2), Some(ResidentNotice::Outcome(success)));
+        assert_eq!(take_acked_result(&mut outbox, "r", false, 7, 1), Some(ResidentNotice::Outcome(mid)));
+        assert!(outbox.is_empty());
+    }
+
+    #[test]
+    fn old_same_class_ack_must_not_remove_a_newer_result() {
+        let unknown = SendOutcome::Unknown { request_id: "r".into(), reason: None, late_receipt_possible: true };
+        let success = SendOutcome::Success { request_id: "r".into(), native_id: "n".into() };
+        let mut outbox = VecDeque::from([result_notice(success.clone(), Some(7), 2)]);
+        // Simulate an old terminal ACK for the already removed unknown.
+        let stale_ack_result = take_acked_result(&mut outbox, "r", true, 7, 1);
+        assert!(stale_ack_result.is_none(), "old terminal ACK must not consume newer success; old notice: {unknown:?}");
+        assert!(take_acked_result(&mut outbox, "r", true, 7, 0).is_none());
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(take_acked_result(&mut outbox, "r", true, 7, 2), Some(ResidentNotice::Outcome(success)));
+    }
 
     #[test]
     fn event_window_releases_the_popped_record_with_different_sizes() {

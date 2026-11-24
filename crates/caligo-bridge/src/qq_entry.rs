@@ -132,6 +132,10 @@ pub enum EntryError {
     UvInitFailed { r: i32 },
     HandleSizeInvalid { size: usize },
     Timeout,
+    PendingResults,
+    OwnerHookFault,
+    OwnerCleanupFailed,
+    StopObservationFailed,
     AlreadyBootstrapped,
 }
 
@@ -158,6 +162,7 @@ struct EntryShared {
     error_aux: AtomicUsize,  // 附带数值(size/r)
     quarantine: AtomicUsize, // pump 发现错误线程
     close_req: AtomicUsize,
+    close_started: AtomicBool,
     closed: AtomicUsize,
     pumps: AtomicU64,
     wake_sends: AtomicU64,
@@ -167,13 +172,168 @@ struct EntryShared {
 /// 单宿主代次单钩子;shutdown 清空(资源随代次收尾,非泄漏)。
 static DRAIN_HOOK: std::sync::Mutex<Option<Box<dyn Fn() -> usize + Send>>> =
     std::sync::Mutex::new(None);
+// Serializes native sends with fault publication and the owner close claim.
+// If both locks are needed, DRAIN_HOOK comes first. Never hold WAKE_GATE
+// across an owner hook or uv_close. uv_async_send only posts the callback.
+static WAKE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Sticky for this host generation. A Rust unwind leaves resident/native state
+// unproven; retain the hook and its captures until process exit, even without
+// SHUTDOWN_READY. This does not catch SEH, access violations or aborts.
+static OWNER_HOOK_FAULT: AtomicBool = AtomicBool::new(false);
+// A returned cleanup error is distinct from unwind/poison, but requires the
+// same permanent root retention and refusal of further owner/native work.
+static OWNER_CLEANUP_FAILED: AtomicBool = AtomicBool::new(false);
+/// One-shot read-only surface probe request for the R2/R3 notification work.
+#[cfg(feature = "research")]
+static SURFACE_PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// 0 = none, 1 = request offline, 2 = request online (owner tick).
+#[cfg(feature = "research")]
+static NETWORK_TOGGLE_REQUESTED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn owner_fault() -> Option<EntryError> {
+    #[cfg(feature = "research")]
+    if stop_driver::FAILED.load(Ordering::Acquire) { return Some(EntryError::StopObservationFailed); }
+    if OWNER_CLEANUP_FAILED.load(Ordering::Acquire) {
+        Some(EntryError::OwnerCleanupFailed)
+    } else if OWNER_HOOK_FAULT.load(Ordering::Acquire) {
+        Some(EntryError::OwnerHookFault)
+    } else {
+        None
+    }
+}
+
+fn quarantine_owner(fault: Option<&AtomicBool>) {
+    // Refuse new admissions while an already-admitted send finishes. Publish
+    // the typed fault under the gate, after the last admitted native send.
+    ENTRY.quarantine.store(1, Ordering::Release);
+    let _wake = WAKE_GATE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(fault) = fault {
+        fault.store(true, Ordering::Release);
+    }
+    if let Some(stop) = DAEMON_STOP.get() {
+        stop.store(true, Ordering::Release);
+    }
+}
+
+fn latch_owner_hook_fault() {
+    quarantine_owner(Some(&OWNER_HOOK_FAULT));
+}
+
+fn lock_drain_hook() -> Result<std::sync::MutexGuard<'static, Option<Box<dyn Fn() -> usize + Send>>>, EntryError> {
+    let guard = DRAIN_HOOK.lock().map_err(|_| {
+        latch_owner_hook_fault();
+        owner_fault().unwrap()
+    })?;
+    match owner_fault() {
+        Some(error) => Err(error),
+        None => Ok(guard),
+    }
+}
+
+#[cfg(feature = "research")]
+mod stop_driver;
+#[cfg(feature = "research")]
+pub use stop_driver::{arm as arm_stop_observation, cancel as cancel_stop_observation, install as install_stop_observation_driver};
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub use stop_driver::arm_with_result_drain as arm_stop_observation_with_result_drain;
+
+pub(crate) fn owner_stop_requested() -> bool {
+    ENTRY.close_req.load(Ordering::Acquire) == 1
+}
+
+fn run_drain_hook() -> bool {
+    let Ok(guard) = lock_drain_hook() else { return false; };
+    invoke_drain_hook(&guard)
+}
+
+fn invoke_drain_hook(guard: &Option<Box<dyn Fn() -> usize + Send>>) -> bool {
+    // Keep the guard outside the unwind boundary so the root survives intact.
+    // AssertUnwindSafe permits containment only, never reuse of the faulted state.
+    if let Some(f) = guard.as_ref() {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f())) {
+            latch_owner_hook_fault();
+            // A user payload may itself panic in Drop. At most one is retained
+            // because the sticky latch prevents any further hook invocation.
+            std::mem::forget(payload);
+            return false;
+        }
+    }
+    // A normally returning hook may have reported a cleanup Err. The pump
+    // must stop before uv_close just as it does after unwind/poison.
+    owner_fault().is_none()
+}
+
+/// Formal daemon stop hook, shared with the fake-host entry LAB.
+pub fn close_daemon_owner<A: crate::host_adapter::HostAdapter>(
+    resident: &crate::resident::Resident<A>,
+) -> usize {
+    resident.set_bridge_scope(None);
+    resident.drain_queries();
+    #[cfg(feature = "research")]
+    let closed = if stop_driver::drains_results() {
+        resident.close_for_result_drain()
+    } else {
+        resident.close()
+    };
+    #[cfg(not(feature = "research"))]
+    let closed = resident.close();
+    if let Err(error) = closed {
+        quarantine_owner(Some(&OWNER_CLEANUP_FAILED));
+        append_stage_simple("owner_cleanup_failed", false, &format!("{error:?}; roots retained until host exit"));
+    }
+    0
+}
+
+// This independent root survives pump closure and hook clearing. A stopped
+// worker cannot deliver pending results; retain them until ACK or host exit.
+type ShutdownCheck = Box<dyn Fn(bool) -> bool + Send>;
+static SHUTDOWN_READY: std::sync::Mutex<Option<ShutdownCheck>> =
+    std::sync::Mutex::new(None);
+
+pub fn retain_daemon_until_settled<A: crate::host_adapter::HostAdapter + Send + 'static>(
+    resident: Arc<crate::resident::Resident<A>>,
+    worker_finished: Arc<AtomicBool>,
+) {
+    let mut guard = SHUTDOWN_READY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(Box::new(move |_| {
+        worker_finished.load(Ordering::Acquire) && !resident.has_unacked_results()
+    }));
+}
+
+/// Install the managed result handoff used after owner closure. The existing
+/// worker consumes the retained copies and releases slots on exact core ACKs.
+#[cfg(feature = "research")]
+#[doc(hidden)]
+pub fn retain_daemon_for_result_drain<A: crate::host_adapter::HostAdapter + Send + 'static>(
+    resident: Arc<crate::resident::Resident<A>>,
+    worker_finished: Arc<AtomicBool>,
+    worker_stop: Arc<AtomicBool>,
+    handoff: Arc<crate::resident::ResultHandoffGate>,
+    sender: std::sync::mpsc::Sender<crate::resident::RetainedNotice>,
+) {
+    let mut guard = SHUTDOWN_READY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(Box::new(move |drain_results| {
+        if drain_results && !worker_finished.load(Ordering::Acquire)
+            && !worker_stop.load(Ordering::Acquire)
+        {
+            // Full is transient while ACKs are arriving. ChannelClosed and
+            // SequenceExhausted preserve the suffix and latch inside handoff.
+            let _ = handoff.forward(&resident, &sender);
+            if !resident.has_unacked_results() {
+                worker_stop.store(true, Ordering::Release);
+            }
+        }
+        worker_finished.load(Ordering::Acquire) && !resident.has_unacked_results()
+    }));
+}
 
 /// 已启动的 daemon worker 停止标志(shutdown 先停 worker 再走关闭协议)。
 static DAEMON_STOP: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 /// 自由函数版钩子安装(导出侧在句柄 move 后仍可调用)。
 pub fn install_drain_hook(f: Box<dyn Fn() -> usize + Send>) {
-    if let Ok(mut g) = DRAIN_HOOK.lock() {
+    if let Ok(mut g) = lock_drain_hook() {
         *g = Some(f);
     }
 }
@@ -181,7 +341,7 @@ pub fn install_drain_hook(f: Box<dyn Fn() -> usize + Send>) {
 /// Install a one-shot research hook only when no resident/daemon hook owns the pump.
 /// This prevents an isolated probe from replacing the active production seam.
 pub fn try_install_drain_hook(f: Box<dyn Fn() -> usize + Send>) -> bool {
-    match DRAIN_HOOK.lock() {
+    match lock_drain_hook() {
         Ok(mut g) if g.is_none() => {
             *g = Some(f);
             true
@@ -192,7 +352,7 @@ pub fn try_install_drain_hook(f: Box<dyn Fn() -> usize + Send>) -> bool {
 
 /// Clear a completed one-shot hook. The pump mutex serializes this with any active callback.
 pub fn clear_drain_hook() {
-    if let Ok(mut g) = DRAIN_HOOK.lock() {
+    if let Ok(mut g) = lock_drain_hook() {
         *g = None;
     }
 }
@@ -200,6 +360,32 @@ pub fn clear_drain_hook() {
 /// Wake the owner pump through the sole cross-thread libuv operation.
 pub fn wake_owner_pump() -> bool {
     wake_trampoline()
+}
+
+/// Request one read-only JS surface probe on the owner tick.
+#[cfg(feature = "research")]
+pub fn request_surface_probe() -> bool {
+    if ENTRY.close_req.load(Ordering::Acquire) != 0 { return false; }
+    SURFACE_PROBE_REQUESTED.store(true, Ordering::Release);
+    wake_owner_pump()
+}
+
+#[cfg(feature = "research")]
+pub fn take_surface_probe() -> bool {
+    SURFACE_PROBE_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+/// Request one synthetic session network transition on the owner tick.
+#[cfg(feature = "research")]
+pub fn request_network_toggle(online: bool) -> bool {
+    if ENTRY.close_req.load(Ordering::Acquire) != 0 { return false; }
+    NETWORK_TOGGLE_REQUESTED.store(if online { 2 } else { 1 }, Ordering::Release);
+    wake_owner_pump()
+}
+
+#[cfg(feature = "research")]
+pub fn take_network_toggle() -> u8 {
+    NETWORK_TOGGLE_REQUESTED.swap(0, Ordering::AcqRel)
 }
 
 /// daemon 启动产物(worker 停止标志;导出侧保存)。
@@ -270,13 +456,29 @@ pub fn wake_trampoline_addr() -> usize {
     unsafe { std::mem::transmute::<fn() -> bool, usize>(wake_trampoline) }
 }
 
-/// 蹦床本体:读静态句柄执行 uv_async_send。
+fn ordinary_wake_allowed() -> bool {
+    ENTRY.ready.load(Ordering::Acquire) == 1
+        && ENTRY.close_req.load(Ordering::Acquire) == 0
+        && ENTRY.quarantine.load(Ordering::Acquire) == 0
+}
+
+/// 蹦床本体:所有普通唤醒共用同一准入门。
 fn wake_trampoline() -> bool {
-    // 句柄地址存于 ENTRY.handle;ready 后恒有效。
-    if ENTRY.ready.load(Ordering::Acquire) != 1 {
+    if !ordinary_wake_allowed() {
         return false;
     }
-    // SAFETY: 符号地址经 bootstrap 校验;uv_async_send 是唯一合法跨线程面。
+    let Ok(gate) = WAKE_GATE.lock() else { return false; };
+    if !ordinary_wake_allowed() {
+        return false;
+    }
+    ENTRY.wake_sends.fetch_add(1, Ordering::Relaxed);
+    send_wake(&gate)
+}
+
+// The caller proves the async handle is initialized and still open under the gate.
+fn send_wake(_gate: &std::sync::MutexGuard<'_, ()>) -> bool {
+    // SAFETY: bootstrap published the export and handle; the gate prevents
+    // the owner from claiming native close until the send returns.
     unsafe {
         let send: FnUvAsyncSend =
             EntrySymbols::to_fn(ENTRY.sym_uv_async_send.load(Ordering::Acquire));
@@ -302,6 +504,7 @@ static ENTRY: EntryShared = EntryShared {
     error_aux: AtomicUsize::new(0),
     quarantine: AtomicUsize::new(0),
     close_req: AtomicUsize::new(0),
+    close_started: AtomicBool::new(false),
     closed: AtomicUsize::new(0),
     pumps: AtomicU64::new(0),
     wake_sends: AtomicU64::new(0),
@@ -328,7 +531,7 @@ fn set_error(e: EntryError) {
         EntryError::HandleSizeInvalid { size } => set_error_code(ERR_HANDLE_SIZE, size),
         EntryError::UvInitFailed { r } => set_error_code(ERR_UV_INIT, r as usize),
         EntryError::Timeout => set_error_code(ERR_TIMEOUT, 0),
-        EntryError::AlreadyBootstrapped => set_error_code(ERR_TIMEOUT, 0),
+        EntryError::AlreadyBootstrapped | EntryError::PendingResults | EntryError::OwnerHookFault | EntryError::OwnerCleanupFailed | EntryError::StopObservationFailed => set_error_code(ERR_TIMEOUT, 0),
     }
 }
 
@@ -493,22 +696,50 @@ unsafe extern "system" fn first_entry_cb(_ctx: *mut core::ffi::c_void) {
 
 /// 常驻 pump:owner 轮转点执行。线程不符 → quarantine(保留证据,不继续)。
 unsafe extern "C" fn pump_cb(_handle: *mut core::ffi::c_void) {
+    if ENTRY.quarantine.load(Ordering::Acquire) != 0 {
+        return;
+    }
     // SAFETY: 静态原子量;drain_hook 由本 crate 注册。
     unsafe {
         let tid = windows_sys::Win32::System::Threading::GetCurrentThreadId() as usize;
         if tid != ENTRY.tid.load(Ordering::Acquire) {
-            ENTRY.quarantine.store(1, Ordering::Release);
+            quarantine_owner(None);
             return;
         }
         ENTRY.pumps.fetch_add(1, Ordering::Relaxed);
         if ENTRY.close_req.load(Ordering::Acquire) == 1 {
+            if ENTRY.close_started.load(Ordering::Acquire) {
+                return;
+            }
             // The daemon hook revokes queries and removes its listeners on the
             // owner before closing the pump. One-shot probes clean up separately.
-            if DAEMON_STOP.get().is_some_and(|stop| stop.load(Ordering::Acquire)) {
-                if let Ok(guard) = DRAIN_HOOK.lock() {
-                    if let Some(f) = guard.as_ref() {
-                        let _ = f();
-                    }
+            // Even a non-daemon close must reject a poisoned hook mutex.
+            #[cfg(feature = "research")]
+            let observation = {
+                let Ok(guard) = lock_drain_hook() else { return; };
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stop_driver::drive(&guard))) {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => return,
+                    Err(payload) => { latch_owner_hook_fault(); std::mem::forget(payload); return; }
+                }
+            };
+            #[cfg(not(feature = "research"))]
+            let observation: Option<bool> = None;
+            match observation {
+                Some(false) => return,
+                Some(true) => {},
+                None => {
+                    if DAEMON_STOP.get().is_some_and(|stop| stop.load(Ordering::Acquire)) {
+                        if !run_drain_hook() { return; }
+                    } else if lock_drain_hook().is_err() { return; }
+                }
+            }
+            {
+                let Ok(_wake) = WAKE_GATE.lock() else { return; };
+                if ENTRY.quarantine.load(Ordering::Acquire) != 0
+                    || ENTRY.close_started.swap(true, Ordering::AcqRel)
+                {
+                    return;
                 }
             }
             let close: FnUvClose = EntrySymbols::to_fn(ENTRY.sym_uv_close.load(Ordering::Acquire));
@@ -518,9 +749,11 @@ unsafe extern "C" fn pump_cb(_handle: *mut core::ffi::c_void) {
             );
             return;
         }
-        if let Ok(guard) = DRAIN_HOOK.lock() {
-            if let Some(f) = guard.as_ref() {
-                let _ = f();
+        // A close request can arrive after the first read but before this
+        // callback acquires the hook. Let the close path own the final tick.
+        if let Ok(guard) = lock_drain_hook() {
+            if !owner_stop_requested() {
+                let _ = invoke_drain_hook(&guard);
             }
         }
     }
@@ -537,17 +770,7 @@ pub struct EntryHandle;
 impl EntryHandle {
     /// 工作线程唤醒(合法跨线程面:uv_async_send)。
     pub fn wake(&self) -> bool {
-        if ENTRY.ready.load(Ordering::Acquire) != 1 {
-            return false;
-        }
-        ENTRY.wake_sends.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: 地址来自导出解析/注入;uv_async_send 是 libuv 唯一
-        // 明确允许跨线程调用的接口。
-        unsafe {
-            let send: FnUvAsyncSend =
-                EntrySymbols::to_fn(ENTRY.sym_uv_async_send.load(Ordering::Acquire));
-            (send)(ENTRY.handle.load(Ordering::Acquire) as *mut core::ffi::c_void) == 0
-        }
+        wake_trampoline()
     }
 
     /// 注册 owner 轮转点 drain 钩子(返回处理数;shutdown 时随代次清空)。
@@ -557,7 +780,7 @@ impl EntryHandle {
 
     /// 关闭后清空钩子(资源收尾语义,非泄漏)。
     pub fn clear_drain_hook(&self) {
-        if let Ok(mut g) = DRAIN_HOOK.lock() {
+        if let Ok(mut g) = lock_drain_hook() {
             *g = None;
         }
     }
@@ -716,19 +939,63 @@ pub fn bootstrap(cfg: &EntryConfig, symbols: &EntrySymbols) -> Result<EntryHandl
 /// 关闭协议(导出面用;无句柄实例依赖)。语义同 `EntryHandle::close`:
 /// 超时返回 Timeout 且**不释放句柄**(计划 §5.3)。
 pub fn shutdown(wait_ms: u32) -> Result<(), EntryError> {
+    shutdown_inner(wait_ms, false)
+}
+
+pub(crate) fn shutdown_managed(wait_ms: u32) -> Result<(), EntryError> {
+    shutdown_inner(wait_ms, true)
+}
+
+fn signal_daemon_stop() {
+    if let Some(stop) = DAEMON_STOP.get() {
+        stop.store(true, Ordering::Release);
+    }
+}
+
+fn shutdown_inner(wait_ms: u32, stop_worker_at_entry: bool) -> Result<(), EntryError> {
+    // Serialize the shutdown wake with hook fault publication. uv_async_send
+    // only posts work; the owner acquires this mutex after it returns.
+    let hook = lock_drain_hook()?;
     if ENTRY.ready.load(Ordering::Acquire) != 1 {
         return Err(EntryError::AlreadyBootstrapped);
     }
-    ENTRY.close_req.store(1, Ordering::Release);
-    // 唤醒 owner 轮转点(uv_async_send:唯一合法跨线程面)。
-    let wake_ok = unsafe {
-        let send: FnUvAsyncSend =
-            EntrySymbols::to_fn(ENTRY.sym_uv_async_send.load(Ordering::Acquire));
-        (send)(ENTRY.handle.load(Ordering::Acquire) as *mut core::ffi::c_void) == 0
-    };
+    #[cfg(feature = "research")]
+    let drain_results = stop_driver::drains_results();
+    #[cfg(not(feature = "research"))]
+    let drain_results = false;
+    if stop_worker_at_entry && !drain_results {
+        signal_daemon_stop();
+    }
     let deadline = Instant::now() + Duration::from_millis(wait_ms as u64);
+    // Only the first attempt closes the handle. A retry after pump closure
+    // checks settlement without sending to an already closed libuv handle.
+    let wake_ok = if ENTRY.close_req.swap(1, Ordering::AcqRel) == 0 {
+        // CLOSE_REQ rejects ordinary wakes immediately. This one stop signal
+        // may still post after previously admitted sends have returned.
+        WAKE_GATE.lock().is_ok_and(|gate| {
+            ENTRY.quarantine.load(Ordering::Acquire) == 0 && send_wake(&gate)
+        })
+    } else {
+        true
+    };
+    drop(hook);
+    let result = await_shutdown(wait_ms, deadline, wake_ok, drain_results);
+    if drain_results && result.is_err() {
+        signal_daemon_stop();
+    }
+    result
+}
+
+fn await_shutdown(wait_ms: u32, deadline: Instant, wake_ok: bool, drain_results: bool) -> Result<(), EntryError> {
+    #[cfg(feature = "research")]
+    let mut observation_wake = Instant::now();
     while ENTRY.closed.load(Ordering::Acquire) != 1 {
+        if let Some(error) = owner_fault() {
+            return Err(error);
+        }
         if Instant::now() >= deadline {
+            #[cfg(feature = "research")]
+            stop_driver::shutdown_timeout()?;
             append_stage_simple(
                 "shutdown",
                 false,
@@ -736,12 +1003,42 @@ pub fn shutdown(wait_ms: u32) -> Result<(), EntryError> {
             );
             return Err(EntryError::Timeout);
         }
+        #[cfg(feature = "research")]
+        if observation_wake.elapsed() >= Duration::from_millis(50) {
+            stop_driver::observation_wake()?;
+            observation_wake = Instant::now();
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
-    if let Ok(mut g) = DRAIN_HOOK.lock() {
-        *g = None; // 关闭确认:钩子随代次收尾
+    #[cfg(feature = "research")]
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_driver::finish)) {
+        Ok(result) => result?,
+        Err(payload) => { latch_owner_hook_fault(); std::mem::forget(payload); return Err(EntryError::OwnerHookFault); }
     }
-    Ok(())
+    loop {
+        // A poisoned check cannot prove settlement. Keep both roots and fail
+        // conservatively rather than unwinding across the shutdown export.
+        let mut ready = match SHUTDOWN_READY.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err(EntryError::PendingResults),
+        };
+        let mut hook = lock_drain_hook()?;
+        let settled = ready.as_ref().is_none_or(|check| {
+            (!drain_results || Instant::now() < deadline) && check(drain_results)
+        });
+        if settled {
+            *hook = None;
+            *ready = None;
+            return Ok(());
+        }
+        drop(hook);
+        drop(ready);
+        if Instant::now() >= deadline {
+            append_stage_simple("shutdown_results", false, "unsettled; resident retained until ACK or host exit");
+            return Err(EntryError::PendingResults);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// libuv 面存活校验(pump 阶段的宿主状态 gate):uv_loop_alive(loop)。
@@ -750,7 +1047,7 @@ pub fn shutdown(wait_ms: u32) -> Result<(), EntryError> {
 /// 以 owner 线程 + env 新鲜 + loop 存活三重校验。D8/D9 触碰 V8 的操作
 /// 必须另加 entered/current context 校验(见 QqOwnerAdapter 文档)。
 pub fn uv_loop_alive() -> bool {
-    if ENTRY.ready.load(Ordering::Acquire) != 1 {
+    if owner_fault().is_some() || ENTRY.ready.load(Ordering::Acquire) != 1 {
         return false;
     }
     // SAFETY: 符号地址经 bootstrap 校验;调用发生在 loop 线程(pump)或
@@ -782,12 +1079,34 @@ pub fn test_reset_state() {
     ENTRY.error_aux.store(0, Ordering::Release);
     ENTRY.quarantine.store(0, Ordering::Release);
     ENTRY.close_req.store(0, Ordering::Release);
+    ENTRY.close_started.store(false, Ordering::Release);
     ENTRY.closed.store(0, Ordering::Release);
+    OWNER_HOOK_FAULT.store(false, Ordering::Release);
+    OWNER_CLEANUP_FAILED.store(false, Ordering::Release);
+    #[cfg(feature = "research")]
+    stop_driver::reset();
+    DRAIN_HOOK.clear_poison();
     if let Ok(mut g) = DRAIN_HOOK.lock() {
         *g = None;
     }
+    if let Ok(mut ready) = SHUTDOWN_READY.lock() { *ready = None; }
     ENTRY.pumps.store(0, Ordering::Relaxed);
     ENTRY.wake_sends.store(0, Ordering::Relaxed);
+}
+
+/// LAB synchronization point for an ordinary send held inside the fake host.
+#[doc(hidden)]
+pub fn test_close_requested() -> bool {
+    ENTRY.close_req.load(Ordering::Acquire) == 1
+}
+
+/// LAB-only fault injection; production must never poison or reset this root.
+#[doc(hidden)]
+pub fn test_poison_drain_hook() {
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = DRAIN_HOOK.lock().unwrap();
+        panic!("synthetic hook mutex poison");
+    });
 }
 
 // —— HostAdapter 适配(QqOwnerAdapter;resident 的生产缝) ——
@@ -1103,10 +1422,14 @@ impl QqOwnerAdapter {
             return Some(QueryOutcome::Disconnected);
         }
         if self.login_cleanup_unknown {
+            #[cfg(feature = "research")]
+            append_stage_simple("login_diagnostic", false, "cleanup_unknown");
             return Some(QueryOutcome::NotReady);
         }
         if !poll {
             if self.login_request.is_some() {
+                #[cfg(feature = "research")]
+                append_stage_simple("login_diagnostic", false, "request_busy");
                 return Some(QueryOutcome::NotReady);
             }
             let Some(path) = self.login_wrapper.as_deref() else {
@@ -1121,15 +1444,21 @@ impl QqOwnerAdapter {
             match crate::qq_v8::run_fixed_query_script(&script).as_deref() {
                 Ok("DISPATCHED" | "SURFACE_DONE") => return None,
                 Ok("BUSY") => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "script_busy");
                     self.login_request = None;
                     self.login_cleanup_unknown = true;
                     return Some(QueryOutcome::NotReady);
                 }
                 Err(crate::qq_v8::V8Error::NoCurrentContext) => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "no_current_context");
                     self.login_request = None;
                     return Some(QueryOutcome::NotReady);
                 }
                 _ => {
+                    #[cfg(feature = "research")]
+                    append_stage_simple("login_diagnostic", false, "script_start_failed");
                     self.cancel_login();
                     return Some(QueryOutcome::NotReady);
                 }
@@ -1152,6 +1481,12 @@ impl QqOwnerAdapter {
             return Some(QueryOutcome::InvalidResponse);
         };
         self.login_request = None;
+        #[cfg(feature = "research")]
+        if !matches!(decode_login_report(&report, scope, refresh), QueryOutcome::Success(_)) {
+            for label in login_diagnostic_labels(&report) {
+                append_stage_simple("login_diagnostic", false, label);
+            }
+        }
         if report["status"] == "self_status_listener_cleanup_unverified" {
             self.login_cleanup_unknown = true;
             append_stage_simple("login_listener_cleanup", false, "listener removal unverified");
@@ -1166,6 +1501,57 @@ impl QqOwnerAdapter {
     fn handle_env(&self) -> usize {
         ENTRY.env.load(Ordering::Acquire)
     }
+}
+
+/// Fixed labels only: native reports can contain identity and must never be logged verbatim.
+#[cfg(feature = "research")]
+fn login_diagnostic_labels(report: &serde_json::Value) -> [&'static str; 3] {
+    let status = match report["status"].as_str() {
+        Some("current_login_match") => "status_current_login_match",
+        Some("current_account_mismatch") => "status_current_account_mismatch",
+        Some("current_session_changed") => "status_current_session_changed",
+        Some("current_session_id_invalid") => "status_current_session_id_invalid",
+        Some("current_login_check_failed") => "status_current_login_check_failed",
+        Some("self_forward_not_map") => "status_self_forward_not_map",
+        Some("self_forward_mismatch") => "status_self_forward_mismatch",
+        Some("self_reverse_not_map") => "status_self_reverse_not_map",
+        Some("self_reverse_mismatch") => "status_self_reverse_mismatch",
+        Some("self_status_listener_id_invalid") => "status_listener_id_invalid",
+        Some("self_status_listener_surface_missing") => "status_listener_surface_missing",
+        Some("self_status_listener_cleanup_unverified") => "status_cleanup_unverified",
+        Some("self_status_offline") => "status_self_offline",
+        Some("self_status_ack_failed") => "status_self_ack_failed",
+        Some("self_status_ack_invalid") => "status_self_ack_invalid",
+        Some("self_status_conflict") => "status_self_conflict",
+        Some("self_status_event_invalid") => "status_self_event_invalid",
+        Some("self_status_rejected") => "status_self_rejected",
+        Some("self_status_threw") => "status_self_threw",
+        Some("profile_methods_unavailable") => "status_profile_methods_unavailable",
+        Some("profile_require_missing") => "status_profile_require_missing",
+        Some("profile_service_accessor_missing") => "status_profile_service_accessor_missing",
+        Some("profile_service_missing") => "status_profile_service_missing",
+        Some("profile_wrapper_accessor_missing") => "status_profile_wrapper_accessor_missing",
+        Some("profile_wrapper_require_failed") => "status_profile_wrapper_require_failed",
+        _ => "status_other_or_missing",
+    };
+    let nickname = match report["nicknameStatus"].as_str() {
+        Some("matched") => "nickname_matched",
+        Some("query_rejected") => "nickname_query_rejected",
+        Some("result_not_map") => "nickname_result_not_map",
+        Some("profile_identity_mismatch") => "nickname_identity_mismatch",
+        Some("nickname_invalid") => "nickname_invalid",
+        Some("accessor_missing") => "nickname_accessor_missing",
+        Some("query_threw") => "nickname_query_threw",
+        _ => "nickname_other_or_missing",
+    };
+    let listener = match report["listenerRegistration"].as_str() {
+        Some("remove_returned") => "listener_remove_returned",
+        Some("registered") => "listener_registered",
+        Some("remove_unknown") => "listener_remove_unknown",
+        Some("unknown") => "listener_unknown",
+        _ => "listener_other_or_missing",
+    };
+    [status, nickname, listener]
 }
 
 fn decode_login_report(
@@ -1203,6 +1589,17 @@ mod profile_report_tests {
     use super::decode_login_report;
     use caligo_model::capability::{QueryData, QueryOutcome, QueryScope};
     use serde_json::json;
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn login_diagnostics_are_fixed_labels_and_never_include_report_values() {
+        use super::login_diagnostic_labels;
+        let report = json!({"status":"current_account_mismatch", "nicknameStatus":"query_rejected",
+            "listenerRegistration":"remove_returned", "currentLogin":{"uin":"PRIVATE"}});
+        assert_eq!(login_diagnostic_labels(&report), ["status_current_account_mismatch", "nickname_query_rejected", "listener_remove_returned"]);
+        let injected = json!({"status":"PRIVATE", "nicknameStatus":"PRIVATE", "listenerRegistration":"PRIVATE"});
+        assert_eq!(login_diagnostic_labels(&injected), ["status_other_or_missing", "nickname_other_or_missing", "listener_other_or_missing"]);
+    }
 
     #[test]
     fn scoped_refresh_uses_the_fresh_row_and_refuses_cached_or_wrong_account_results() {

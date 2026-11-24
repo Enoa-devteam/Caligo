@@ -559,6 +559,10 @@ fn unknown_holds_bounded_slot_for_late_strong_identity_then_releases_it() {
             if request_id == "R-late"
     )));
     assert!(resident.ack_result_notice("R-late", true));
+    resident.complete_sends(&[], &[("R-late".into(), "late rejection".into())], &[]);
+    resident.complete_sends(&[("R-late".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-late".into(), "duplicate unknown".into())]);
+    assert!(resident.take_results().is_empty(), "unknown may only be corrected by a strong identity");
     assert_eq!(
         resident.submit(OwnedRequest::SendText {
             request_id: "blocked-by-correction-slot".into(),
@@ -657,6 +661,74 @@ fn unknown_correction_slot_expires_and_unblocks_new_dispatch() {
         }),
         SubmitVerdict::Accepted
     );
+}
+
+#[test]
+fn unacked_unknown_keeps_capacity_after_correction_window_expires() {
+    let outcomes = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let resident = Resident::new(
+        LateReceiptHost { owner: OWNER, outcomes: outcomes.clone() },
+        ResidentLimits { results_max: 2, ..ResidentLimits::default() },
+    );
+    resident.bootstrap().unwrap();
+    let request = |id: &str| OwnedRequest::SendText {
+        request_id: id.into(), wire_seq: 1, timeout_ms: 1, chat_type: 2,
+        peer_uid: "123".into(), text: "x".into(),
+    };
+    assert_eq!(resident.submit(request("unacked")), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    resident.take_results();
+    assert!(resident.ack_notice("unacked", true));
+    outcomes.lock().unwrap().push_back(("unacked".into(), SendOutcome::Unknown {
+        request_id: "unacked".into(), reason: Some("timeout".into()), late_receipt_possible: true,
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    let unknown = resident.take_results();
+    assert_eq!(unknown.len(), 1);
+    let after = std::time::Instant::now() + std::time::Duration::from_millis(caligo_model::LATE_RECEIPT_GRACE_MS + 1);
+    assert_eq!(resident.expire_late_receipts(after), 1);
+    assert_eq!(resident.expire_late_receipts(after), 0);
+    outcomes.lock().unwrap().push_back(("unacked".into(), SendOutcome::Success {
+        request_id: "unacked".into(), native_id: "too-late".into(),
+    }));
+    assert_eq!(resident.drain_send_responses(), 0);
+    assert!(resident.take_results().is_empty());
+    assert_eq!(resident.submit(request("blocked")), SubmitVerdict::QueueFull, "expiry is not a durable ACK");
+    assert!(resident.ack_result_notice("unacked", true));
+    assert!(!resident.ack_result_notice("unacked", true));
+    assert_eq!(resident.submit(request("blocked")), SubmitVerdict::Accepted);
+}
+
+#[test]
+fn old_unknown_ack_must_not_release_new_success_capacity() {
+    let outcomes = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let resident = Resident::new(
+        LateReceiptHost { owner: OWNER, outcomes: outcomes.clone() },
+        ResidentLimits { results_max: 2, ..ResidentLimits::default() },
+    );
+    resident.bootstrap().unwrap();
+    let request = |id: &str| OwnedRequest::SendText {
+        request_id: id.into(), wire_seq: 1, timeout_ms: 1, chat_type: 2,
+        peer_uid: "123".into(), text: "x".into(),
+    };
+    assert_eq!(resident.submit(request("r")), SubmitVerdict::Accepted);
+    resident.drain().unwrap();
+    resident.take_results();
+    assert!(resident.ack_notice("r", true));
+    outcomes.lock().unwrap().push_back(("r".into(), SendOutcome::Unknown {
+        request_id: "r".into(), reason: None, late_receipt_possible: true,
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    outcomes.lock().unwrap().push_back(("r".into(), SendOutcome::Success {
+        request_id: "r".into(), native_id: "strong".into(),
+    }));
+    assert_eq!(resident.drain_send_responses(), 1);
+    assert_eq!(resident.take_results().len(), 2);
+    // Simulate the worker applying the older unknown ACK after success arrived.
+    assert!(!resident.ack_unknown_notice("r"));
+    assert_eq!(resident.submit(request("next")), SubmitVerdict::QueueFull);
+    assert!(resident.ack_result_notice("r", true));
+    assert_eq!(resident.submit(request("next")), SubmitVerdict::Accepted);
 }
 
 #[test]

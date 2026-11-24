@@ -204,6 +204,48 @@ pub enum ResidentNotice {
     Outcome(SendOutcome),
 }
 
+/// Resident-owned copy, stable until its corresponding daemon ACK.
+/// IDs are unique only for the lifetime of this resident.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedNotice {
+    pub notice_id: u64,
+    pub notice: ResidentNotice,
+}
+
+/// The worker outbox uses the same item bound; a full copy set stops handoff.
+const MAX_RETAINED_NOTICES: usize = 256;
+
+/// A full retained set is transient; the owner must pause until ACK frees space.
+/// A disconnected receiver or exhausted identity latches this owner-only gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffError {
+    Full(usize),
+    ChannelClosed(usize),
+    SequenceExhausted(usize),
+}
+
+#[derive(Default)]
+pub struct ResultHandoffGate { closed: std::sync::atomic::AtomicU8 }
+
+impl ResultHandoffGate {
+    pub fn is_closed(&self) -> bool { self.closed.load(Ordering::Acquire) != 0 }
+
+    pub fn forward<A: HostAdapter>(&self, resident: &Resident<A>, sender: &std::sync::mpsc::Sender<RetainedNotice>) -> Result<usize, HandoffError> {
+        match self.closed.load(Ordering::Acquire) {
+            1 => return Err(HandoffError::ChannelClosed(0)),
+            2 => return Err(HandoffError::SequenceExhausted(0)),
+            _ => {}
+        }
+        let result = resident.forward_retained(|notice| sender.send(notice).map_err(|error| error.0));
+        match result {
+            Err(HandoffError::ChannelClosed(_)) => self.closed.store(1, Ordering::Release),
+            Err(HandoffError::SequenceExhausted(_)) => self.closed.store(2, Ordering::Release),
+            _ => {}
+        }
+        result
+    }
+}
+
 /// 关闭报告(计数回基线的验收数据)。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CloseReport {
@@ -244,6 +286,8 @@ struct ReqRecord {
     /// V8 Promise 路线的本地调用键；native CPB 文本候选不写入此字段。
     pending_mid: Option<String>,
     late_receipt_deadline: Option<std::time::Instant>,
+    /// Unknown ACK arrived while the correction window still held the slot.
+    unknown_acked: bool,
     /// bit 0 = NativeStarted 未确认, bit 1 = terminal result 未确认。
     unacked_notice_mask: u8,
 }
@@ -270,6 +314,8 @@ struct Core<A: HostAdapter> {
     requests: HashMap<String, ReqRecord>,
     events: VecDeque<(OwnedEvent, LifecycleToken)>,
     results_out: VecDeque<ResidentNotice>,
+    retained_notices: VecDeque<RetainedNotice>,
+    next_notice_id: Option<u64>,
     pending_notice_slots: usize,
     listener_token: Option<u64>,
     bridge_scope: Option<QueryScope>,
@@ -290,19 +336,43 @@ struct PendingQuery {
     cancel_only: bool,
 }
 
+/// A resident permits exactly one worker; a panic permanently quarantines
+/// this in-memory generation until an independently audited recovery exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerLeaseError { Busy, Quarantined }
+
+pub(crate) struct WorkerLease<'a> { state: &'a std::sync::atomic::AtomicU8 }
+
+impl Drop for WorkerLease<'_> {
+    fn drop(&mut self) {
+        let next = if std::thread::panicking() { 2 } else { 0 };
+        self.state.store(next, Ordering::Release);
+    }
+}
+
 pub struct Resident<A: HostAdapter> {
     /// 宿主 adapter(独立锁;锁序 adapter→core)。native 调用期间不持
     /// core 锁,内联回调可重入 core 面板(§7-P4)。
     adapter: Mutex<A>,
+    worker_state: std::sync::atomic::AtomicU8,
     core: Mutex<Core<A>>,
     queries: Mutex<VecDeque<PendingQuery>>,
     query_results: Mutex<VecDeque<(String, QueryScope, QueryOutcome)>>,
 }
 
 impl<A: HostAdapter> Resident<A> {
+    pub(crate) fn acquire_worker(&self) -> Result<WorkerLease<'_>, WorkerLeaseError> {
+        match self.worker_state.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Ok(WorkerLease { state: &self.worker_state }),
+            Err(1) => Err(WorkerLeaseError::Busy),
+            Err(_) => Err(WorkerLeaseError::Quarantined),
+        }
+    }
+
     pub fn new(adapter: A, limits: ResidentLimits) -> Self {
         Self {
             adapter: Mutex::new(adapter),
+            worker_state: std::sync::atomic::AtomicU8::new(0),
             queries: Mutex::new(VecDeque::new()),
             query_results: Mutex::new(VecDeque::new()),
             core: Mutex::new(Core {
@@ -314,6 +384,8 @@ impl<A: HostAdapter> Resident<A> {
                 requests: HashMap::new(),
                 events: VecDeque::new(),
                 results_out: VecDeque::new(),
+                retained_notices: VecDeque::new(),
+                next_notice_id: Some(1),
                 pending_notice_slots: 0,
                 listener_token: None,
                 bridge_scope: None,
@@ -491,6 +563,7 @@ impl<A: HostAdapter> Resident<A> {
                     state: ReqState::Queued,
                     pending_mid: None,
                     late_receipt_deadline: None,
+                    unknown_acked: false,
                     unacked_notice_mask: 0b11,
                 },
             );
@@ -844,6 +917,96 @@ impl<A: HostAdapter> Resident<A> {
         c.results_out.drain(..).collect()
     }
 
+    /// Transfer notices in order. If the destination rejects a notice, the
+    /// callback must return that same owned notice; it and the unsent suffix
+    /// are restored ahead of notices produced concurrently. A successful send
+    /// is only an in-memory handoff, not a durable acknowledgement.
+    pub fn forward_results<F>(&self, mut send: F) -> Result<usize, usize>
+    where F: FnMut(ResidentNotice) -> Result<(), ResidentNotice> {
+        let mut notices = self.take_results().into_iter();
+        let mut sent = 0;
+        while let Some(notice) = notices.next() {
+            match send(notice) {
+                Ok(()) => sent += 1,
+                Err(failed) => {
+                    let mut c = self.core.lock().unwrap();
+                    for notice in notices.rev() { c.results_out.push_front(notice); }
+                    c.results_out.push_front(failed);
+                    return Err(sent);
+                }
+            }
+        }
+        Ok(sent)
+    }
+
+    /// Single-owner handoff: retain before sending a copy. On full capacity,
+    /// exhausted identity, or rejection, leave all notices in resident memory.
+    /// Caller must stop producing notices on Err; no lock is held during send.
+    pub fn forward_retained<F>(&self, mut send: F) -> Result<usize, HandoffError>
+    where F: FnMut(RetainedNotice) -> Result<(), RetainedNotice> {
+        let mut sent = 0;
+        loop {
+            let retained = {
+                let mut c = self.core.lock().unwrap();
+                // A full set pauses even when the pending queue just became
+                // empty, so the caller cannot dispatch new work in this tick.
+                let Some(notice_id) = c.next_notice_id else { return Err(HandoffError::SequenceExhausted(sent)) };
+                if c.retained_notices.len() >= c.limits.results_max.min(MAX_RETAINED_NOTICES) {
+                    return Err(HandoffError::Full(sent));
+                }
+                if c.results_out.is_empty() { return Ok(sent); }
+                let notice = c.results_out.pop_front().expect("checked nonempty");
+                c.next_notice_id = notice_id.checked_add(1);
+                let retained = RetainedNotice { notice_id, notice };
+                c.retained_notices.push_back(retained.clone());
+                retained
+            };
+            if send(retained).is_err() { return Err(HandoffError::ChannelClosed(sent)); }
+            sent += 1;
+        }
+    }
+
+    /// Snapshot for worker startup/reconstruction; channel copies are hints.
+    pub fn retained_notices(&self) -> Vec<RetainedNotice> {
+        self.core.lock().unwrap().retained_notices.iter().cloned().collect()
+    }
+
+    /// The worker uses this to ignore stale channel copies after ACK.
+    pub fn contains_retained_notice(&self, notice: &RetainedNotice) -> bool {
+        self.core.lock().unwrap().retained_notices.iter().any(|item| item == notice)
+    }
+
+    /// Atomically remove the exact copy and update its reserved slot after ACK.
+    pub fn ack_retained_notice(&self, notice: &RetainedNotice) -> bool {
+        let mut c = self.core.lock().unwrap();
+        if let Some(index) = c.retained_notices.iter().position(|item| item == notice) {
+            c.retained_notices.remove(index);
+            match &notice.notice {
+                ResidentNotice::NativeStarted { request_id } => {
+                    release_notice_slot(&mut c, request_id, 0b01);
+                }
+                ResidentNotice::Outcome(SendOutcome::AcceptedUnconfirmed { .. }) => {}
+                ResidentNotice::Outcome(SendOutcome::Unknown { request_id, .. }) => {
+                    let is_unknown = c.requests.get(request_id)
+                        .map(|rec| rec.state == ReqState::DeliveryUnknown).unwrap_or(false);
+                    if is_unknown {
+                        let awaiting_late = c.requests.get(request_id)
+                            .map(|rec| rec.late_receipt_deadline.is_some()).unwrap_or(false);
+                        if awaiting_late {
+                            if let Some(rec) = c.requests.get_mut(request_id) { rec.unknown_acked = true; }
+                        } else {
+                            release_notice_slot(&mut c, request_id, 0b10);
+                        }
+                    }
+                }
+                ResidentNotice::Outcome(outcome) => {
+                    release_notice_slot(&mut c, send_outcome_request_id(outcome), 0b10);
+                }
+            }
+            true
+        } else { false }
+    }
+
     /// Promise 状态由原始 core request_id 关联；只有精确 wrapper 回读
     /// 可提供 native_id。CPB peer+text 候选不得调用此方法。
     pub fn complete_sends(
@@ -851,10 +1014,16 @@ impl<A: HostAdapter> Resident<A> {
         done: &[(String, String)],
         rejected: &[(String, String)],
         unknown: &[(String, String)],
-    ) {
+    ) -> Vec<String> {
         let mut c = self.core.lock().unwrap();
+        // Closing freezes send results, even if an ACKed unknown still has
+        // time left in its correction window.
+        if c.state != ResidentState::Ready {
+            return Vec::new();
+        }
         let mut outcomes = Vec::new();
         let mut updates = Vec::new();
+        let mut accepted = Vec::new();
         for (request_id, record) in &c.requests {
             if !matches!(
                 record.state,
@@ -876,6 +1045,17 @@ impl<A: HostAdapter> Resident<A> {
                 .iter()
                 .find(|(candidate, _)| candidate == pending_request_id)
             {
+                // Replayed identity-less acceptance must not enqueue another
+                // notice or prevent a later strong identity from completing.
+                if native_id.is_empty()
+                    && matches!(record.state, ReqState::IdentityPending | ReqState::DeliveryUnknown)
+                {
+                    // This exact identity-less intermediate outcome was already accepted.
+                    if record.state == ReqState::IdentityPending {
+                        accepted.push(pending_request_id.to_string());
+                    }
+                    continue;
+                }
                 let (state, outcome) = if native_id.is_empty() {
                     (
                         ReqState::IdentityPending,
@@ -894,25 +1074,34 @@ impl<A: HostAdapter> Resident<A> {
                 };
                 outcomes.push(ResidentNotice::Outcome(outcome));
                 updates.push((request_id.clone(), state));
+                accepted.push(pending_request_id.to_string());
             } else if let Some((_, reason)) = rejected
                 .iter()
                 .find(|(candidate, _)| candidate == request_id)
             {
+                if record.state == ReqState::DeliveryUnknown {
+                    continue;
+                }
                 outcomes.push(ResidentNotice::Outcome(SendOutcome::Failure {
                     request_id: request_id.clone(),
                     reason: reason.clone(),
                 }));
                 updates.push((request_id.clone(), ReqState::Done));
+                accepted.push(request_id.clone());
             } else if let Some((_, reason)) = unknown
                 .iter()
                 .find(|(candidate, _)| candidate == request_id)
             {
+                if record.state == ReqState::DeliveryUnknown {
+                    continue;
+                }
                 outcomes.push(ResidentNotice::Outcome(SendOutcome::Unknown {
                     request_id: request_id.clone(),
                     reason: Some(reason.clone()),
                     late_receipt_possible: true,
                 }));
                 updates.push((request_id.clone(), ReqState::DeliveryUnknown));
+                accepted.push(request_id.clone());
             }
         }
         for (request_id, state) in updates {
@@ -932,6 +1121,7 @@ impl<A: HostAdapter> Resident<A> {
             }
         }
         c.results_out.extend(outcomes);
+        accepted
     }
 
     /// core durable ACK 后归还 NativeStarted 通知槽。重复 ACK 幂等。
@@ -940,19 +1130,30 @@ impl<A: HostAdapter> Resident<A> {
         release_notice_slot(&mut c, request_id, if started { 0b01 } else { 0b10 })
     }
 
+    /// Apply an ACK for the specific unknown notice. A later strong result
+    /// must retain its own slot even if this older ACK arrives afterwards.
+    pub fn ack_unknown_notice(&self, request_id: &str) -> bool {
+        let mut c = self.core.lock().unwrap();
+        let Some(rec) = c.requests.get_mut(request_id) else { return false };
+        if rec.state != ReqState::DeliveryUnknown { return false; }
+        if rec.late_receipt_deadline.is_some() {
+            rec.unknown_acked = true;
+            return true;
+        }
+        release_notice_slot(&mut c, request_id, 0b10)
+    }
+
     /// 中间态 ACK 移除当前 outbox 项，但保留终态结果槽。
     pub fn ack_result_notice(&self, request_id: &str, terminal: bool) -> bool {
         let mut c = self.core.lock().unwrap();
         if terminal {
-            if c.requests
-                .get(request_id)
-                .map(|rec| {
-                    rec.state == ReqState::DeliveryUnknown && rec.late_receipt_deadline.is_some()
-                })
-                .unwrap_or(false)
-            {
-                // ACK 接受了 Unknown；槽仍为迟到强身份预留。
-                return true;
+            if let Some(rec) = c.requests.get_mut(request_id) {
+                if rec.state == ReqState::DeliveryUnknown && rec.late_receipt_deadline.is_some() {
+                    // Keep the correction slot until its window ends, but remember
+                    // that expiry is now allowed to release it.
+                    rec.unknown_acked = true;
+                    return true;
+                }
             }
             release_notice_slot(&mut c, request_id, 0b10)
         } else {
@@ -963,7 +1164,7 @@ impl<A: HostAdapter> Resident<A> {
         }
     }
 
-    /// Release result capacity after the bounded late-identity correction window.
+    /// End the correction window; release capacity only after its unknown ACK.
     pub fn expire_late_receipts(&self, now: std::time::Instant) -> usize {
         let mut c = self.core.lock().unwrap();
         let expired: Vec<String> = c
@@ -979,10 +1180,15 @@ impl<A: HostAdapter> Resident<A> {
             .map(|(request_id, _)| request_id.clone())
             .collect();
         for request_id in &expired {
-            if let Some(rec) = c.requests.get_mut(request_id) {
+            let acked = if let Some(rec) = c.requests.get_mut(request_id) {
                 rec.late_receipt_deadline = None;
+                rec.unknown_acked
+            } else {
+                false
+            };
+            if acked {
+                release_notice_slot(&mut c, request_id, 0b10);
             }
-            release_notice_slot(&mut c, request_id, 0b10);
         }
         expired.len()
     }
@@ -990,6 +1196,11 @@ impl<A: HostAdapter> Resident<A> {
     /// 排空异步发送响应消费槽(adapter → 账本终局 → core 结果通道)。
     /// 泵线程每拍调用;request 状态 SendPending → Done。
     pub fn drain_send_responses(&self) -> usize {
+        // Release the core guard before taking the adapter lock. A stop
+        // already underway leaves response slots to the shutdown path.
+        if self.core.lock().unwrap().state != ResidentState::Ready {
+            return 0;
+        }
         // 锁序合同(adapter → core):先取 adapter 结果,再进 core。
         let done = {
             let mut adapter = self.adapter.lock().unwrap();
@@ -999,6 +1210,11 @@ impl<A: HostAdapter> Resident<A> {
             return 0;
         }
         let mut c = self.core.lock().unwrap();
+        // An already admitted drain may return after close began. Do not
+        // publish its outcomes or change the stopped request state.
+        if c.state != ResidentState::Ready {
+            return 0;
+        }
         let mut accepted = 0usize;
         for (request_id, outcome) in done {
             let outcome_id = send_outcome_request_id(&outcome);
@@ -1102,9 +1318,36 @@ impl<A: HostAdapter> Resident<A> {
         self.core.lock().unwrap().ingress.len()
     }
 
+    /// Shutdown must retain the resident until every result and reservation is
+    /// acknowledged. Empty transport queues alone do not prove settlement.
+    pub fn has_unacked_results(&self) -> bool {
+        let Ok(c) = self.core.lock() else { return true };
+        if !c.results_out.is_empty() || !c.retained_notices.is_empty() { return true; }
+        // Closed residents cannot accept another send or observe a late
+        // correction. An ACKed unknown's grace reservation is not an unACKed
+        // result; every other reserved bit still requires preservation.
+        let acked_grace_slots = if c.state == ResidentState::Closed {
+            c.requests.values().filter(|rec| {
+                rec.state == ReqState::DeliveryUnknown && rec.unknown_acked
+                    && rec.unacked_notice_mask == 0b10
+            }).count()
+        } else { 0 };
+        c.pending_notice_slots > acked_grace_slots
+    }
+
     /// 正常关闭(owner 线程):取消未执行、显式化在途、对称移除监听器。
     /// double close 幂等。
     pub fn close(&self) -> Result<CloseReport, HostError> {
+        self.close_inner(false)
+    }
+
+    #[cfg(feature = "research")]
+    #[doc(hidden)]
+    pub fn close_for_result_drain(&self) -> Result<CloseReport, HostError> {
+        self.close_inner(true)
+    }
+
+    fn close_inner(&self, publish_final_outcomes: bool) -> Result<CloseReport, HostError> {
         let mut c = self.core.lock().unwrap();
         let mut report = CloseReport {
             already_closed: matches!(c.state, ResidentState::Closed),
@@ -1126,6 +1369,14 @@ impl<A: HostAdapter> Resident<A> {
                         rec.state = ReqState::CancelledUnsent;
                         report.cancelled_unsent += 1;
                         c.counters.cancelled_unsent += 1;
+                        if publish_final_outcomes {
+                            // A queued request never produced NativeStarted.
+                            release_notice_slot(&mut c, request_id, 0b01);
+                            c.results_out.push_back(ResidentNotice::Outcome(SendOutcome::Failure {
+                                request_id: request_id.clone(),
+                                reason: "owner_stopped_before_native_dispatch".into(),
+                            }));
+                        }
                     }
                 }
             } else {
@@ -1135,13 +1386,21 @@ impl<A: HostAdapter> Resident<A> {
         // 2) 在途(native 已开始/fired 未回执)→ 显式 unknown;不宣称未发送。
         // **含 SendPending**(C7:fired 未回执在关闭时同样不可证明已送达)。
         let mut unknown_now: u64 = 0;
-        for rec in c.requests.values_mut() {
+        let Core { requests, results_out, .. } = &mut *c;
+        for (request_id, rec) in requests {
             if matches!(
                 rec.state,
                 ReqState::NativeStarted | ReqState::SendPending | ReqState::IdentityPending
             ) {
                 rec.state = ReqState::DeliveryUnknown;
                 unknown_now += 1;
+                if publish_final_outcomes {
+                    results_out.push_back(ResidentNotice::Outcome(SendOutcome::Unknown {
+                        request_id: request_id.clone(),
+                        reason: Some("owner_stopped_with_send_inflight".into()),
+                        late_receipt_possible: false,
+                    }));
+                }
             }
         }
         report.marked_unknown = unknown_now as usize;
@@ -1274,4 +1533,84 @@ impl<A: HostAdapter> Core<A> {
 fn next_token() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod retained_sequence_tests {
+    use super::*;
+    use crate::host_adapter::{HostOp, HostOpResult};
+    struct Host;
+    impl HostAdapter for Host {
+        fn owner_thread_id(&self) -> u64 { 1 }
+        fn current_thread_id(&self) -> u64 { 1 }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
+                HostOp::SendText { .. } => Ok(HostOpResult::Sent { native_id: Some("n".into()) }),
+                _ => panic!("unexpected op"),
+            }
+        }
+    }
+    #[test]
+    fn exhausted_resident_sequence_retains_unassigned_suffix() {
+        let r = Resident::new(Host, ResidentLimits::default());
+        r.bootstrap().unwrap();
+        assert_eq!(r.submit(OwnedRequest::SendText { request_id: "r".into(), wire_seq: 1, timeout_ms: 5000, chat_type: 2, peer_uid: "123".into(), text: "x".into() }), SubmitVerdict::Accepted);
+        r.drain().unwrap();
+        r.core.lock().unwrap().next_notice_id = Some(u64::MAX);
+        let mut sent = Vec::new();
+        assert_eq!(r.forward_retained(|item| { sent.push(item); Ok(()) }), Err(HandoffError::SequenceExhausted(1)));
+        assert_eq!(sent[0].notice_id, u64::MAX);
+        assert_eq!(r.retained_notices(), sent);
+        assert_eq!(r.forward_retained(|_| panic!("must not wrap or send")), Err(HandoffError::SequenceExhausted(0)));
+        let gate = ResultHandoffGate::default();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert_eq!(gate.forward(&r, &tx), Err(HandoffError::SequenceExhausted(0)));
+        assert!(gate.is_closed());
+        assert_eq!(gate.forward(&r, &tx), Err(HandoffError::SequenceExhausted(0)));
+        assert_eq!(r.take_results().len(), 1);
+    }
+    #[test]
+    fn worker_lease_allows_one_concurrent_owner_then_releases() {
+        let resident = std::sync::Arc::new(Resident::new(Host, ResidentLimits::default()));
+        let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let held = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for _ in 0..16 {
+            let resident = resident.clone(); let start = start.clone(); let held = held.clone(); let winners = winners.clone();
+            threads.push(std::thread::spawn(move || {
+                start.wait();
+                let lease = resident.acquire_worker();
+                if lease.is_ok() { winners.fetch_add(1, Ordering::Relaxed); }
+                held.wait();
+                drop(lease);
+            }));
+        }
+        for thread in threads { thread.join().unwrap(); }
+        assert_eq!(winners.load(Ordering::Relaxed), 1);
+        assert!(resident.acquire_worker().is_ok(), "normal exit must release lease");
+    }
+
+    #[test]
+    fn panicking_worker_quarantines_resident_and_blocks_new_worker() {
+        let resident = std::sync::Arc::new(Resident::new(Host, ResidentLimits::default()));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = resident.acquire_worker().unwrap();
+            panic!("synthetic worker panic");
+        }));
+        assert!(caught.is_err());
+        assert!(matches!(resident.acquire_worker(), Err(WorkerLeaseError::Quarantined)));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (_events_tx, events_rx) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (counters, exit) = crate::daemon_client::run_worker(
+            crate::daemon_client::DaemonClientConfig::default(), resident, &|| panic!("must not wake"), rx, events_rx, stop,
+        );
+        assert_eq!(exit, crate::daemon_client::WorkerExit::WorkerQuarantined);
+        assert_eq!(counters.connects, 0);
+    }
+
 }

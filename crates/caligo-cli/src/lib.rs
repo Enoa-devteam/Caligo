@@ -43,6 +43,9 @@ caligo-cli <K1 probe>
                      [--context <bytes>] [--out <report.json>]
   caligo-cli observe-msf --pid <n> [--out <report.json>] [--self-test]
   caligo-cli qq-status [options]
+  caligo-cli qq-surface [options]
+  caligo-cli qq-net-offline [options]
+  caligo-cli qq-net-online [options]
   caligo-cli qq-entry [options]
   caligo-cli qq-entry-stop [options]
   caligo-cli daemon-control --pipe <control-pipe> --auth <token> <action>
@@ -115,6 +118,9 @@ pub fn run(args: &[String], command: &str) -> ExitCode {
         Some("qq-entry") => qqentry::cmd_qq_entry(&args[1..]),
         Some("qq-entry-stop") => qqentry::cmd_qq_entry_stop(&args[1..]),
         Some("qq-status") => qqentry::cmd_qq_status(&args[1..]),
+        Some("qq-surface") => qqentry::cmd_qq_surface(&args[1..]),
+        Some("qq-net-offline") => qqentry::cmd_qq_net_offline(&args[1..]),
+        Some("qq-net-online") => qqentry::cmd_qq_net_online(&args[1..]),
         Some("daemon-control") => cmd_daemon_control(&args[1..]),
         Some("observe-msf") => {
             match observe_msf::cmd_observe_msf(&args[1..]) {
@@ -197,6 +203,48 @@ fn sha256_file(path: &Path) -> Result<(String, u64), String> {
 
 /// 核对 manifest;返回 true 表示全部 hash_checked 模块匹配。
 fn verify_manifest(path: &Path) -> Result<bool, String> {
+    verify_manifest_with_hash_schedule(path, false)
+}
+
+type ModuleHash = Result<(String, u64), String>;
+
+fn parallel_module_hashes(modules: &[ManifestModule]) -> Result<Vec<Option<ModuleHash>>, String> {
+    let mut tasks: Vec<_> = modules.iter().enumerate().filter(|(_, m)| m.hash_checked).collect();
+    let mut hashes = vec![None; modules.len()];
+    let worker_count = tasks.len().min(4).min(
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+    );
+    if worker_count <= 1 {
+        for (index, module) in tasks {
+            hashes[index] = Some(sha256_file(Path::new(&module.path)));
+        }
+        return Ok(hashes);
+    }
+
+    // Start the largest files first. Results are reported in manifest order.
+    tasks.sort_unstable_by_key(|(_, module)| std::cmp::Reverse(module.size_bytes));
+    std::thread::scope(|scope| {
+        let tasks = &tasks;
+        let workers = (0..worker_count)
+            .map(|worker| {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
+                    tasks.iter().skip(worker).step_by(worker_count).map(|(index, module)| {
+                        (*index, sha256_file(Path::new(&module.path)))
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("start manifest hash worker: {error}"))?;
+        for worker in workers {
+            for (index, result) in worker.join().map_err(|_| "manifest hash worker panicked")? {
+                hashes[index] = Some(result);
+            }
+        }
+        Ok(hashes)
+    })
+}
+
+fn verify_manifest_with_hash_schedule(path: &Path, parallel: bool) -> Result<bool, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let manifest: Manifest =
         serde_json::from_str(&raw).map_err(|e| format!("parse manifest: {e}"))?;
@@ -216,13 +264,18 @@ fn verify_manifest(path: &Path) -> Result<bool, String> {
             policy.auto_multi_version.unwrap_or(false)
         );
     }
+    let mut hashes = if parallel { Some(parallel_module_hashes(&manifest.modules)?) } else { None };
     let mut all_ok = true;
-    for m in &manifest.modules {
+    for (index, m) in manifest.modules.iter().enumerate() {
         if !m.hash_checked {
             println!("[SKIP   ] {} ({})", m.path, m.role);
             continue;
         }
-        match sha256_file(Path::new(&m.path)) {
+        let result = match &mut hashes {
+            Some(hashes) => hashes[index].take().ok_or("manifest module hash missing")?,
+            None => sha256_file(Path::new(&m.path)),
+        };
+        match result {
             Ok((hex, size)) => {
                 let hash_ok = hex.eq_ignore_ascii_case(&m.sha256);
                 let size_ok = size == m.size_bytes;
@@ -2239,7 +2292,7 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
         i += 1;
     }
     let (Some(pipe), action) = (pipe, cmd.first().map(String::as_str)) else {
-        eprintln!("daemon-control --pipe <control-pipe> --auth <token> <health|stop|query <id>|drain [n]>");
+        eprintln!("daemon-control --pipe <control-pipe> --auth <token> <health|stop|query <id>|drain [n]|revoke-network|revoke-identity>");
         return ExitCode::FAILURE;
     };
     // 连接 + Hello(重试等待 server 就绪)。短名自动补管道根(规避跨 shell
@@ -2276,6 +2329,12 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
         Some("drain") => ControlMsg::DrainEvents {
             max: cmd.get(1).and_then(|s| s.parse().ok()).unwrap_or(16),
         },
+        Some("revoke-network") => ControlMsg::RevokeSession {
+            reason: "network_changed".into(),
+        },
+        Some("revoke-identity") => ControlMsg::RevokeSession {
+            reason: "identity_changed".into(),
+        },
         // D7-b:发送链路探针。格式:send <request-id> <kind> <peer> <text...>
         // LAB/现场验证 Dispatch→SendResult 全链;真实业务发送属 D9 准入。
         Some("send") => {
@@ -2308,6 +2367,12 @@ fn cmd_daemon_control(args: &[String]) -> ExitCode {
             match action {
                 Some("stop") if matches!(reply, CoreToControlMsg::Stopped { .. }) => ExitCode::SUCCESS,
                 Some("health") if matches!(reply, CoreToControlMsg::HealthAck { .. }) => ExitCode::SUCCESS,
+                Some("revoke-network") | Some("revoke-identity")
+                    if matches!(reply, CoreToControlMsg::RevokeAck { accepted: true, .. }) =>
+                {
+                    ExitCode::SUCCESS
+                }
+                Some("revoke-network") | Some("revoke-identity") => ExitCode::from(2),
                 _ => ExitCode::SUCCESS,
             }
         }

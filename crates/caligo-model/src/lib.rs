@@ -318,6 +318,8 @@ impl ActionState {
 pub enum RejectReason {
     /// 生命周期未到 Active。
     NotActive { phase: Phase },
+    /// The current account actor has sealed admission for new sends.
+    SendAdmissionClosed,
     /// 会话身份过期/不匹配(宿主代次、账号或 session_generation)。
     SessionStale,
     /// 连接代次过期(旧连接上的请求)。

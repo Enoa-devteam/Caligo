@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 
 /// bridge C ABI 版本。导出函数集合或签名变化时递增。
-pub const BRIDGE_ABI_VERSION: u32 = 1;
+pub const BRIDGE_ABI_VERSION: u32 = 2;
 /// bridge 侧 IPC 协议版本,须与 `caligo-core::ipc::PROTOCOL_VERSION` 一致
 /// (由 caligo-cli 的测试交叉断言)。
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -74,6 +74,8 @@ mod query_diagnostics;
 mod receive_diagnostics;
 pub mod register;
 pub mod resident;
+#[cfg(feature = "research")]
+pub mod stop_observation;
 #[cfg(feature = "research")]
 pub mod uid_map_probe;
 #[cfg(feature = "research")]
@@ -634,6 +636,17 @@ pub mod qq_entry_code {
     pub const ERR_SHUTDOWN_NOT_READY: u32 = 0x20;
     /// 关闭协议:超时(句柄保留,不冒充成功)。
     pub const ERR_SHUTDOWN_TIMEOUT: u32 = 0x21;
+    /// Pump closed, but worker teardown or result acknowledgement is incomplete.
+    /// Resident memory remains retained; this does not establish native drain.
+    pub const ERR_SHUTDOWN_PENDING_RESULTS: u32 = 0x22;
+    /// Owner hook unwound or its mutex was poisoned. Roots remain quarantined;
+    /// no further hook/native cleanup is attempted in this host generation.
+    pub const ERR_OWNER_HOOK_FAULT: u32 = 0x23;
+    /// Formal owner cleanup returned Err; roots remain retained until host exit.
+    /// Cleanup is not retried, and this is distinct from hook unwind/poison.
+    pub const ERR_OWNER_CLEANUP_FAILED: u32 = 0x24;
+    /// Research observation failed; owner and snapshot roots stay quarantined.
+    pub const ERR_STOP_OBSERVATION_FAILED: u32 = 0x25;
 }
 
 /// 首入参数块(加载器写入;指针字段位于本进程)。
@@ -716,6 +729,10 @@ pub unsafe extern "system" fn caligo_qq_entry_bootstrap(ctx: *mut QqEntryCtx) ->
             EntryError::UvInitFailed { .. } => qq_entry_code::ERR_UV_INIT,
             EntryError::Timeout => qq_entry_code::ERR_TIMEOUT,
             EntryError::AlreadyBootstrapped => qq_entry_code::ERR_ALREADY,
+            EntryError::PendingResults => qq_entry_code::ERR_SHUTDOWN_PENDING_RESULTS,
+            EntryError::OwnerHookFault => qq_entry_code::ERR_OWNER_HOOK_FAULT,
+            EntryError::OwnerCleanupFailed => qq_entry_code::ERR_OWNER_CLEANUP_FAILED,
+            EntryError::StopObservationFailed => qq_entry_code::ERR_STOP_OBSERVATION_FAILED,
         },
     }
 }
@@ -777,20 +794,105 @@ pub unsafe extern "system" fn caligo_qq_uid_map_probe(ctx: *mut QqUidMapProbeCtx
 #[no_mangle]
 pub extern "system" fn caligo_qq_entry_shutdown(wait_ms: u32) -> u32 {
     use qq_entry::EntryError;
-    // 先停 daemon worker(若已启动):关闭协议不与管道循环竞争。
-    if let Some(startup) = qq_entry::peek_daemon_startup() {
-        startup
-            .stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    match qq_entry::shutdown(wait_ms) {
+    match qq_entry::shutdown_managed(wait_ms) {
         Ok(()) => {
             qq_entry::append_stage_simple("shutdown", true, "closed via owner pump");
             qq_entry_code::OK
         }
         Err(EntryError::AlreadyBootstrapped) => qq_entry_code::ERR_SHUTDOWN_NOT_READY,
         Err(EntryError::Timeout) => qq_entry_code::ERR_SHUTDOWN_TIMEOUT,
+        Err(EntryError::PendingResults) => qq_entry_code::ERR_SHUTDOWN_PENDING_RESULTS,
+        Err(EntryError::OwnerHookFault) => qq_entry_code::ERR_OWNER_HOOK_FAULT,
+        Err(EntryError::OwnerCleanupFailed) => qq_entry_code::ERR_OWNER_CLEANUP_FAILED,
+        Err(EntryError::StopObservationFailed) => qq_entry_code::ERR_STOP_OBSERVATION_FAILED,
         Err(_) => qq_entry_code::ERR_SHUTDOWN_TIMEOUT,
+    }
+}
+
+/// Validate the timing contract shared by the CLI and the observation export.
+pub fn validate_stop_observation_config(duration_ms: u32, wait_ms: u32) -> bool {
+    (1..=5_000).contains(&duration_ms) && wait_ms <= 30_000 && wait_ms >= duration_ms + 250
+}
+
+/// Opt in to observation while stopping the current formal bridge session.
+/// On Windows x64, `packed` holds duration_ms in the low 32 bits and wait_ms
+/// in the high 32 bits. The caller only reads cached identity metadata. Native
+/// samples run on the owner pump. Default builds reject the request immediately.
+#[no_mangle]
+pub extern "system" fn caligo_qq_entry_shutdown_observe(packed: usize) -> u32 {
+    #[cfg(not(feature = "research"))]
+    {
+        let _ = packed;
+        gate::ERR_RESEARCH_DISABLED
+    }
+    #[cfg(feature = "research")]
+    {
+        use qq_entry_code::{ERR_SHUTDOWN_NOT_READY, ERR_STOP_OBSERVATION_FAILED};
+
+        let packed = packed as u64;
+        let duration_ms = packed as u32;
+        let wait_ms = (packed >> 32) as u32;
+        if !validate_stop_observation_config(duration_ms, wait_ms) {
+            return ERR_STOP_OBSERVATION_FAILED;
+        }
+        let account = {
+            let Ok(config) = DAEMON_CFG.lock() else {
+                return ERR_STOP_OBSERVATION_FAILED;
+            };
+            let Some(startup) = config.as_ref() else {
+                return ERR_SHUTDOWN_NOT_READY;
+            };
+            startup.account.clone()
+        };
+        let host_nonce = daemon_client::host_instance_nonce();
+        let Some(identity) = qq_v8::stop_observation_identity(&account, host_nonce) else {
+            return ERR_STOP_OBSERVATION_FAILED;
+        };
+        if qq_entry::arm_stop_observation_with_result_drain(
+            identity, duration_ms.into(), wait_ms.into(),
+        ).is_err() {
+            return ERR_STOP_OBSERVATION_FAILED;
+        }
+        caligo_qq_entry_shutdown(wait_ms)
+    }
+}
+
+/// Research-only read-only surface probe: request one owner-tick enumeration
+/// for the R2/R3 notification work. Never sends or registers listeners.
+#[no_mangle]
+pub extern "system" fn caligo_qq_surface_probe() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_surface_probe() { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
+    }
+}
+
+/// Research-only synthetic session network transition (offline/online).
+#[no_mangle]
+pub extern "system" fn caligo_qq_net_offline() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_network_toggle(false) { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn caligo_qq_net_online() -> u32 {
+    #[cfg(feature = "research")]
+    {
+        if crate::qq_entry::request_network_toggle(true) { 0 } else { 1 }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        2
     }
 }
 
@@ -804,9 +906,14 @@ pub mod daemon_client_code {
     pub const ERR_SPAWN: u32 = 5;
 }
 
-/// daemon client 的 JSON 配置(caligo-cli 写入):
-/// `{"pipe_name":"...","auth_token":"...","session_generation":1,"account":"...","module_baseline":"..."}`
-static DAEMON_CFG: std::sync::Mutex<Option<qq_entry::DaemonStartup>> = std::sync::Mutex::new(None);
+struct DaemonStartupConfig {
+    _startup: qq_entry::DaemonStartup,
+    #[cfg(feature = "research")]
+    account: String,
+}
+
+/// Set only after the formal daemon worker has spawned successfully.
+static DAEMON_CFG: std::sync::Mutex<Option<DaemonStartupConfig>> = std::sync::Mutex::new(None);
 
 /// 启动常驻 daemon 客户端(bootstrap 成功后调用;每代次一次)。
 /// worker:自有线程,只做管道 I/O + resident 提交(计划 §3.1);
@@ -907,7 +1014,26 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
         QqOwnerAdapter::new(handle, account.clone()),
         ResidentLimits::default(),
     ));
-    let (tx, rx) = std::sync::mpsc::channel::<resident::ResidentNotice>();
+    let worker_finished = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel::<resident::RetainedNotice>();
+    #[cfg(not(feature = "research"))]
+    qq_entry::retain_daemon_until_settled(resident.clone(), worker_finished.clone());
+    #[cfg(not(feature = "research"))]
+    let notice_handoff = resident::ResultHandoffGate::default();
+    #[cfg(feature = "research")]
+    let notice_handoff = Arc::new(resident::ResultHandoffGate::default());
+    #[cfg(feature = "research")]
+    {
+        qq_entry::retain_daemon_for_result_drain(
+            resident.clone(), worker_finished.clone(), stop.clone(), notice_handoff.clone(), tx.clone(),
+        );
+        let observed_account = account.clone();
+        let observed_nonce = daemon_client::host_instance_nonce();
+        if qq_entry::install_stop_observation_driver(
+            Box::new(move || qq_v8::stop_observation_identity(&observed_account, observed_nonce)),
+            Box::new(qq_v8::sample_stopped_observations),
+        ).is_err() { return c::ERR_BAD_CFG; }
+    }
     let (etx, erx) = std::sync::mpsc::channel::<resident::OwnedEvent>();
     // resident 初始化必须在 owner 线程执行(计划 §5.1:宿主 API 前的
     // owner 检查不是形式 —— 远程线程调用会被正确拒绝,D7-b 现场实证)。
@@ -922,12 +1048,20 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             host_nonce: daemon_client::host_instance_nonce(),
             wrapper_session: String::new(),
         };
+        // An uncertain acknowledgement must be retried before taking a new
+        // result snapshot; it never causes the QQ send to be replayed.
+        let pending_result_ack: std::sync::Mutex<Option<crate::qq_v8::PollResultAck>> =
+            std::sync::Mutex::new(None);
+        // Full retention pauses dispatch; closed channel or exhausted IDs latch.
         qq_entry::install_drain_hook(Box::new(move || {
-            if owner_stop.load(Ordering::Acquire) {
-                r.set_bridge_scope(None);
-                r.drain_queries();
-                if let Err(error) = r.close() {
-                    qq_entry::append_stage_simple("daemon_owner_close", false, &format!("{error:?}"));
+            if owner_stop.load(Ordering::Acquire) || qq_entry::owner_stop_requested() {
+                return qq_entry::close_daemon_owner(&r);
+            }
+            if notice_handoff.is_closed() { return 0; }
+            // Flush the existing suffix before new work or JS acknowledgements.
+            if notice_handoff.forward(&r, &tx).is_err() {
+                if notice_handoff.is_closed() {
+                    qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_exhausted_retained");
                 }
                 return 0;
             }
@@ -947,64 +1081,179 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
                 }
             }
             let _ = r.drain();
-            for notice in r.take_results() {
-                let _ = tx.send(notice);
+            if notice_handoff.forward(&r, &tx).is_err() {
+                // Preserve the suffix and defer JS acknowledgement until handoff.
+                if notice_handoff.is_closed() {
+                    qq_entry::append_stage_simple("result_notice_channel", false, "closed_or_exhausted_retained");
+                }
+                return 0;
             }
+            // Read-only surface probe for the R2/R3 notification work. Run it
+            // only after a poll proved a usable JS context on this tick.
+            let mut poll_context_ok = false;
             // D8 轮询:排空 JS 接收环 → owned 事件注入(每泵一轮;
             // NOT_ARMED/未就绪静默跳过,Err 计数不吞)。
             if OWNER_INIT.load(Ordering::Relaxed) {
-                match crate::qq_v8::poll_listener_json() {
-                    Ok(json) if !json.starts_with("NOT_ARMED") => {
-                        let mut binding = wrapper_binding.clone();
-                        binding.wrapper_session =
-                            crate::qq_v8::listener_session().unwrap_or_default();
-                        if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
-                            // D9:sendResults 回收(fired 的 Promise 结果)。
-                            {
-                                let sr = &batch.send_results;
-                                let mut done: Vec<(String, String)> = Vec::new();
-                                let mut rejected: Vec<(String, String)> = Vec::new();
-                                let mut unknown: Vec<(String, String)> = Vec::new();
-                                for (request_id, st) in sr {
-                                    let status =
-                                        st.get("status").and_then(|x| x.as_str()).unwrap_or("");
-                                    if status == "done" {
-                                        let nid = st
-                                            .get("msgId")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        done.push((request_id.clone(), nid));
-                                    } else if status == "unknown" {
-                                        let why = st
-                                            .get("reason")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("send outcome unknown")
-                                            .to_string();
-                                        unknown.push((request_id.clone(), why));
-                                    } else if status == "rejected" {
-                                        let why = st
-                                            .get("error")
-                                            .and_then(|x| x.as_str())
-                                            .unwrap_or("promise rejected")
-                                            .to_string();
-                                        rejected.push((request_id.clone(), why));
-                                    }
-                                }
-                                if !done.is_empty() || !rejected.is_empty() || !unknown.is_empty() {
-                                    r.complete_sends(&done, &rejected, &unknown);
+                // Never block or reenter while the V8 acknowledgement is active.
+                if let Ok(mut pending_result_ack) = pending_result_ack.try_lock() {
+                    let ack_ready = crate::qq_v8::advance_poll_result_ack(&mut pending_result_ack, |item| {
+                        matches!(crate::qq_v8::ack_poll_result(item), Ok(ref value) if value == "ACKED")
+                    });
+                    if !ack_ready {
+                        static ACK_ERR_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                        let n = ACK_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 { qq_entry::append_stage_simple("poll_receipt_ack", false, "retry_pending"); }
+                    }
+                    let session = if ack_ready { crate::qq_v8::listener_session() } else { None }
+                        .filter(|s| !s.is_empty() && s.len() <= 128);
+                    let poll = session.as_deref().map(crate::qq_v8::poll_listener_bound_json);
+                    match (session, poll) {
+                        (Some(session), Some(Ok(json))) if !json.starts_with("NOT_ARMED") => {
+                            poll_context_ok = true;
+                            let mut binding = wrapper_binding.clone();
+                            binding.wrapper_session = session;
+                            if let Ok(batch) = r.ingest_wrapper_batch(&json, &binding) {
+                                // D9:sendResults 回收(fired 的 Promise 结果)。
+                                {
+                                    let sr = &batch.send_results;
+                                    let needs_receipt = sr.values().any(|st| matches!(
+                                        st.get("status").and_then(|v| v.as_str()),
+                                        Some("done" | "rejected" | "unknown")
+                                    ));
+                                    let receipt = crate::qq_v8::poll_result_receipt(&json).ok().flatten();
+                                    if !needs_receipt || receipt.is_some() {
+                                        let mut done: Vec<(String, String)> = Vec::new();
+                                        let mut rejected: Vec<(String, String)> = Vec::new();
+                                        let mut unknown: Vec<(String, String)> = Vec::new();
+                                        for (request_id, st) in sr {
+                                            let status =
+                                                st.get("status").and_then(|x| x.as_str()).unwrap_or("");
+                                            if status == "done" {
+                                                let nid = st
+                                                    .get("msgId")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                done.push((request_id.clone(), nid));
+                                            } else if status == "unknown" {
+                                                let why = st
+                                                    .get("reason")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("send outcome unknown")
+                                                    .to_string();
+                                                unknown.push((request_id.clone(), why));
+                                            } else if status == "rejected" {
+                                                let why = st
+                                                    .get("error")
+                                                    .and_then(|x| x.as_str())
+                                                    .unwrap_or("promise rejected")
+                                                    .to_string();
+                                                rejected.push((request_id.clone(), why));
+                                            }
+                                        }
+                                        let submitted = done.len() + rejected.len() + unknown.len();
+                                        let accepted = if submitted > 0 {
+                                            r.complete_sends(&done, &rejected, &unknown)
+                                        } else { Vec::new() };
+                                        let unmatched = accepted.len() < submitted;
+                                        if let Some(receipt) = receipt {
+                                            *pending_result_ack = Some(crate::qq_v8::PollResultAck {
+                                                session: binding.wrapper_session.clone(), receipt, keys: accepted,
+                                            });
+                                        }
+                                        if unmatched {
+                                            static UNMATCHED_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                            let n = UNMATCHED_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            if n % 20 == 0 {
+                                                qq_entry::append_stage_simple("poll_result_unmatched", false, "retained");
+                                                match crate::qq_v8::read_result_pressure(&binding.wrapper_session) {
+                                                    Ok(Some(detail)) => qq_entry::append_stage_simple("poll_result_pressure", true, &detail),
+                                                    _ => qq_entry::append_stage_simple("poll_result_pressure", false, "unknown"),
+                                                }
+                                            }
+                                        }
+                                    } // Invalid or missing receipts leave results in JS.
                                 }
                             }
                         }
+                        (Some(_), Some(Err(e))) => {
+                            // 首次/每 20 次记录轮询失败变体(不吞)。
+                            static POLL_ERR_N: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(0);
+                            let n = POLL_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if n % 20 == 0 {
+                                qq_entry::append_stage_simple("poll_err", false, &format!("{e:?}"));
+                            }
+                        }
+                        _ => {}
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        // 首次/每 20 次记录轮询失败变体(不吞)。
-                        static POLL_ERR_N: std::sync::atomic::AtomicU64 =
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok && qq_entry::take_surface_probe() {
+                match crate::qq_v8::surface_probe() {
+                    Ok(detail) => qq_entry::append_stage_simple("surface_probe", true, &detail),
+                    Err(code) => qq_entry::append_stage_simple(
+                        "surface_probe", false, &format!("unavailable:{code}")),
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                let mode = qq_entry::take_network_toggle();
+                if mode != 0 {
+                    match crate::qq_v8::toggle_network(mode == 2) {
+                        Ok(result) if result.starts_with("OK:") =>
+                            qq_entry::append_stage_simple("network_toggle", true, &result),
+                        Ok(result) => qq_entry::append_stage_simple("network_toggle", false, &result),
+                        Err(code) => qq_entry::append_stage_simple(
+                            "network_toggle", false, &format!("unavailable:{code}")),
+                    }
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                match crate::qq_v8::drain_network_status() {
+                    Ok(Some(detail)) => qq_entry::append_stage_simple("network_status", true, &detail),
+                    Ok(None) => {}
+                    Err(code) => {
+                        static NET_STATUS_ERR: std::sync::atomic::AtomicU64 =
                             std::sync::atomic::AtomicU64::new(0);
-                        let n = POLL_ERR_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let n = NET_STATUS_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if n % 20 == 0 {
-                            qq_entry::append_stage_simple("poll_err", false, &format!("{e:?}"));
+                            qq_entry::append_stage_simple(
+                                "network_status", false, &format!("unavailable:{code}"));
+                        }
+                    }
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                match crate::qq_v8::drain_identity_events() {
+                    Ok(Some(detail)) => qq_entry::append_stage_simple("identity_state", true, &detail),
+                    Ok(None) => {}
+                    Err(code) => {
+                        static ID_OBS_ERR: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let n = ID_OBS_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 {
+                            qq_entry::append_stage_simple(
+                                "identity_state", false, &format!("unavailable:{code}"));
+                        }
+                    }
+                }
+            }
+            #[cfg(feature = "research")]
+            if poll_context_ok {
+                match crate::qq_v8::drain_network_events() {
+                    Ok(Some(detail)) => qq_entry::append_stage_simple("network_state", true, &detail),
+                    Ok(None) => {}
+                    Err(code) => {
+                        static NET_OBS_ERR: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let n = NET_OBS_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n % 20 == 0 {
+                            qq_entry::append_stage_simple(
+                                "network_state", false, &format!("unavailable:{code}"));
                         }
                     }
                 }
@@ -1015,6 +1264,11 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
             0
         }));
     }
+    let startup = DaemonStartupConfig {
+        _startup: qq_entry::DaemonStartup { stop: stop.clone() },
+        #[cfg(feature = "research")]
+        account: account.clone(),
+    };
     let cfg = daemon_client::DaemonClientConfig {
         pipe_name,
         auth_token,
@@ -1031,13 +1285,19 @@ pub unsafe extern "system" fn caligo_qq_daemon_client_start(cfg_json_ptr: *const
     let spawned = std::thread::Builder::new()
         .name("caligo-daemon-client".into())
         .spawn(move || {
-            let (_counters, _exit) =
+            let (_counters, exit) =
                 daemon_client::run_worker(cfg, resident, &wake, rx, erx, worker_stop);
+            if matches!(exit, daemon_client::WorkerExit::WorkerAlreadyRunning | daemon_client::WorkerExit::WorkerQuarantined) {
+                qq_entry::append_stage_simple("daemon_worker", false, "worker_lease_rejected");
+            }
+            // Published only after run_worker has dropped receivers, outbox and
+            // its lease; a missing completion does not prove safe release.
+            worker_finished.store(true, Ordering::Release);
         });
     if spawned.is_err() {
         return c::ERR_SPAWN;
     }
-    *guard = Some(qq_entry::DaemonStartup { stop });
+    *guard = Some(startup);
     c::OK
 }
 

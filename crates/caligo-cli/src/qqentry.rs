@@ -8,7 +8,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use super::{verify_manifest, winutil};
+use super::{verify_manifest, verify_manifest_with_hash_schedule, winutil};
 
 #[derive(Debug, Default, Clone)]
 struct QqEntryArgs {
@@ -20,6 +20,7 @@ struct QqEntryArgs {
     env: Option<usize>,
     wait_s: u32,
     wait_ms: u32,
+    stop_observe_ms: Option<u32>,
     confirmed: bool,
     /// D7b:daemon 客户端接线(可选;bootstrap 成功后启动)。
     daemon_pipe: Option<String>,
@@ -71,7 +72,15 @@ fn parse_args(args: &[String]) -> Result<QqEntryArgs, String> {
                 });
             }
             "--wait-s" => a.wait_s = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(600),
-            "--wait-ms" => a.wait_ms = next(&mut i).and_then(|s| s.parse().ok()).unwrap_or(10_000),
+            "--wait-ms" => {
+                a.wait_ms = next(&mut i).ok_or("--wait-ms requires milliseconds")?
+                    .parse::<u32>().map_err(|_| "--wait-ms requires unsigned milliseconds")?;
+            }
+            "--stop-observe-ms" => {
+                if a.stop_observe_ms.is_some() { return Err("duplicate --stop-observe-ms".into()); }
+                a.stop_observe_ms = Some(next(&mut i).ok_or("--stop-observe-ms requires milliseconds")?
+                    .parse::<u32>().map_err(|_| "--stop-observe-ms requires unsigned milliseconds")?);
+            }
             "--confirm-designated-test-instance" => a.confirmed = true,
             "--daemon-pipe" => a.daemon_pipe = next(&mut i),
             "--daemon-auth" => a.daemon_auth = next(&mut i),
@@ -124,6 +133,10 @@ pub enum QqEntryExit {
     Already,
     ShutdownNotReady,
     ShutdownTimeout,
+    ShutdownPendingResults,
+    OwnerHookFault,
+    OwnerCleanupFailed,
+    StopObservationFailed,
     Unknown,
 }
 
@@ -143,13 +156,17 @@ fn map_code(code: u32) -> QqEntryExit {
         c::ERR_ALREADY => QqEntryExit::Already,
         c::ERR_SHUTDOWN_NOT_READY => QqEntryExit::ShutdownNotReady,
         c::ERR_SHUTDOWN_TIMEOUT => QqEntryExit::ShutdownTimeout,
+        c::ERR_SHUTDOWN_PENDING_RESULTS => QqEntryExit::ShutdownPendingResults,
+        c::ERR_OWNER_HOOK_FAULT => QqEntryExit::OwnerHookFault,
+        c::ERR_OWNER_CLEANUP_FAILED => QqEntryExit::OwnerCleanupFailed,
+        c::ERR_STOP_OBSERVATION_FAILED => QqEntryExit::StopObservationFailed,
         _ => QqEntryExit::Unknown,
     }
 }
 
 fn usage() {
     eprintln!(
-        "正式托管：qq-entry --pid <n> --created-filetime <n> --bridge <dll> --manifest <json> --report <jsonl> --daemon-pipe <name> --daemon-auth-file <path> --daemon-account <uin> --confirm-designated-test-instance\n      全部正式查询/停止也需提供 --created-filetime。\n研究探针：qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] (--current-login | --refresh-current-profile) --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance"
+        "正式托管：qq-entry --pid <n> --created-filetime <n> --bridge <dll> --manifest <json> --report <jsonl> --daemon-pipe <name> --daemon-auth-file <path> --daemon-account <uin> --confirm-designated-test-instance\n      全部正式查询/停止也需提供 --created-filetime。\n研究探针：qq-entry --pid <n> --bridge <dll> --manifest <json> --report <jsonl> --env <hex> [--wait-s n] --confirm-designated-test-instance\n      qq-entry [同上] --uid-map-uin <decimal> --uid-map-result <local-evidence.json> [--uid-map-profile-service] [--uid-map-timeout-ms n]\n      qq-entry [同上] --uid-map-surface-only --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry [同上] (--current-login | --refresh-current-profile) --uid-map-result <local-evidence.json> [--uid-map-timeout-ms n]\n      qq-entry-stop --pid <n> --bridge <dll> --manifest <json> --report <jsonl> [--wait-ms n] --confirm-designated-test-instance\n      research-only: qq-entry-stop [同上，须 --created-filetime] --stop-observe-ms <1..5000> --wait-ms <observe+250..30000>"
     );
 }
 
@@ -180,6 +197,21 @@ fn gates(
             return Err(ExitCode::FAILURE);
         }
     };
+    let managed = a.created_filetime.is_some();
+    if !managed && !caligo_bridge::gate::research_enabled() {
+        eprintln!("{}", caligo_bridge::gate::DISABLED_NOTICE);
+        return Err(ExitCode::from(3));
+    }
+    if let Some(duration) = a.stop_observe_ms {
+        if !caligo_bridge::gate::research_enabled() {
+            eprintln!("{}", caligo_bridge::gate::DISABLED_NOTICE);
+            return Err(ExitCode::from(3));
+        }
+        if need_env || !managed || !caligo_bridge::validate_stop_observation_config(duration, a.wait_ms) {
+            eprintln!("[qq-entry] --stop-observe-ms requires managed research stop, 1..5000ms and wait >= duration+250ms, <=30000ms");
+            return Err(ExitCode::FAILURE);
+        }
+    }
     let diagnostic = a.uid_map_uin.is_some() || a.uid_map_surface_only || a.uid_map_profile_service
         || a.current_login || a.refresh_current_profile || a.uid_map_result.is_some();
     let daemon_options = a.daemon_pipe.is_some() || a.daemon_auth.is_some()
@@ -277,7 +309,15 @@ fn gates(
         return Err(ExitCode::FAILURE);
     }
     println!("[gate 1] 核对模块基线 …");
-    match verify_manifest(&manifest) {
+    let verified = if a.stop_observe_ms.is_some() {
+        let started = std::time::Instant::now();
+        let result = verify_manifest_with_hash_schedule(&manifest, true);
+        println!("[stop manifest] elapsed_us={}", started.elapsed().as_micros());
+        result
+    } else {
+        verify_manifest(&manifest)
+    };
+    match verified {
         Ok(true) => println!("[gate 1] PASS"),
         Ok(false) => {
             eprintln!("[gate 1] REJECT — 基线不匹配,拒绝接入(不猜偏移)");
@@ -747,7 +787,7 @@ pub fn cmd_qq_entry(args: &[String]) -> ExitCode {
         } else {
             false
         };
-        let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000, extra.created_filetime) };
+        let shutdown = unsafe { remote_shutdown(pid, remote_base, 10_000, extra.created_filetime, None) };
         let shutdown_ok = match shutdown {
             Ok(code) if map_code(code) == QqEntryExit::Ok => {
                 println!(
@@ -946,6 +986,10 @@ fn select_mapped_bridge(bridge: &Path, modules: &[winutil::ModuleInfo]) -> Resul
 
 /// QQ 内 worker 计数取证:远程调用 caligo_qq_daemon_status → 打印报告尾部。
 pub fn cmd_qq_status(args: &[String]) -> ExitCode {
+    if args.iter().any(|arg| arg == "--stop-observe-ms") {
+        eprintln!("[qq-status] --stop-observe-ms is only valid for qq-entry-stop");
+        return ExitCode::FAILURE;
+    }
     let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
         Ok(v) => v,
         Err(c) => return c,
@@ -970,8 +1014,122 @@ pub fn cmd_qq_status(args: &[String]) -> ExitCode {
     if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) }
 }
 
+/// Read-only R2/R3 surface probe: trigger one owner-tick enumeration and print
+/// the bounded `surface_probe` report line. It never sends or registers a
+/// listener; the probe only records property names and typeof values.
+pub fn cmd_qq_surface(args: &[String]) -> ExitCode {
+    if args.iter().any(|arg| arg == "--stop-observe-ms") {
+        eprintln!("[qq-surface] --stop-observe-ms is only valid for qq-entry-stop");
+        return ExitCode::FAILURE;
+    }
+    let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[qq-surface] 已映射 bridge 校验失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The command only requests an owner tick; quiet ticks can lack a JS
+    // context, so retry a bounded number of times and print the last result.
+    let mut last_line: Option<String> = None;
+    let mut ok = false;
+    for _ in 0..30 {
+        match unsafe {
+            remote_export(pid, remote_base, "caligo_qq_surface_probe", extra.created_filetime)
+        } {
+            Ok(0) => {}
+            Ok(code) => {
+                eprintln!("[qq-surface] request exit={code:#x}");
+                return ExitCode::from(2);
+            }
+            Err(e) => {
+                eprintln!("[qq-surface] {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Ok(text) = std::fs::read_to_string(&report) {
+            for line in text.lines().filter(|line| line.contains("\"stage\":\"surface_probe\"")) {
+                if line.contains("\"ok\":true") { ok = true; }
+                last_line = Some(line.to_string());
+            }
+        }
+        if ok { break; }
+    }
+    if let Some(line) = &last_line {
+        println!("{line}");
+    }
+    if ok { ExitCode::SUCCESS } else { ExitCode::from(2) }
+}
+
+/// Research-only synthetic session network transition (offline/online).
+pub fn cmd_qq_net_offline(args: &[String]) -> ExitCode {
+    cmd_qq_network(args, false)
+}
+
+pub fn cmd_qq_net_online(args: &[String]) -> ExitCode {
+    cmd_qq_network(args, true)
+}
+
+fn cmd_qq_network(args: &[String], online: bool) -> ExitCode {
+    let name = if online { "qq-net-online" } else { "qq-net-offline" };
+    if args.iter().any(|arg| arg == "--stop-observe-ms") {
+        eprintln!("[{name}] --stop-observe-ms is only valid for qq-entry-stop");
+        return ExitCode::FAILURE;
+    }
+    let (pid, bridge, report, _env, _ws, _wm, extra, _entry_lock) = match gates(args, false) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let remote_base = match existing_bridge_base(pid, &bridge) {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("[{name}] 已映射 bridge 校验失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let export = if online { "caligo_qq_net_online" } else { "caligo_qq_net_offline" };
+    match unsafe { remote_export(pid, remote_base, export, extra.created_filetime) } {
+        Ok(0) => {}
+        Ok(code) => {
+            eprintln!("[{name}] request exit={code:#x}");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("[{name}] {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let mut last_line: Option<String> = None;
+    if let Ok(text) = std::fs::read_to_string(&report) {
+        for line in text.lines().filter(|line| line.contains("\"stage\":\"network_toggle\"")) {
+            last_line = Some(line.to_string());
+        }
+    }
+    if let Some(line) = &last_line {
+        println!("{line}");
+    }
+    let ok = last_line.as_deref().is_some_and(|line| line.contains("\"ok\":true"));
+    if ok { ExitCode::SUCCESS } else { ExitCode::from(2) }
+}
+
 /// SAFETY: 前置:bridge 已加载。
 unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u64>) -> Result<u32, String> {
+    remote_export(pid, remote_base, "caligo_qq_daemon_status", expected_created)
+}
+
+/// SAFETY: bridge 已加载; export 属于本 bridge。
+unsafe fn remote_export(
+    pid: u32,
+    remote_base: usize,
+    export: &str,
+    expected_created: Option<u64>,
+) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
         CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
@@ -996,7 +1154,7 @@ unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u
             CloseHandle(proc_h);
             return Err(error);
         }
-        let addr = match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_daemon_status")
+        let addr = match winutil::read_remote_export(proc_h, remote_base, export)
         {
             Ok(Some(a)) => a,
             Ok(None) => {
@@ -1032,7 +1190,7 @@ unsafe fn remote_status(pid: u32, remote_base: usize, expected_created: Option<u
         CloseHandle(thread);
         CloseHandle(proc_h);
         if wr != 0 {
-            return Err(format!("status wait failed: code {wr:#x}"));
+            return Err(format!("{export} wait failed: code {wr:#x}"));
         }
         Ok(code)
     }
@@ -1385,7 +1543,7 @@ pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
     };
     // SAFETY: shutdown 导出签名为 extern "system" fn(u32);远程线程首参
     // 经 rcx 到达,u32 读低 32 位即 wait_ms(值语义,不解引用)。
-    let code = unsafe { remote_shutdown(pid, remote_base, wait_ms, extra.created_filetime) };
+    let code = unsafe { remote_shutdown(pid, remote_base, wait_ms, extra.created_filetime, extra.stop_observe_ms) };
     let code = match code {
         Ok(c) => c,
         Err(e) => {
@@ -1402,12 +1560,28 @@ pub fn cmd_qq_entry_stop(args: &[String]) -> ExitCode {
             eprintln!("[qq-entry-stop] 关闭超时:句柄保留(不冒充成功);按 §6.7 属 Quarantined 候选");
             ExitCode::from(2)
         }
+        QqEntryExit::ShutdownPendingResults => {
+            eprintln!("[qq-entry-stop] 本地结果尚未收尾或 worker 未退出；resident 保留，不代表 QQ 原生 drain，勿重发或卸载 bridge");
+            ExitCode::from(2)
+        }
+        QqEntryExit::OwnerHookFault => {
+            eprintln!("[qq-entry-stop] owner Rust hook 异常，已隔离并保留本地状态；停止未完成，勿重发或卸载 bridge");
+            ExitCode::from(2)
+        }
+        QqEntryExit::OwnerCleanupFailed => {
+            eprintln!("[qq-entry-stop] owner 清理失败，已隔离并保留本地状态；停止未完成，不重试原生清理或卸载 bridge");
+            ExitCode::from(2)
+        }
+        QqEntryExit::StopObservationFailed => {
+            eprintln!("[qq-entry-stop] research 停止观察未确认，已隔离并保留本地根；不重试清理或卸载 bridge");
+            ExitCode::from(2)
+        }
         _ => ExitCode::from(2),
     }
 }
 
 /// SAFETY: 前置:bridge 已加载。
-unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_created: Option<u64>) -> Result<u32, String> {
+unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_created: Option<u64>, observe_ms: Option<u32>) -> Result<u32, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
         CreateRemoteThread, GetExitCodeThread, OpenProcess, WaitForSingleObject,
@@ -1432,8 +1606,9 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_c
             CloseHandle(proc_h);
             return Err(error);
         }
+        let export = if observe_ms.is_some() { "caligo_qq_entry_shutdown_observe" } else { "caligo_qq_entry_shutdown" };
         let addr =
-            match winutil::read_remote_export(proc_h, remote_base, "caligo_qq_entry_shutdown") {
+            match winutil::read_remote_export(proc_h, remote_base, export) {
                 Ok(Some(a)) => a,
                 Ok(None) => {
                     CloseHandle(proc_h);
@@ -1444,6 +1619,7 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_c
                     return Err(e);
                 }
             };
+        let parameter = observe_ms.map_or(u64::from(wait_ms), |duration| (u64::from(wait_ms) << 32) | u64::from(duration));
         let start: winutil::RemoteThreadFn =
             std::mem::transmute::<usize, winutil::RemoteThreadFn>(addr);
         let thread = CreateRemoteThread(
@@ -1451,7 +1627,7 @@ unsafe fn remote_shutdown(pid: u32, remote_base: usize, wait_ms: u32, expected_c
             std::ptr::null(),
             0,
             Some(start),
-            wait_ms as *mut core::ffi::c_void,
+            parameter as usize as *mut core::ffi::c_void,
             0,
             std::ptr::null_mut(),
         );

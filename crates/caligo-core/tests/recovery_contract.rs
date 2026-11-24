@@ -272,6 +272,62 @@ fn l09_crash_after_native_started_unknown_not_failure() {
     );
 }
 
+#[test]
+fn rejected_send_reason_survives_restart_without_redispatch() {
+    let path = tmp_path("rejected-reason", "journal.log");
+    let _ = std::fs::remove_file(&path);
+    let (mut actor, _) = AccountActor::open(&path, RuntimeConfig::default()).unwrap();
+    actor.attach_session(session(1)).unwrap();
+    actor.mark_connection_ready(conn(1)).unwrap();
+    actor.submit_send(req("rejected", "sample")).unwrap();
+    actor.dispatch_begin("rejected").unwrap();
+    actor.bridge_started("rejected").unwrap();
+    let reason = "send result=37".to_owned();
+    actor.bridge_result("rejected", NativeResult::Failure { reason: reason.clone() }).unwrap();
+    let (actor, _) = crash_and_reopen(actor, &path);
+    assert_eq!(actor.query_request("rejected"), Some(caligo_model::ActionState::ConfirmedFailure { reason }));
+    assert!(!actor.pending_queries().contains(&"rejected".to_owned()));
+}
+
+#[test]
+fn legacy_rejected_record_without_reason_remains_readable() {
+    let path = tmp_path("legacy-rejected", "journal.log");
+    let _ = std::fs::remove_file(&path);
+    let old = serde_json::json!({"t":"Request","d":{
+        "v":1,"request_id":"legacy-rejected","payload_hash":7,"state":"ConfirmedFailure",
+        "native_id":null,"at_unix_ms":1,"session_generation":1,"wire_seq":null
+    }});
+    let record: JournalRecord = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&record).unwrap(), old);
+    let (mut journal, _) = Journal::open(&path, 16 * 1024 * 1024, SyncMode::Always).unwrap();
+    journal.append(&record).unwrap();
+    drop(journal);
+    let before = std::fs::read(&path).unwrap();
+    let (actor, _) = AccountActor::open(&path, RuntimeConfig::default()).unwrap();
+    assert_eq!(actor.query_request("legacy-rejected"), Some(caligo_model::ActionState::ConfirmedFailure { reason: String::new() }));
+    drop(actor);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn ambiguous_send_code_remains_auditable_after_restart_without_redispatch() {
+    let path = tmp_path("ambiguous-code", "journal.log");
+    let _ = std::fs::remove_file(&path);
+    let (mut actor, _) = AccountActor::open(&path, RuntimeConfig::default()).unwrap();
+    actor.attach_session(session(1)).unwrap();
+    actor.mark_connection_ready(conn(1)).unwrap();
+    actor.submit_send(req("ambiguous", "sample")).unwrap();
+    actor.dispatch_begin("ambiguous").unwrap();
+    actor.bridge_started("ambiguous").unwrap();
+    actor.bridge_result("ambiguous", NativeResult::Unknown {
+        reason: Some("send_result_ambiguous=37".into()),
+    }).unwrap();
+    let (actor, _) = crash_and_reopen(actor, &path);
+    assert_eq!(actor.query_request("ambiguous"), Some(caligo_model::ActionState::DeliveryUnknown));
+    assert!(!actor.pending_queries().contains(&"ambiguous".to_owned()));
+    assert!(actor.receipt_audits().iter().any(|entry| entry.request_id == "ambiguous" && entry.detail.contains("send_result_ambiguous=37")));
+}
+
 // ---- L13:journal 尾截断保守恢复;已确认事实保留 ----
 
 #[test]
@@ -337,6 +393,7 @@ fn l14_legacy_success_without_native_id_restores_unconfirmed_and_preserves_journ
             at_unix_ms: 1_797_091_200_000,
             session_generation: 7,
             wire_seq: None,
+            failure_reason: None,
         }))
         .unwrap();
     drop(journal);

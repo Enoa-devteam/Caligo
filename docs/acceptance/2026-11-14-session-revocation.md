@@ -70,8 +70,8 @@ Profile 查询则从精确 wrapper 的 nt_1 取 ProfileService。
 | --- | --- | --- | --- |
 | R1a | 同一 core 中断 bridge 管道，QQ 身份不变 | 旧查询终结、能力清除、新 epoch、重新声明后新 self 查询成功 | 缺正常入口的受控断开步骤与相交在途证据；先离线准备 |
 | R1b | 仅重启隔离 caligod，QQ 不退出 | 新 core nonce；相同 epoch 数值也不保留旧查询；无旧查询 poll/重发 | **LAB 已通过**：当前工作树 `core_restart_query_lab` research 2/2，真实 caligod/IPC/worker + 合成 owner；**双账号 LoginInfo FIELD 已通过**：新代次 A/B 各 attach 一次，self 查询、鉴权隔离和停止 A 后 B 存活通过；**core 重启交错 FIELD 待验**：尚未在 QQ owner 上做重启期间在途取消/迟到回调样本，已完成根禁止复用/重接 |
-| R2 | 指定 QQ 的网络状态变化，IPC 保持可用 | 可定位状态通知触发全路径撤权，恢复后重新核实同一身份 | 持续通知合同/接线未闭合，暂不执行 |
-| R3 | 指定测试 QQ 退出账号并登录另一测试身份 | 旧身份失效、旧事件不入新账本、旧请求不重放、显式新代次绑定 | 持续身份与事件归属未闭合，暂不执行 |
+| R2 | 指定 QQ 的网络状态变化，IPC 保持可用 | 可定位状态通知触发全路径撤权，恢复后重新核实同一身份 | 静态通知面已定位；**在线探针已确认访问器**：session 原型提供 `setOnNetworkChanged`/`setOnMsfStatusChanged`/`setOnWeakNetChanged`/`onLine`/`offLine`，`getMsgService` 提供 `getOnLineDev`/`fetchStatusMgrInfo`；研究型观察者已实现（network_state 行 + Node VM 夹具），R2 观察现场包已备（未绑定）；首次在线尝试（PID 8036）因窗口内未执行网络断开而无事件，已确认是干预缺失、不是观察者结论；已补注册错误/arity 诊断并更新现场包；第二次完整断网（QQ 显示离线/重连）仍无回调，已加调用计数与绑定层字段，下一步转向 NodeIQQNTWrapperNetwork 或拉取式状态源；探测 v2 现场已读：绑定层暴露 `NodeIQQNTWrapperNetwork.openNetworkService`（0 参）与 `NodeIKernelLoginService.get`；`getSelfStatus` 为 Promise。观察者已接入 `addNetworkServiceListener`；另已实现会话层 `offLine()`/`onLine()` 合成切换（`qq-net-offline`/`qq-net-online` + runner `--synthetic-toggle`），用于不中断操作员网络的折中验证；但 `offLine/onLine` 需要 1 个参数，0 参调用返回 ERR，合成切换暂不可用。已改为先读取 `getSelfStatus` 的异步结果作为 R3 身份源；surface 同时确认 `network_service.getNetworkStatus()` 同步返回 number，观察者已加 `network_status` 轮询，现场读得 current=1；`getSelfStatus` 解析为 `{result,errMsg}` 对象，已补 result 数值采集（现场 result=0）；身份观察者已实现（session id + self_status 每 20 tick，写 identity_state），R3 换号现场仍待用户操作另一测试身份；真实断网样本仍待补（跟踪 issue #13）。撤权原语与契约测试已实现（network/identity 两种，撤权不重放、恢复需重新核实/新代次）；观察者→core 控制面已接：`daemon-control revoke-network|revoke-identity` 调用 `RevokeSession`；runner 自动触发与 R2 真实断网现场仍待补 |
+| R3 | 指定测试 QQ 退出账号并登录另一测试身份 | 旧身份失效、旧事件不入新账本、旧请求不重放、显式新代次绑定 | 静态通知面已定位；**在线探针已确认访问器**：session 原型提供 `setOnNetworkChanged`/`setOnMsfStatusChanged` 与 `getSessionId`，`getProfileService` 提供 `startStatusPolling`/`getSelfStatus`/`getStatusInfo`/`getCoreInfo`；身份观察者已实现（session id + getSelfStatus，写 identity_state，首 tick 采样与随时排空修正完成，identity_state 基线行已现场确认（self_status: unset→0））；**桌面 QQ 不支持同实例换号**（操作员确认，2026-11-22），原“同实例退出→登录”现场不可执行；R3 改为跨进程新代次验证：新实例登录另一测试身份、显式新代次绑定，验证旧代次拒绝/旧事件审计/旧请求不重放；离线契约已有 `session_revocation_contract`（含新代次/新 journal 账本隔离：旧请求/旧事件不进入新账本、旧 journal 不变）。现场已做跨进程新代次：`21844` 以 generation 2 绑定，新 journal 仅 gen2、旧 gen1 journal 未变且 native ID 无交集；另一账号实例 `20304` 为多登录实例、preflight 拒绝，无法形成可 attach 的第二主根；“旧身份失效”仍只由旧实例停止 + 新代次绑定间接体现，R3 暂不宣称通过（跟踪 issue #14） |
 | R4 | QQ 正常退出后新进程登录 | 旧宿主拒绝、新宿主独立准入与显式绑定 | 独立工作块，不能当 R1–R3 的替代样本 |
 
 R1b 若后续获准执行，使用独立目录、稳定私有 `--token-file`、相同 pipe prefix、
@@ -88,3 +88,27 @@ journal 与指定 QQ；新 core nonce仍应改变。普通 control Stop 会结�
 每个样本记录干预时刻、完整逻辑身份、查询 ID、清权与 owner 取消时刻、迟到结果、
 恢复身份和能力声明、最终 daemon/owner/QQ 健康；保留失败样本。
 矩阵各行独立给出 implemented/wired/LAB/field 状态；全部完成前不提升生产验收。
+
+## 2026-11-21 静态补充：R2/R3 通知面已定位
+
+固定构建（QQNT `75B19E58…`、major `4564E402…`、wrapper `0D8B9444…`）字符串复核确认了两条持续通知面：
+登录侧的 `NodeIKernelLoginService.addKernelLoginListener`（1 参）与 `nodeIKernelLoginListener`
+（`onLoginState`、`onLoginConnected/onLoginDisConnected`、`onQRCodeLoginSucceed` 等），网络侧的
+`NodeIQQNTWrapperNetwork.getNetworkStatus/startGetNetworkStatus/stopGetNetworkStatus` 与
+`nodeIQQNTWrapperNetworkListener.onNetworkStatusChanged`（另有 kernel 侧 `addNetworkListener` 的
+`networkConnect/onLine/offLine`）。仍未闭合：会话对象到登录/网络服务的访问器、回调参数与状态枚举、
+线程与移除返回值、事件归属与撤权接线。
+
+详情与下一步（零发送只读表面探针）见
+[登录/网络持续通知面研究](../research/2026-11-21-login-network-notification-surface.md)。R2/R3 仍不执行。
+
+2026-11-21 离线实现补充：只读探针已落地——bridge 研究导出 `caligo_qq_surface_probe`（owner 泵执行
+`D8_SURFACE_PROBE_JS`，只写属性名/`typeof` 到 `surface_probe` 阶段行）+ CLI `qq-surface`（沿用状态命令
+的准入与已映射 bridge 校验，零发送、不注册 listener）+ Node VM 夹具验证有界与无泄漏。现场包
+`local-evidence/feat005-surface-probe-20261121-unbound/` 已备、未绑定；待新鲜 QQ 代次在线执行。
+
+2026-11-21 在线探针成功（PID 6544，构建 d2b981e）：确认访问器为 **session 原型**的
+`setOnNetworkChanged/setOnMsfStatusChanged/setOnWeakNetChanged/onLine/offLine` 与
+`getMsgService().getOnLineDev/fetchStatusMgrInfo`、`getProfileService().startStatusPolling/getSelfStatus/getStatusInfo/getCoreInfo`；
+会话对象本身没有 `getLoginService/getNetworkService`。回调参数/枚举/线程与撤权接线仍未证，R2/R3 仍不执行。
+详见研究记录 §6。

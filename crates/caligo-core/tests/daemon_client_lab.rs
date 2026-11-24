@@ -376,7 +376,7 @@ fn dispatch_roundtrip_through_real_worker() {
     // (owner = 测试线程,与 drain 一致)。
     resident.bootstrap().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     {
         let cfg = worker_config(&prefix, &auth);
@@ -429,9 +429,7 @@ fn dispatch_roundtrip_through_real_worker() {
     while Instant::now() < round_deadline {
         // resident.drain 只能在 owner 线程(LAB 假宿主以本线程为 owner)。
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
         if let CoreToControlMsg::QueryResult {
             state, native_id, ..
         } = control
@@ -476,6 +474,144 @@ fn dispatch_roundtrip_through_real_worker() {
     assert_eq!(counters.bootstraps_attempted, 0);
 }
 
+#[test]
+fn manager_shutdown_before_inflight_notice_ack_preserves_bridge_reservations() {
+    use caligo_bridge::resident::ResultHandoffGate;
+    use caligo_core::account_manager::{AccountManager, AccountSpec, ManagerConfig, PortConfig};
+    use caligo_core::ipc::ControlMsg;
+    use caligo_core::journal::{Journal, JournalRecord, SyncMode};
+
+    struct PendingHost(Arc<AtomicU64>);
+    impl HostAdapter for PendingHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(
+            &mut self,
+            op: HostOp,
+        ) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            Ok(match op {
+                HostOp::ListenerAdd => HostOpResult::ListenerDeferred,
+                HostOp::SendText { request_id, .. } => {
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                    HostOpResult::SendFired { mid: request_id }
+                }
+                _ => panic!("unexpected fake host operation"),
+            })
+        }
+    }
+
+    let _serial = TEST_SERIAL.lock().unwrap();
+    let wait_until = |predicate: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !predicate() {
+            assert!(Instant::now() < deadline, "fixture condition was not met");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let scenarios = [
+        (false, false),
+        (true, false),
+        #[cfg(feature = "research")]
+        (false, true),
+    ];
+    for (settle_before_stop, staged_close) in scenarios {
+        let tag = format!("caligo-inflight-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let root = std::env::temp_dir().join(&tag);
+        let config = ManagerConfig {
+            version: 1,
+            accounts: vec![AccountSpec {
+                account: 10001, data_dir: "A".into(), pipe_prefix: tag.clone(),
+                module_baseline: "qq-9.9.33-52230".into(),
+                expect_client_pid: std::process::id(), ports: PortConfig::default(),
+            }],
+        };
+        config.save_atomic(&root).unwrap();
+        let mut manager = AccountManager::new(&root, config).unwrap();
+        let daemon = manager.start(10001).unwrap();
+        let auth = daemon.auth_token();
+        let sends = Arc::new(AtomicU64::new(0));
+        let resident = Arc::new(Resident::new(PendingHost(sends.clone()), ResidentLimits::default()));
+        resident.bootstrap().unwrap();
+        let worker_stop = Arc::new(AtomicBool::new(false));
+        let (notice_tx, notice_rx) = mpsc::channel();
+        let (worker_done_tx, worker_done_rx) = mpsc::channel();
+        let worker = {
+            let cfg = worker_config(&tag, &auth);
+            let resident = resident.clone();
+            let stop = worker_stop.clone();
+            std::thread::spawn(move || {
+                let result = run_worker(cfg, resident, &wake_true, notice_rx, _ev_placeholder(), stop);
+                let _ = worker_done_tx.send(result);
+            })
+        };
+
+        let mut control = None;
+        wait_until(&mut || {
+            if daemon.connection_epoch() < 2 || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+                return false;
+            }
+            control = ControlClient::connect(&daemon.pipe_names().1, &auth, "inflight-stop-lab").ok();
+            control.is_some()
+        });
+        let mut control = control.unwrap();
+        let request_id = "inflight-stop";
+        let accepted = control.request(ControlMsg::SendText {
+            request_id: request_id.into(),
+            target: serde_json::json!({"account":"10001","kind":"private","peer":"20002"}),
+            text: "synthetic stop order".into(),
+            deadline_ms: 30_000,
+        }).unwrap();
+        assert!(matches!(accepted, CoreToControlMsg::SendAccepted { .. }), "fixture dispatch rejected: {accepted:?}");
+        wait_until(&mut || resident.pending_ingress() == 1);
+        resident.drain().unwrap();
+        assert_eq!(resident.request_state(request_id), Some("send_pending"));
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
+
+        if settle_before_stop {
+            assert_eq!(resident.complete_sends(&[(request_id.into(), "synthetic-native".into())], &[], &[]), vec![request_id]);
+            ResultHandoffGate::default().forward(&resident, &notice_tx).unwrap();
+            wait_until(&mut || !resident.has_unacked_results());
+        }
+        #[cfg(feature = "research")]
+        if staged_close {
+            assert_eq!(resident.close_for_result_drain().unwrap().marked_unknown, 1);
+            assert_eq!(ResultHandoffGate::default().forward(&resident, &notice_tx), Ok(2));
+            wait_until(&mut || !resident.has_unacked_results());
+            assert_eq!(resident.request_state(request_id), Some("delivery_unknown"));
+        }
+        drop(control);
+        manager.shutdown().unwrap();
+        worker_stop.store(true, Ordering::Release);
+        let (worker_counts, exit) = worker_done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+        assert!(matches!(exit, WorkerExit::CoreStopped | WorkerExit::LocalStop));
+        caligo_bridge::qq_entry::close_daemon_owner(&resident);
+        let unacked = resident.has_unacked_results();
+        assert_eq!(unacked, !settle_before_stop && !staged_close);
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
+        assert_eq!(worker_counts.results_sent, u64::from(settle_before_stop || staged_close));
+
+        drop(daemon);
+        let (_, history) = Journal::open(root.join("A/journal.jsonl"), 1024 * 1024, SyncMode::Always).unwrap();
+        let states: Vec<_> = history.records.iter().filter_map(|record| match record {
+            JournalRecord::Request(request) if request.request_id == request_id => Some(request.state.as_str()),
+            _ => None,
+        }).collect();
+        let expected: &[&str] = if settle_before_stop {
+            &["Queued", "DispatchIntent", "NativeStarted", "ConfirmedSuccess"]
+        } else if staged_close {
+            &["Queued", "DispatchIntent", "NativeStarted", "DeliveryUnknown"]
+        } else {
+            &["Queued", "DispatchIntent", "DeliveryUnknown"]
+        };
+        assert_eq!(states, expected);
+        println!("normal result ACK={settle_before_stop}, staged close={staged_close}, worker={exit:?}, unacked={unacked}, journal={states:?}, native calls=1");
+    }
+}
+
 /// Native invocation must not be repeated when the core durably applies the
 /// receipt and drops the pipe before its ACK reaches the bridge.
 #[test]
@@ -488,7 +624,7 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
     resident.bootstrap().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
     {
@@ -537,13 +673,12 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     );
 
     let expected_native_id = format!("NM-{}", send_count_before + 1);
+    let handoff = caligo_bridge::resident::ResultHandoffGate::default();
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut durable_result_visible = false;
     while Instant::now() < deadline {
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        assert!(handoff.forward(&resident, &tx).is_ok());
         if let CoreToControlMsg::QueryResult { native_id, .. } = control
             .request(caligo_core::ipc::ControlMsg::QueryRequest {
                 request_id: "R-ACK-LOSS".into(),
@@ -594,6 +729,482 @@ fn durable_result_is_replayed_after_ack_loss_without_native_retry() {
     assert!(counters.results_sent >= 2);
 }
 
+/// Rebuild a worker after the core has persisted a result but its ACK was lost.
+#[test]
+fn worker_rebuild_replays_durable_result_after_lost_ack_without_native_retry() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("rebuild-ack-loss");
+    let (daemon, make_runner) = start_daemon_faults(&prefix, false, true);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
+    let (w_tx, w_rx) = mpsc::channel();
+    let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
+    {
+        let mut cfg = worker_config(&prefix, &auth);
+        cfg.reconnect_backoff_ms = 2_000;
+        let resident = resident.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let r = run_worker(cfg, resident, &wake_true, rx, _ev_placeholder(), stop);
+            w_tx.send(r).unwrap();
+        });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = None;
+    while Instant::now() < deadline {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "lab-client") {
+            control = Some(c);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut control = control.expect("control connected");
+
+    let mut accepted = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if matches!(
+            control
+                .request(caligo_core::ipc::ControlMsg::SendText {
+                    request_id: "R-REBUILD-ACK-LOSS".into(),
+                    target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+                    text: "CALIGO-REBUILD-ACK-LOSS".into(),
+                    deadline_ms: 30_000,
+                })
+                .unwrap(),
+            CoreToControlMsg::SendAccepted { .. }
+        ) {
+            accepted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        accepted,
+        "send request must be accepted before recovery check"
+    );
+
+    let expected_native_id = format!("NM-{}", send_count_before + 1);
+    let handoff = caligo_bridge::resident::ResultHandoffGate::default();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut durable_result_visible = false;
+    while Instant::now() < deadline {
+        let _ = resident.drain();
+        assert!(handoff.forward(&resident, &tx).is_ok());
+        if let CoreToControlMsg::QueryResult { native_id, .. } = control
+            .request(caligo_core::ipc::ControlMsg::QueryRequest {
+                request_id: "R-REBUILD-ACK-LOSS".into(),
+            })
+            .unwrap()
+        {
+            if native_id.as_deref() == Some(expected_native_id.as_str()) {
+                durable_result_visible = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        durable_result_visible,
+        "journaled native receipt must remain queryable"
+    );
+
+    // The daemon fault closes the connection after journal persistence and
+    // before the result ACK. Stop during the deliberately long backoff.
+    assert!(!resident.retained_notices().is_empty(), "lost ACK must leave resident ownership");
+    // Allow the injected break to reach the worker before requesting stop;
+    // reconnect backoff is 2 seconds, longer than this observation interval.
+    std::thread::sleep(Duration::from_millis(700));
+    stop.store(true, Ordering::Relaxed);
+    let (first_counters, exit) = w_rx.recv_timeout(Duration::from_secs(5)).expect("first worker must stop");
+    assert_eq!(exit, WorkerExit::LocalStop);
+    assert!(first_counters.reconnects >= 1, "fault must break the first connection before stop");
+    assert_eq!(first_counters.connects, 1, "first worker must not reconnect before replacement");
+    let retained = resident.retained_notices();
+    assert!(retained.iter().any(|item| matches!(&item.notice,
+        caligo_bridge::resident::ResidentNotice::Outcome(caligo_bridge::resident::SendOutcome::Success { .. }))),
+        "durable success must still be retained after lost ACK");
+    drop(tx);
+
+    let (replacement_tx, replacement_rx) = mpsc::channel();
+    for item in &retained { replacement_tx.send(item.clone()).unwrap(); }
+    let (done2, wait2) = mpsc::channel();
+    let stop2 = Arc::new(AtomicBool::new(false));
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone();
+        std::thread::spawn(move || {
+            done2.send(run_worker(cfg, resident, &wake_true, replacement_rx, _ev_placeholder(), stop2)).unwrap();
+        });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-REBUILD-ACK-LOSS".into() }).unwrap();
+        if resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == &expected_native_id) { break; }
+        assert!(Instant::now() < deadline, "replacement did not replay and release the durable receipt");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - send_count_before, 1,
+        "rebuilding the worker must never resend to native");
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).expect("replacement must stop");
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 1, "duplicate hints must not send a second receipt");
+    runner.join().unwrap().unwrap();
+}
+
+/// Reconstruct a worker after its old channel accepted notices and vanished.
+#[test]
+fn worker_rebuild_replays_resident_notices_without_native_retry() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-rebuild");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let send_count_before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop1 = Arc::new(AtomicBool::new(false));
+    let (_tx1, rx1) = mpsc::channel();
+    let (done1, wait1) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop1.clone();
+        std::thread::spawn(move || {
+            done1.send(run_worker(cfg, resident, &wake_true, rx1, _ev_placeholder(), stop)).unwrap();
+        });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "rebuild-client") { break c; }
+        assert!(Instant::now() < deadline, "control connection timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-REBUILD".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-REBUILD-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline, "dispatch acceptance timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-REBUILD") != Some("queued") {
+        assert!(Instant::now() < deadline, "resident queue timeout");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop1.store(true, Ordering::Relaxed);
+    assert_eq!(wait1.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::LocalStop);
+    assert_eq!(resident.drain().unwrap(), 1);
+    let (lost_tx, lost_rx) = mpsc::channel();
+    assert_eq!(caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &lost_tx), Ok(2));
+    let retained = resident.retained_notices();
+    assert_eq!(retained.len(), 2);
+    drop(lost_rx); // simulate successful send then loss before worker receives
+    assert_eq!(resident.retained_notices(), retained);
+    let stop2 = Arc::new(AtomicBool::new(false));
+    let (tx2, rx2) = mpsc::channel();
+    // Duplicate hints must not duplicate notices already in the startup snapshot.
+    for item in &retained { tx2.send(item.clone()).unwrap(); }
+    let (done2, wait2) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop2.clone();
+        std::thread::spawn(move || {
+            done2.send(run_worker(cfg, resident, &wake_true, rx2, _ev_placeholder(), stop)).unwrap();
+        });
+    }
+    let expected_id = format!("NM-{}", send_count_before + 1);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-REBUILD".into() }).unwrap();
+        if matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == &expected_id)
+            && resident.retained_notices().is_empty() { break; }
+        assert!(Instant::now() < deadline, "rebuilt worker did not persist and acknowledge result");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - send_count_before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 1, "duplicate channel hints must not send a second result");
+    runner.join().unwrap().unwrap();
+}
+
+/// Real daemon ACKs free bounded resident capacity and unblock the pending suffix.
+#[test]
+fn daemon_ack_releases_backpressure_without_repeating_native_send() {
+    use caligo_bridge::resident::{HandoffError, OwnedRequest, ResultHandoffGate, SubmitVerdict};
+    struct AsyncLabHost;
+    impl HostAdapter for AsyncLabHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
+                HostOp::Probe => Ok(HostOpResult::ProbeDone),
+                HostOp::SendText { request_id, .. } => {
+                    LAB_SENDS.fetch_add(1, Ordering::Relaxed);
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                }
+                _ => panic!("unexpected operation"),
+            }
+        }
+    }
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("backpressure");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(AsyncLabHost, ResidentLimits { results_max: 2, ..ResidentLimits::default() }));
+    resident.bootstrap().unwrap();
+    let before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let (done, wait) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "pressure-client") { break c; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-PRESSURE".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-PRESSURE-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-PRESSURE") != Some("queued") {
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(resident.drain().unwrap(), 1);
+    resident.complete_sends(&[("R-PRESSURE".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-PRESSURE".into(), "unknown".into())]);
+    resident.complete_sends(&[("R-PRESSURE".into(), "strong-id".into())], &[], &[]);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let gate = ResultHandoffGate::default();
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(2)));
+    assert_eq!(resident.submit(OwnedRequest::Probe { id: 7 }), SubmitVerdict::Accepted);
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(0)));
+    assert_eq!(resident.pending_ingress(), 1);
+    for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+    let deadline = Instant::now() + Duration::from_secs(10); let mut probe_ran = false;
+    loop {
+        let ready = gate.forward(&resident, &staged_tx).is_ok();
+        for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+        if ready && !probe_ran { assert_eq!(resident.drain().unwrap(), 1); probe_ran = true; }
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-PRESSURE".into() }).unwrap();
+        if probe_ran && resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == "strong-id") { break; }
+        assert!(Instant::now() < deadline, "ACKs did not drain pressure and pending suffix");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::CoreStopped);
+    runner.join().unwrap().unwrap();
+}
+
+/// Rebuild after full retention and a lost channel; drain the suffix without resending.
+#[test]
+fn worker_rebuild_recovers_full_retention_and_pending_suffix_without_resend() {
+    use caligo_bridge::resident::{HandoffError, OwnedRequest, ResultHandoffGate, SubmitVerdict};
+    struct AsyncLabHost;
+    impl HostAdapter for AsyncLabHost {
+        fn owner_thread_id(&self) -> u64 { lab_tid() }
+        fn current_thread_id(&self) -> u64 { lab_tid() }
+        fn env_valid(&self) -> bool { true }
+        fn current_context_ok(&self) -> bool { true }
+        fn native_op(&mut self, op: HostOp) -> Result<HostOpResult, caligo_bridge::host_adapter::HostError> {
+            match op {
+                HostOp::ListenerAdd => Ok(HostOpResult::ListenerDeferred),
+                HostOp::Probe => Ok(HostOpResult::ProbeDone),
+                HostOp::SendText { request_id, .. } => {
+                    LAB_SENDS.fetch_add(1, Ordering::Relaxed);
+                    Ok(HostOpResult::SendFired { mid: request_id })
+                }
+                _ => panic!("unexpected operation"),
+            }
+        }
+    }
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("rebuild-full");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(AsyncLabHost, ResidentLimits { results_max: 2, ..ResidentLimits::default() }));
+    resident.bootstrap().unwrap();
+    let before = LAB_SENDS.load(Ordering::Relaxed);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let (done, wait) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut control = loop {
+        if let Ok(c) = ControlClient::connect(&control_name, &auth, "pressure-client") { break c; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(control.request(caligo_core::ipc::ControlMsg::SendText {
+            request_id: "R-PRESSURE".into(),
+            target: serde_json::json!({"account":"10001","kind":"group","peer":"654321"}),
+            text: "CALIGO-PRESSURE-LAB".into(), deadline_ms: 30_000,
+        }).unwrap(), CoreToControlMsg::SendAccepted { .. }) { break; }
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resident.request_state("R-PRESSURE") != Some("queued") {
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(resident.drain().unwrap(), 1);
+    resident.complete_sends(&[("R-PRESSURE".into(), String::new())], &[], &[]);
+    resident.complete_sends(&[], &[], &[("R-PRESSURE".into(), "unknown".into())]);
+    resident.complete_sends(&[("R-PRESSURE".into(), "strong-id".into())], &[], &[]);
+    // Stop the active worker before retaining notices, then abandon its channel.
+    stop.store(true, Ordering::Relaxed);
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::LocalStop);
+    drop(worker_tx);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let gate = ResultHandoffGate::default();
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(2)));
+    assert_eq!(resident.submit(OwnedRequest::Probe { id: 7 }), SubmitVerdict::Accepted);
+    assert_eq!(gate.forward(&resident, &staged_tx), Err(HandoffError::Full(0)));
+    assert_eq!(resident.pending_ingress(), 1);
+    let retained = resident.retained_notices();
+    assert_eq!(retained.len(), 2);
+    // Discard staged hints after the old worker is gone. The resident retains
+    // authoritative notices; reconstruct the replacement from its snapshot.
+    drop(staged_rx);
+    let (staged_tx, staged_rx) = mpsc::channel();
+    let (worker_tx, worker_rx) = mpsc::channel();
+    for item in &retained { worker_tx.send(item.clone()).unwrap(); }
+    let stop2 = Arc::new(AtomicBool::new(false));
+    let (done2, wait2) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone();
+        std::thread::spawn(move || { done2.send(run_worker(cfg, resident, &wake_true, worker_rx, _ev_placeholder(), stop2)).unwrap(); });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10); let mut probe_ran = false;
+    loop {
+        let ready = gate.forward(&resident, &staged_tx).is_ok();
+        for item in staged_rx.try_iter() { worker_tx.send(item).unwrap(); }
+        if ready && !probe_ran { assert_eq!(resident.drain().unwrap(), 1); probe_ran = true; }
+        let result = control.request(caligo_core::ipc::ControlMsg::QueryRequest { request_id: "R-PRESSURE".into() }).unwrap();
+        if probe_ran && resident.retained_notices().is_empty()
+            && matches!(result, CoreToControlMsg::QueryResult { native_id: Some(ref id), .. } if id == "strong-id") { break; }
+        assert!(Instant::now() < deadline, "ACKs did not drain pressure and pending suffix");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(LAB_SENDS.load(Ordering::Relaxed) - before, 1);
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    let (counters, exit) = wait2.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(exit, WorkerExit::CoreStopped);
+    assert_eq!(counters.results_sent, 3, "duplicate hints must not resend result notices");
+    runner.join().unwrap().unwrap();
+}
+
+
+#[test]
+fn concurrent_worker_for_same_resident_must_be_rejected() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-exclusive");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let baseline_epoch = daemon.connection_epoch();
+    let auth = daemon.auth_token().to_string();
+    let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done, wait) = mpsc::channel();
+    let (first_tx, first_rx) = mpsc::channel();
+    {
+        let cfg = worker_config(&prefix, &auth);
+        let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || { done.send(run_worker(cfg, resident, &wake_true, first_rx, _ev_placeholder(), stop)).unwrap(); });
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.connection_epoch() <= baseline_epoch || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+        assert!(Instant::now() < deadline, "first worker did not attach");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let stopped = Arc::new(AtomicBool::new(true));
+    let (second_tx, second_rx) = mpsc::channel();
+    let (rejected_counters, exit) = run_worker(worker_config(&prefix, &auth), resident.clone(), &wake_true, second_rx, _ev_placeholder(), stopped);
+    assert_eq!(exit, WorkerExit::WorkerAlreadyRunning);
+    assert_eq!(rejected_counters.connects, 0);
+    drop(second_tx);
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let mut control = ControlClient::connect(&control_name, &auth, "exclusive-client").unwrap();
+    assert!(matches!(control.request(caligo_core::ipc::ControlMsg::Health {}).unwrap(), CoreToControlMsg::HealthAck {}));
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    assert_eq!(wait.recv_timeout(Duration::from_secs(5)).unwrap().1, WorkerExit::CoreStopped);
+    runner.join().unwrap().unwrap();
+    drop(first_tx);
+    let (next_tx, next_rx) = mpsc::channel();
+    let (_, next_exit) = run_worker(worker_config(&prefix, &auth), resident, &wake_true, next_rx, _ev_placeholder(), Arc::new(AtomicBool::new(true)));
+    assert_eq!(next_exit, WorkerExit::LocalStop, "normal worker exit must release the lease");
+    drop(next_tx);
+}
+
+#[test]
+fn worker_panic_quarantines_same_resident_without_reconnect() {
+    let _g = TEST_SERIAL.lock().unwrap();
+    let prefix = unique_prefix("worker-panic");
+    let (daemon, make_runner) = start_daemon(&prefix);
+    let baseline_epoch = daemon.connection_epoch();
+    let auth = daemon.auth_token().to_string(); let runner = make_runner();
+    let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
+    resident.bootstrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (_tx, rx) = mpsc::channel();
+    let worker = {
+        let cfg = worker_config(&prefix, &auth); let resident = resident.clone(); let stop = stop.clone();
+        std::thread::spawn(move || run_worker(cfg, resident, &|| panic!("synthetic worker teardown panic"), rx, _ev_placeholder(), stop))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.connection_epoch() <= baseline_epoch || caligo_bridge::daemon_client::counters_snapshot().hellos_accepted == 0 {
+        assert!(Instant::now() < deadline, "first worker did not attach");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !worker.is_finished() {
+        assert!(Instant::now() < deadline, "panicking worker did not exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(worker.join().is_err());
+    let (replacement_tx, replacement_rx) = mpsc::channel();
+    let (counters, exit) = run_worker(worker_config(&prefix, &auth), resident, &wake_true, replacement_rx, _ev_placeholder(), Arc::new(AtomicBool::new(true)));
+    assert_eq!(exit, WorkerExit::WorkerQuarantined);
+    assert_eq!(counters.connects, 0);
+    drop(replacement_tx);
+    let control_name = pipe_names_from_prefix(&prefix).1;
+    let mut control = ControlClient::connect(&control_name, &auth, "panic-client").unwrap();
+    control.request(caligo_core::ipc::ControlMsg::Stop {}).unwrap();
+    runner.join().unwrap().unwrap();
+}
+
 fn wake_false() -> bool {
     false
 }
@@ -607,7 +1218,7 @@ fn pipe_names_from_prefix(prefix: &str) -> (String, String) {
 }
 
 // run_worker 的 rx 参数占位(第一个用例不消费结果)。
-fn _rx_placeholder() -> mpsc::Receiver<caligo_bridge::resident::ResidentNotice> {
+fn _rx_placeholder() -> mpsc::Receiver<caligo_bridge::resident::RetainedNotice> {
     let (_t, r) = mpsc::channel();
     r
 }
@@ -723,7 +1334,7 @@ fn native_started_only_after_resident_accepts() {
     let resident = Arc::new(Resident::new(LabHost, ResidentLimits::default()));
     // 故意不 bootstrap:Dispatch 到达时 submit 返回 NotReady → pending。
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::ResidentNotice>();
+    let (tx, rx) = mpsc::channel::<caligo_bridge::resident::RetainedNotice>();
     let (w_tx, w_rx) = mpsc::channel();
     {
         let cfg = worker_config(&prefix, &auth);
@@ -795,9 +1406,7 @@ fn native_started_only_after_resident_accepts() {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         let _ = resident.drain();
-        for notice in resident.take_results() {
-            let _ = tx.send(notice);
-        }
+        caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
         if let CoreToControlMsg::QueryResult {
             state, native_id, ..
         } = control
@@ -1062,9 +1671,7 @@ fn private_and_group_png_traverse_real_worker_and_owner_without_retry() {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             resident.drain().unwrap();
-            for notice in resident.take_results() {
-                tx.send(notice).unwrap();
-            }
+            caligo_bridge::resident::ResultHandoffGate::default().forward(&resident, &tx).unwrap();
             if matches!(
                 daemon.onebot_text_status(&id, &target),
                 Some((caligo_model::ActionState::ConfirmedSuccess { .. }, None))

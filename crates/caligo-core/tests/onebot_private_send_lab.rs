@@ -219,7 +219,7 @@ fn private_requires_current_send_capability_and_strong_persisted_identity() {
         CoreToBridgeMsg::EventAck { .. }
     ));
     bridge
-        .send(&BridgeMsg::SendResult {
+        .send(&BridgeMsg::SendResult { notice_id: 1,
             request_id,
             outcome: OutcomePayload::Success {
                 native_id: "90071992547409931234".into(),
@@ -266,7 +266,7 @@ fn private_unknown_returns_unknown_without_a_second_dispatch() {
         CoreToBridgeMsg::NativeStartedAck { .. }
     ));
     bridge
-        .send(&BridgeMsg::SendResult {
+        .send(&BridgeMsg::SendResult { notice_id: 1,
             request_id: id,
             outcome: OutcomePayload::Unknown {
                 reason: Some("readback timeout".into()),
@@ -322,7 +322,7 @@ fn private_record_waits_for_exact_readback_to_be_persisted() {
     bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
     let native_id = "90071992547409931234";
-    bridge.send(&BridgeMsg::SendResult {
+    bridge.send(&BridgeMsg::SendResult { notice_id: 1,
         request_id, outcome: OutcomePayload::Success { native_id: native_id.into() },
     }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { terminal: true, .. }));
@@ -437,7 +437,7 @@ fn group_record_requires_group_capability_and_exact_group_projection() {
     let native_id = "90071992547409931234";
     bridge.send(&BridgeMsg::NativeStarted { request_id: request_id.clone() }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::NativeStartedAck { .. }));
-    bridge.send(&BridgeMsg::SendResult {
+    bridge.send(&BridgeMsg::SendResult { notice_id: 1,
         request_id, outcome: OutcomePayload::Success { native_id: native_id.into() },
     }).unwrap();
     assert!(matches!(bridge.recv().unwrap(), CoreToBridgeMsg::SendResultAck { terminal: true, .. }));
@@ -590,7 +590,7 @@ fn png_send_requires_scoped_capability_and_persisted_private_or_group_readback()
         ));
         let native_id = "90071992547409931234";
         bridge
-            .send(&BridgeMsg::SendResult {
+            .send(&BridgeMsg::SendResult { notice_id: 1,
                 request_id,
                 outcome: OutcomePayload::Success {
                     native_id: native_id.into(),

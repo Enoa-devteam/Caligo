@@ -19,7 +19,7 @@ pub const CAPABILITY_QUERY_REVISION: u32 = 1;
 /// IPC 语义协议 v3。v2 保持原定义供历史对照;不接受 v2/v1 握手降级。
 pub const PROTOCOL_VERSION_V3: u32 = 3;
 /// Bridge/core business receipt contract revision, independent of frame/IPC v3.
-pub const BUSINESS_PROTOCOL_REVISION: u32 = 3;
+pub const BUSINESS_PROTOCOL_REVISION: u32 = 4;
 
 pub use super::ipc_v2::{EventPayload, Role};
 
@@ -94,6 +94,8 @@ pub enum CoreToBridgeMsg {
     },
     SendResultAck {
         request_id: String,
+        /// Echo of the exact worker notice; zero is reserved for immediate rejections.
+        notice_id: u64,
         terminal: bool,
     },
     Stopped {},
@@ -135,6 +137,8 @@ pub enum BridgeMsg {
     /// 发送结果(receipt 契约三分类,与 runtime::NativeResult 对应)。
     SendResult {
         request_id: String,
+        /// Nonzero resident-lifetime sequence; zero identifies an immediate rejection.
+        notice_id: u64,
         outcome: OutcomePayload,
     },
     QueryCapabilities {
@@ -173,6 +177,24 @@ pub use super::ipc_v2::{ControlMsg, CoreToControlMsg};
 mod tests {
     use super::*;
 
+    #[test]
+    fn revoke_control_messages_roundtrip() {
+        let request = ControlMsg::RevokeSession { reason: "identity_changed".into() };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(serde_json::from_slice::<ControlMsg>(&bytes).unwrap(), request);
+
+        let ack = CoreToControlMsg::RevokeAck {
+            accepted: true,
+            cancelled_unsent: 2,
+            delivery_unknown: 1,
+            session_generation: 7,
+            reject_reason: None,
+        };
+        let bytes = serde_json::to_vec(&ack).unwrap();
+        assert_eq!(serde_json::from_slice::<CoreToControlMsg>(&bytes).unwrap(), ack);
+        assert!(String::from_utf8_lossy(&bytes).contains("revoke_ack"));
+    }
+
     /// v2 Hello 缺少 v3 必填字段 → 反序列化必须失败(不允许默认值放行)。
     #[test]
     fn v2_hello_without_host_identity_fails_to_decode() {
@@ -187,6 +209,17 @@ mod tests {
         }}"#;
         let r: Result<BridgeMsg, _> = serde_json::from_str(v2);
         assert!(r.is_err(), "v2 Hello 不得被 v3 静默接受");
+    }
+
+    #[test]
+    fn result_and_ack_require_notice_id() {
+        let old_result = r#"{"t":"send_result","d":{"request_id":"r","outcome":{"t":"accepted_unconfirmed"}}}"#;
+        let old_ack = r#"{"t":"send_result_ack","d":{"request_id":"r","terminal":false}}"#;
+        assert!(serde_json::from_str::<BridgeMsg>(old_result).is_err());
+        assert!(serde_json::from_str::<CoreToBridgeMsg>(old_ack).is_err());
+        let ack = CoreToBridgeMsg::SendResultAck { request_id: "r".into(), notice_id: 42, terminal: false };
+        let bytes = serde_json::to_vec(&ack).unwrap();
+        assert_eq!(serde_json::from_slice::<CoreToBridgeMsg>(&bytes).unwrap(), ack);
     }
 
     /// v3 Hello 完整字段可解码。
@@ -320,6 +353,7 @@ mod tests {
         assert_eq!(decoded, dispatch);
 
         let result = BridgeMsg::SendResult {
+            notice_id: 7,
             request_id: "R-timeout".into(),
             outcome: OutcomePayload::Unknown {
                 reason: Some("errCode=1006501; provenance unverified".into()),

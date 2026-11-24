@@ -14,7 +14,9 @@ use caligo_model::onebot_traits::StoreReader;
 use caligo_model::wrapper_message::WrapperBinding;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,6 +110,18 @@ fn offline_voice_tools(dir: &Path) -> MediaTool {
     .unwrap()
 }
 
+fn run_node(script: &str) -> Output {
+    let mut child = Command::new("node")
+        .args(["--unhandled-rejections=strict", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn script_batch() -> String {
     let start = serde_json::to_string(caligo_bridge::qq_v8::D8_START_JS).unwrap();
     let poll = serde_json::to_string(caligo_bridge::qq_v8::D8_POLL_JS).unwrap();
@@ -152,16 +166,73 @@ const full=JSON.parse(eval(poll)); assert.equal(full.items.length,128); assert.e
 process.stdout.write(JSON.stringify(first));
 "#;
     let script = format!("const start={start}, poll={poll};\n{fixture}");
-    let out = std::process::Command::new("node")
-        .args(["--unhandled-rejections=strict", "-e", &script])
-        .output()
-        .unwrap();
+    let out = run_node(&script);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn d8_same_text_ids_and_unknown_chat_do_not_cross_sessions() {
+    let start = serde_json::to_string(caligo_bridge::qq_v8::D8_START_JS).unwrap();
+    let poll = serde_json::to_string(caligo_bridge::qq_v8::D8_POLL_JS).unwrap();
+    let fixture = r#"
+const assert = require('node:assert/strict');
+let listener;
+const service = {sendMsg() { throw Error('must not send'); },
+  addKernelMsgListener(value) { listener = value; return 1; }};
+const session = {getSessionId: () => '1', getMsgService: () => service};
+process._linkedBinding = () => ({NodeIQQNTWrapperSession:{getNTWrapperSession: () => session}});
+const caligoVoiceAccount = '10001';
+assert.ok(eval(start).startsWith('ARMED'));
+function row(id, chatType, peerUid, peerUin, senderUid, senderUin) {
+  return {msgId:id,msgSeq:'1',msgRandom:'2',msgTime:'1794567890',guildId:'',
+    chatType,msgType:2,subMsgType:0,peerUid,peerUin,senderUid,senderUin,
+    elements:[{elementType:1,textElement:{content:'same text',atType:0}}]};
+}
+listener.onRecvMsg([
+  row('101',1,'u_friend','20002','u_friend','20002'),
+  row('102',1,'u_friend','20002','u_friend','20002'),
+  row('103',99,'u_friend','20002','u_friend','20002'),
+  row('104',2,'30003','30003','u_friend','20002')
+]);
+process.stdout.write(eval(poll));
+"#;
+    let script = format!("const start={start}, poll={poll};\n{fixture}");
+    let out = run_node(&script);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let resident = Resident::new(OfflineHost, ResidentLimits::default());
+    resident.bootstrap().unwrap();
+    let binding = WrapperBinding {
+        account: "10001".into(),
+        session_generation: 1,
+        host_nonce: 9,
+        wrapper_session: "nt_0".into(),
+    };
+    let batch = resident
+        .ingest_wrapper_batch(std::str::from_utf8(&out.stdout).unwrap(), &binding)
+        .unwrap();
+    assert_eq!(batch.stats.rejected, 1);
+    let events = resident.take_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.iter().map(|e| e.native_id.as_str()).collect::<Vec<_>>(),
+        ["101", "102", "104"]
+    );
+    assert!(events
+        .iter()
+        .all(|e| e.text == "same text" && e.msg_time == Some(1794567890)));
+    assert_eq!(events[0].peer_uin, "20002");
+    assert_eq!(events[1].peer_uin, "20002");
+    assert_eq!(events[2].peer_uin, "30003");
+    assert!(events.iter().all(|e| e.sender_uin == "20002"));
 }
 
 #[test]

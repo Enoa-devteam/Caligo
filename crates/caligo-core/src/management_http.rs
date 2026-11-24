@@ -460,6 +460,24 @@ fn route(
         return Err((404, "account not configured"));
     }
     match (head.method.as_str(), segments[4]) {
+        #[cfg(feature = "research")]
+        ("POST", "quiesce-sends") => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct QuiesceSends {
+                connection_id: String,
+            }
+            let request: QuiesceSends = serde_json::from_slice(body)
+                .map_err(|_| (400, "send quiesce requires the current connection_id"))?;
+            let daemon = manager.daemon(account).map_err(|_| (409, "account is not running"))?;
+            crate::account_console::quiesce_sends(&daemon, &request.connection_id)
+                .map_err(|error| (409, error))?;
+            Ok(success(json!({
+                "account": account.to_string(),
+                "connection_id": request.connection_id,
+                "status": "send_admission_closed",
+            })))
+        }
         ("GET", "messages") => {
             let daemon = manager.daemon(account).map_err(|_| (409, "请先启动此账号"))?;
             drop(manager);
