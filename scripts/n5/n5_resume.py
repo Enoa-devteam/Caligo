@@ -88,6 +88,7 @@ def main() -> int:
     events_path = out / "resume-events.jsonl"
     failures = []
     samples = []
+    login_unavailable = 0
 
     print(json.dumps({"kind": "resume_start", "uptime_before_s": round(uptime_before, 2), "target_hours": target_hours}), flush=True)
     with events_path.open("a", encoding="utf-8") as events:
@@ -112,7 +113,12 @@ def main() -> int:
                 events.write(json.dumps({"kind": "sample", **record}, ensure_ascii=False) + "\n")
                 events.flush()
                 samples.append(record)
-                for name, value in (("version", version), ("status", status), ("login", login)):
+                login_locked = login.get("retcode") == 1502 and login.get("status") == "failed"
+                if login_locked:
+                    login_unavailable += 1
+                elif not login.get("ok"):
+                    failures.append({"t_utc": record["t_utc"], "kind": "login", "result": sanitize_probe(login)})
+                for name, value in (("version", version), ("status", status)):
                     if not value.get("ok"):
                         failures.append({"t_utc": record["t_utc"], "kind": name, "result": sanitize_probe(value)})
                 index += 1
@@ -175,6 +181,7 @@ def main() -> int:
             "samples": len(samples),
             "probe_failures": len(failures),
             "probe_failure_samples": failures[:20],
+            "login_unavailable": login_unavailable,
             "journal": journal,
             "stop": stop_record,
             "criteria": criteria,

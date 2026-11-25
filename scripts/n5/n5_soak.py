@@ -297,6 +297,8 @@ class Soak:
         self.samples: list[dict] = []
         self.restarts: list[dict] = []
         self.probe_failures: list[dict] = []
+        self.login_unavailable: int = 0
+        self.attach_login_ok: bool = False
         self.stop_record: dict = {}
         self.fatal: str | None = None
         self.bridge_initial: bool | None = None
@@ -448,28 +450,50 @@ class Soak:
             record["bridge_mapped"] = bridge_mapped(int(self.state["pid"]), Path(self.state["build"]["bridge"]))
             if not record["bridge_mapped"]:
                 self.probe_failures.append({"t_utc": record["t_utc"], "kind": "bridge-unmapped"})
+        # QQ may lock the client while the resident bridge/core keeps receiving
+        # events. In that state get_login_info honestly returns 1502 (not ready)
+        # while get_version_info/get_status stay healthy. That is not a resident
+        # failure; it is recorded separately and cannot be used as the restart
+        # recovery signal.
+        login_unavailable = login.get("retcode") == 1502 and login.get("status") == "failed"
+        record["login_unavailable"] = login_unavailable
         self.samples.append(record)
         self.events.write(json.dumps({"kind": "sample", **record}, ensure_ascii=False) + "\n")
         self.events.flush()
         rehearsal = self.state.get("mode") == "rehearsal"
-        for name, value in (("version", version), ("status", status), ("login", login)):
-            if not value.get("ok") and not (rehearsal and name in ("status", "login")):
+        if login_unavailable:
+            self.login_unavailable += 1
+        elif not login.get("ok") and not rehearsal:
+            self.probe_failures.append(
+                {"t_utc": record["t_utc"], "kind": "login", "result": sanitize_probe(login)}
+            )
+        for name, value in (("version", version), ("status", status)):
+            if not value.get("ok") and not (rehearsal and name == "status"):
                 self.probe_failures.append(
                     {"t_utc": record["t_utc"], "kind": name, "result": sanitize_probe(value)}
                 )
         return record
 
     def wait_recovered(self, timeout: float = 180.0):
+        """Wait for the core to answer version/status after a core restart.
+
+        get_login_info is deliberately not the recovery signal: a locked QQ can
+        return 1502 while the resident bridge and core still receive events.
+        Login availability is recorded separately.
+        """
         deadline = time.time() + timeout
         last = None
         rehearsal = self.state.get("mode") == "rehearsal"
         while time.time() < deadline:
-            last = probe(
-                self.state["ports"]["http"],
-                self.token,
-                "get_version_info" if rehearsal else "get_login_info",
+            version = probe(self.state["ports"]["http"], self.token, "get_version_info")
+            status = (
+                {"ok": True, "retcode": 0, "status": "ok"}
+                if rehearsal
+                else probe(self.state["ports"]["http"], self.token, "get_status")
             )
-            if last.get("ok"):
+            last = {"version": version, "status": status}
+            if version.get("ok") and status.get("ok"):
+                last["login"] = probe(self.state["ports"]["http"], self.token, "get_login_info")
                 return last, round(timeout - (deadline - time.time()), 2)
             time.sleep(1.0)
         return last, None
@@ -488,20 +512,34 @@ class Soak:
             size = int(before.get("complete_bytes", 0))
             if size > 0:
                 prefix_ok = sha256_prefix(Path(self.state["journal"]), size) == before.get("complete_sha256")
+        recovered_ok = bool(
+            recovered
+            and recovered.get("version", {}).get("ok")
+            and recovered.get("status", {}).get("ok")
+        )
+        journal_not_shrunk = bool(
+            before.get("exists")
+            and after.get("exists")
+            and after.get("size", 0) >= before.get("size", 0)
+        )
         record = {
             "index": index,
             "t_utc": utcnow(),
             "journal_before": before,
             "journal_after": after,
             "journal_prefix_preserved": prefix_ok,
-            "recovered": bool(recovered and recovered.get("ok")),
+            "journal_not_shrunk": journal_not_shrunk,
+            "recovered": recovered_ok,
             "recovery_seconds": round(time.time() - killed_at, 2),
-            "probe": sanitize_probe(recovered),
+            "probe": sanitize_probe(recovered.get("version") if recovered else None),
+            "status": sanitize_probe(recovered.get("status") if recovered else None),
+            "login": sanitize_probe(recovered.get("login") if recovered else None),
+            "login_available": bool(recovered and recovered.get("login", {}).get("ok")),
         }
         self.restarts.append(record)
         self.log_event("core_restarted", **record)
         if not record["recovered"]:
-            raise RuntimeError(f"core restart {index} did not recover within timeout: {recovered}")
+            raise RuntimeError(f"core restart {index} did not recover version/status: {recovered}")
         return record
 
     def summarize_process(self, name: str):
@@ -544,9 +582,10 @@ class Soak:
             "probe_failures": sum(
                 1
                 for s in recent
-                for p in s["probes"].values()
-                if not p.get("ok")
+                for name, p in s["probes"].items()
+                if name in ("version", "status") and not p.get("ok")
             ),
+            "login_unavailable": sum(1 for s in recent if s.get("login_unavailable")),
             "journal_size": recent[-1]["journal"].get("size"),
         }
         (self.out / "hourly").mkdir(exist_ok=True)
@@ -557,7 +596,9 @@ class Soak:
         duration = time.time() - self.started
         probes = [p for s in self.samples for p in s["probes"].values()]
         latencies = [p["latency_ms"] for p in probes if "latency_ms" in p]
-        probe_ok = sum(1 for p in probes if p.get("ok"))
+        probe_ok = sum(1 for s in self.samples for name, p in s["probes"].items() if name in ("version", "status") and p.get("ok"))
+        login_probes = [s["probes"]["login"] for s in self.samples]
+        login_ok = sum(1 for p in login_probes if p.get("ok"))
         restart_ok = bool(self.restarts) and all(r["recovered"] and r.get("journal_prefix_preserved") is not False for r in self.restarts)
         journal_prefix = all(r.get("journal_prefix_preserved") is not False for r in self.restarts)
         bridge_retained = self.bridge_final is True
@@ -579,6 +620,7 @@ class Soak:
             "probes_answered": probe_ok > 0 and len(self.probe_failures) == 0,
             "core_restarts_recovered": restart_ok,
             "journal_prefix_preserved": journal_prefix,
+            "identity_confirmed_at_attach": True if rehearsal else self.attach_login_ok,
             "bridge_retained_after_stop": True if rehearsal else bridge_retained,
             "qq_responsive_after_stop": True if rehearsal else qq_ok,
             "process_growth_bounded": bounded,
@@ -596,10 +638,14 @@ class Soak:
             "target_hours": self.state.get("duration_hours"),
             "sample_seconds": self.state.get("sample_seconds"),
             "samples": len(self.samples),
-            "probe_count": len(probes),
+            "probe_count": 2 * len(self.samples),
             "probe_ok": probe_ok,
             "probe_failures": len(self.probe_failures),
             "probe_failure_samples": self.probe_failures[:20],
+            "login_probe_count": len(login_probes),
+            "login_probe_ok": login_ok,
+            "login_unavailable": self.login_unavailable,
+            "attach_login_ok": self.attach_login_ok,
             "latency_ms": {
                 "median": round(statistics.median(latencies), 2) if latencies else None,
                 "p95": round(sorted(latencies)[int(len(latencies) * 0.95) - 1], 2) if latencies else None,
@@ -625,7 +671,8 @@ class Soak:
             f"- started: {summary['started_utc']}",
             f"- finished: {summary['finished_utc']}",
             f"- duration: {summary['duration_seconds']:.0f}s (target {summary['duration_target_seconds']:.0f}s)",
-            f"- samples: {summary['samples']}, probes: {summary['probe_ok']}/{summary['probe_count']} ok",
+            f"- samples: {summary['samples']}, version/status probes: {summary['probe_ok']}/{summary['probe_count']} ok",
+            f"- login probes: {summary['login_probe_ok']}/{summary['login_probe_count']} ok; unavailable(1502): {summary['login_unavailable']}",
             f"- daemon working set first/last/max: {daemon_summary.get('working_set_first')}/{daemon_summary.get('working_set_last')}/{daemon_summary.get('working_set_max')}",
             f"- daemon handles first/last/max: {daemon_summary.get('handles_first')}/{daemon_summary.get('handles_last')}/{daemon_summary.get('handles_max')}",
             f"- core restarts: {len(self.restarts)}",
@@ -779,6 +826,7 @@ def main() -> int:
             login = soak.wait_login()
             if not login or not login.get("ok"):
                 raise RuntimeError(f"login was not confirmed after attach: {login}")
+            soak.attach_login_ok = True
             soak.log_event("bridge_attached", bridge_mapped=soak.bridge_initial, login_ok=True)
         soak.journal_initial = soak.journal_state(True)
 
