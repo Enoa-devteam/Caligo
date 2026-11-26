@@ -297,7 +297,9 @@ class Soak:
         self.samples: list[dict] = []
         self.restarts: list[dict] = []
         self.probe_failures: list[dict] = []
-        self.login_unavailable: int = 0
+        self.login_1502: int = 0
+        self.login_timeout: int = 0
+        self.login_error: int = 0
         self.attach_login_ok: bool = False
         self.stop_record: dict = {}
         self.fatal: str | None = None
@@ -461,12 +463,13 @@ class Soak:
         self.events.write(json.dumps({"kind": "sample", **record}, ensure_ascii=False) + "\n")
         self.events.flush()
         rehearsal = self.state.get("mode") == "rehearsal"
-        if login_unavailable:
-            self.login_unavailable += 1
-        elif not login.get("ok") and not rehearsal:
-            self.probe_failures.append(
-                {"t_utc": record["t_utc"], "kind": "login", "result": sanitize_probe(login)}
-            )
+        if not login.get("ok"):
+            if login.get("retcode") == 1502:
+                self.login_1502 += 1
+            elif login.get("retcode") is None:
+                self.login_timeout += 1
+            else:
+                self.login_error += 1
         for name, value in (("version", version), ("status", status)):
             if not value.get("ok") and not (rehearsal and name == "status"):
                 self.probe_failures.append(
@@ -585,7 +588,9 @@ class Soak:
                 for name, p in s["probes"].items()
                 if name in ("version", "status") and not p.get("ok")
             ),
-            "login_unavailable": sum(1 for s in recent if s.get("login_unavailable")),
+            "login_unavailable": sum(
+                1 for s in recent for name, p in s["probes"].items() if name == "login" and not p.get("ok")
+            ),
             "journal_size": recent[-1]["journal"].get("size"),
         }
         (self.out / "hourly").mkdir(exist_ok=True)
@@ -644,7 +649,10 @@ class Soak:
             "probe_failure_samples": self.probe_failures[:20],
             "login_probe_count": len(login_probes),
             "login_probe_ok": login_ok,
-            "login_unavailable": self.login_unavailable,
+            "login_1502": self.login_1502,
+            "login_timeout": self.login_timeout,
+            "login_error": self.login_error,
+            "login_unavailable": self.login_1502 + self.login_timeout + self.login_error,
             "attach_login_ok": self.attach_login_ok,
             "latency_ms": {
                 "median": round(statistics.median(latencies), 2) if latencies else None,
@@ -672,7 +680,7 @@ class Soak:
             f"- finished: {summary['finished_utc']}",
             f"- duration: {summary['duration_seconds']:.0f}s (target {summary['duration_target_seconds']:.0f}s)",
             f"- samples: {summary['samples']}, version/status probes: {summary['probe_ok']}/{summary['probe_count']} ok",
-            f"- login probes: {summary['login_probe_ok']}/{summary['login_probe_count']} ok; unavailable(1502): {summary['login_unavailable']}",
+            f"- login probes: {summary['login_probe_ok']}/{summary['login_probe_count']} ok; 1502={summary['login_1502']}, timeout={summary['login_timeout']}, other={summary['login_error']}",
             f"- daemon working set first/last/max: {daemon_summary.get('working_set_first')}/{daemon_summary.get('working_set_last')}/{daemon_summary.get('working_set_max')}",
             f"- daemon handles first/last/max: {daemon_summary.get('handles_first')}/{daemon_summary.get('handles_last')}/{daemon_summary.get('handles_max')}",
             f"- core restarts: {len(self.restarts)}",
