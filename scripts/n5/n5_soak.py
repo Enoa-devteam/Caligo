@@ -423,7 +423,7 @@ class Soak:
         if self.ws_drain_stop_path:
             self.ws_drain_stop_path.write_text("stop\n", encoding="ascii")
         try:
-            self.ws_drain_proc.wait(timeout=15)
+            self.ws_drain_proc.wait(timeout=45)
         except subprocess.TimeoutExpired:
             self.ws_drain_proc.kill()
             self.ws_drain_proc.wait(timeout=10)

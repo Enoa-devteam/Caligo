@@ -59,7 +59,10 @@ try {
             $segment = [ArraySegment[byte]]::new($buffer)
             while ($true) {
                 if ($StopFile -and (Test-Path -LiteralPath $StopFile)) { $stopReason = 'stop-file'; break }
-                $cts = [Threading.CancellationTokenSource]::new(5000)
+                # A short cancellation aborts ClientWebSocket and forces endless
+                # reconnects. 30s only bounds idle waits; continuous events return
+                # immediately, and the stop file is checked after each result.
+                $cts = [Threading.CancellationTokenSource]::new(30000)
                 try {
                     $result = $ws.ReceiveAsync($segment, $cts.Token).GetAwaiter().GetResult()
                 } catch [System.OperationCanceledException] {
