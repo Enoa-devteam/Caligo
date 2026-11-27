@@ -695,8 +695,8 @@ mod normal_pipe {
             ),
             (
                 "get_login_info",
-                json!({}),
-                HostQuery::LoginInfo,
+                json!({"no_cache":true}),
+                HostQuery::SelfProfile,
                 QueryOutcome::PermissionDenied,
                 Value::Null,
                 RET_PERMISSION_DENIED,
@@ -738,6 +738,15 @@ mod normal_pipe {
             assert_eq!(response.echo, json!({"action":action}));
             assert_eq!(lab.daemon.pending_query_count(), 0);
         }
+        // A default get_login_info after one confirmed SelfProfile answer is
+        // served from the durable login cache without another host query.
+        let cached = handler("get_login_info", &json!({}), Value::Null);
+        assert_eq!(cached.retcode, 0);
+        assert_eq!(
+            cached.data,
+            json!({"user_id":10001,"nickname":"Fresh pipe self"})
+        );
+        assert_eq!(lab.daemon.pending_query_count(), 0);
         let journal = std::fs::read_to_string(lab.dir.join("journal.log")).unwrap_or_default();
         assert!(
             !journal.contains("query-"),

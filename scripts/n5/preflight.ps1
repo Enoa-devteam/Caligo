@@ -8,6 +8,7 @@ param(
     [double]$DurationHours = 24,
     [int]$SampleSeconds = 60,
     [int[]]$RestartAtMinutes = @(120, 480, 960),
+    [switch]$RequireEventConsumer,
     [switch]$Rehearse
 )
 
@@ -84,6 +85,7 @@ $state = [ordered]@{
     duration_hours = $DurationHours
     sample_seconds = $SampleSeconds
     restart_at_minutes = @($RestartAtMinutes)
+    require_event_consumer = [bool]$RequireEventConsumer
 }
 
 if ($Rehearse) {
@@ -187,6 +189,7 @@ $preparation = [ordered]@{
     duration_hours = $state.duration_hours
     sample_seconds = $state.sample_seconds
     restart_at_minutes = $state.restart_at_minutes
+    require_event_consumer = $state.require_event_consumer
     expected = [ordered]@{
         resident = 'one daemon and one admitted bridge; OneBot get_version_info/get_status/get_login_info continue to answer without per-message CLI interaction'
         restart = 'each injected core crash is followed by the same journal/pipe/token, bridge reconnects, and login/query becomes available again'

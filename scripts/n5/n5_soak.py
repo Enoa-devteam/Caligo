@@ -29,6 +29,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from analyze_journal import summarize as summarize_journal
+
 CREATE_NO_WINDOW = 0x08000000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
@@ -307,6 +309,10 @@ class Soak:
         self.bridge_final: bool | None = None
         self.journal_initial: dict | None = None
         self.journal_final: dict | None = None
+        self.ws_drain_proc: subprocess.Popen | None = None
+        self.ws_drain_summary_path: Path | None = None
+        self.ws_drain_stop_path: Path | None = None
+        self.ws_drain_summary: dict | None = None
 
     def log_event(self, kind: str, **fields):
         record = {"t_utc": utcnow(), "kind": kind, "elapsed_s": round(time.time() - self.started, 2)}
@@ -374,6 +380,59 @@ class Soak:
         )
         self.log_event("daemon_started", pid=proc.pid, http=ready.get("onebot_http"), ws=ready.get("onebot_ws"))
         return proc, ready
+
+    def start_ws_drain(self):
+        repo = Path(__file__).resolve().parents[2]
+        script = repo / "scripts/n5/ws_drain.ps1"
+        self.ws_drain_summary_path = self.out / "ws-drain-summary.private.json"
+        self.ws_drain_stop_path = self.out / "ws-drain.stop"
+        events = self.out / "ws-events.private.jsonl"
+        stdout = self.out / "ws-drain.stdout.private.log"
+        stderr = self.out / "ws-drain.stderr.private.log"
+        for path in (self.ws_drain_summary_path, self.ws_drain_stop_path, events, stdout, stderr):
+            path.unlink(missing_ok=True)
+        args = [
+            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Port",
+            str(self.state["ports"]["ws"]),
+            "-Token",
+            self.token,
+            "-Out",
+            str(events),
+            "-Summary",
+            str(self.ws_drain_summary_path),
+            "-StopFile",
+            str(self.ws_drain_stop_path),
+            "-MaxHours",
+            str(float(self.state["duration_hours"]) + 2),
+        ]
+        with stdout.open("wb") as out, stderr.open("wb") as err:
+            self.ws_drain_proc = subprocess.Popen(
+                args, stdout=out, stderr=err, creationflags=CREATE_NO_WINDOW
+            )
+        self.log_event("ws_drain_started", script=str(script), port=self.state["ports"]["ws"])
+
+    def stop_ws_drain(self):
+        if not self.ws_drain_proc:
+            return
+        if self.ws_drain_stop_path:
+            self.ws_drain_stop_path.write_text("stop\n", encoding="ascii")
+        try:
+            self.ws_drain_proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.ws_drain_proc.kill()
+            self.ws_drain_proc.wait(timeout=10)
+        if self.ws_drain_summary_path and self.ws_drain_summary_path.exists():
+            try:
+                self.ws_drain_summary = json.loads(self.ws_drain_summary_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                self.ws_drain_summary = {"error": "invalid ws-drain summary"}
+        self.log_event("ws_drain_stopped", summary=self.ws_drain_summary)
 
     def wait_login(self, timeout: float = 120.0):
         deadline = time.time() + timeout
@@ -620,6 +679,12 @@ class Soak:
         if daemon_summary.get("handles_first") and daemon_summary.get("handles_last"):
             bounded = bounded and daemon_summary["handles_last"] < daemon_summary["handles_first"] + 512
         rehearsal = self.state.get("mode") == "rehearsal"
+        journal_summary = {}
+        try:
+            journal_summary = summarize_journal(Path(self.state["journal"]))
+        except Exception as error:  # noqa: BLE001 - record analyzer failure in evidence
+            journal_summary = {"error": f"{type(error).__name__}: {error}"}
+        event_consumer = self.ws_drain_summary or {}
         criteria = {
             "resident_duration": duration >= duration_target - 180,
             "probes_answered": probe_ok > 0 and len(self.probe_failures) == 0,
@@ -630,6 +695,11 @@ class Soak:
             "qq_responsive_after_stop": True if rehearsal else qq_ok,
             "process_growth_bounded": bounded,
         }
+        if self.state.get("require_event_consumer"):
+            criteria["event_consumer_active"] = bool(
+                event_consumer.get("connects", 0) > 0 and event_consumer.get("messages", 0) > 0
+            )
+            criteria["no_event_queue_gaps"] = journal_summary.get("kinds", {}).get("Gap", 0) == 0
         overall = "pass" if all(criteria.values()) else "fail"
         if duration_target - duration > 180:
             overall = "incomplete"
@@ -664,6 +734,8 @@ class Soak:
             "restarts": self.restarts,
             "journal_initial": self.journal_initial,
             "journal_final": self.journal_final,
+            "journal_summary": journal_summary,
+            "event_consumer": event_consumer,
             "stop": self.stop_record,
             "bridge_initial": self.bridge_initial,
             "bridge_final": self.bridge_final,
@@ -685,6 +757,8 @@ class Soak:
             f"- daemon handles first/last/max: {daemon_summary.get('handles_first')}/{daemon_summary.get('handles_last')}/{daemon_summary.get('handles_max')}",
             f"- core restarts: {len(self.restarts)}",
             f"- bridge initial/final: {self.bridge_initial}/{self.bridge_final}",
+            f"- event consumer: {json.dumps(event_consumer, ensure_ascii=False)}",
+            f"- journal kinds: {json.dumps(journal_summary.get('kinds', {}), ensure_ascii=False)}",
             f"- criteria: {json.dumps(criteria, ensure_ascii=False)}",
             f"- overall: **{overall}**",
         ]
@@ -836,6 +910,8 @@ def main() -> int:
                 raise RuntimeError(f"login was not confirmed after attach: {login}")
             soak.attach_login_ok = True
             soak.log_event("bridge_attached", bridge_mapped=soak.bridge_initial, login_ok=True)
+            if state.get("require_event_consumer"):
+                soak.start_ws_drain()
         soak.journal_initial = soak.journal_state(True)
 
         target_seconds = float(state["duration_hours"]) * 3600
@@ -868,6 +944,10 @@ def main() -> int:
     finally:
         try:
             stop_error = None
+            try:
+                soak.stop_ws_drain()
+            except Exception as error:  # noqa: BLE001 - record, never mask the soak result
+                soak.log_event("ws_drain_stop_failed", error=f"{type(error).__name__}: {error}")
             if soak.daemon_proc and soak.daemon_proc.poll() is None:
                 try:
                     soak.stop_daemon(force=True)
