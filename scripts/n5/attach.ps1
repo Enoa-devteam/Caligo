@@ -42,11 +42,15 @@ if (Test-Path -LiteralPath $reservation) { throw 'Attach was already reserved fo
 $handle = [IO.File]::Open($reservation, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 $handle.Dispose()
 
+$generation = 1
+if ($null -ne $state.session_generation) { $generation = [int]$state.session_generation }
+if ($generation -lt 1) { throw 'State session_generation must be positive' }
+
 $report = Join-Path $Pack 'entry.private.jsonl'
 & $exe cli qq-entry --pid $state.pid --created-filetime $state.filetime `
     --bridge $bridge --manifest $state.manifest --report $report --wait-s 20 `
     --confirm-designated-test-instance --daemon-pipe $daemon.bridge_pipe `
-    --daemon-auth-file $state.token_file --daemon-generation 1 --daemon-account ([string]$state.account) *> (Join-Path $Pack 'attach.private.log')
+    --daemon-auth-file $state.token_file --daemon-generation $generation --daemon-account ([string]$state.account) *> (Join-Path $Pack 'attach.private.log')
 if ($LASTEXITCODE -ne 0) { throw 'Attach failed; no retry' }
 
 $p.Refresh()

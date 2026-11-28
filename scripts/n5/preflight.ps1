@@ -8,6 +8,7 @@ param(
     [double]$DurationHours = 24,
     [int]$SampleSeconds = 60,
     [int[]]$RestartAtMinutes = @(120, 480, 960),
+    [int]$Generation = 1,
     [switch]$RequireEventConsumer,
     [switch]$Rehearse
 )
@@ -54,6 +55,7 @@ function Get-FreePort {
     try { return ([Net.IPEndPoint]$listener.LocalEndpoint).Port } finally { $listener.Stop() }
 }
 
+if ($Generation -lt 1) { throw '-Generation must be a positive session generation' }
 if (-not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $bridge)) {
     throw 'Release binaries missing; run scripts/n5/verify-release.ps1 first'
 }
@@ -73,6 +75,7 @@ $state = [ordered]@{
     manifest = $manifest
     manifest_sha256 = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
     account = $Account
+    session_generation = $Generation
     pid = $TargetPid
     created = $ExpectedCreated
     filetime = 0
@@ -190,6 +193,7 @@ $preparation = [ordered]@{
     sample_seconds = $state.sample_seconds
     restart_at_minutes = $state.restart_at_minutes
     require_event_consumer = $state.require_event_consumer
+    session_generation = $state.session_generation
     expected = [ordered]@{
         resident = 'one daemon and one admitted bridge; OneBot get_version_info/get_status/get_login_info continue to answer without per-message CLI interaction'
         restart = 'each injected core crash is followed by the same journal/pipe/token, bridge reconnects, and login/query becomes available again'
