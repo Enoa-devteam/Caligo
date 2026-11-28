@@ -66,6 +66,7 @@
 - feat-004 后续观测判定：[回调线程与停止观测合同](acceptance/2026-11-15-feat-004-observation.md)。
 - feat-005 当前范围：[正式/历史路线判定与剩余证据](acceptance/2026-11-21-feat-005-scope.md)；历史原生 MSF/G3 路线为研究资产，不作正式链路完成门。
 - feat-006 文本 MVP：[阻塞点判定、传输协议与慢连接证据](acceptance/2026-11-24-feat-006-text-mvp.md)；真实外部应用与现场慢连接仍待验收。
+- feat-007 N5 发布门：[启动包、未知版本与持续运行证据](acceptance/2026-11-25-feat-007-n5-release.md)；24h 与 QQ 重启矩阵仍待闭合。
 - 响应消费者历史起点：[response-consumer-scope](research/response-consumer-scope.md)。
   “实现未开始”等旧结论以 N 台账后续接线记录补充；scope 原文保留。
 - 详细样本与负结果：从 P/N 执行台账进入对应 `evidence/`，按样本定位，

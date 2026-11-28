@@ -8,7 +8,7 @@ use crate::daemon::Daemon;
 use crate::media_tool::{MediaTool, StopToken};
 use crate::onebot::{handle_action_with_queries, QueryBackend};
 use crate::onebot_http::{serve_parallel, DEFAULT_MAX_BODY};
-use caligo_model::capability::{HostQuery, QueryOutcome};
+use caligo_model::capability::{HostQuery, QueryData, QueryOutcome};
 use caligo_model::onebot_traits::{SendDisposition, SendPayload, SendSink, SendTarget};
 use caligo_model::{ActionState, SessionKey, SessionKind};
 use std::net::TcpListener;
@@ -61,7 +61,25 @@ impl DaemonQueryBackend {
 
 impl QueryBackend for DaemonQueryBackend {
     fn query_host(&self, query: HostQuery, timeout: Duration) -> QueryOutcome {
-        self.daemon.query_host(query, timeout)
+        // Default get_login_info must be available after a core restart even
+        // when a locked QQ leaves the native LoginInfo query unanswered. The
+        // durable cache is only a cache: no_cache/SelfProfile still queries.
+        if matches!(query, HostQuery::LoginInfo) {
+            if let Some(info) = self.daemon.cached_login_info() {
+                return QueryOutcome::Success(QueryData::LoginInfo(info));
+            }
+        }
+        let outcome = self.daemon.query_host(query, timeout);
+        match &outcome {
+            QueryOutcome::Success(QueryData::LoginInfo(info)) => {
+                self.daemon.remember_login_info(&info.user_id, &info.nickname);
+            }
+            QueryOutcome::Success(QueryData::SelfProfile(info)) => {
+                self.daemon.remember_login_info(&info.user_id, &info.nickname);
+            }
+            _ => {}
+        }
+        outcome
     }
 
     fn voice_media(&self) -> Option<(&MediaTool, StopToken)> {
@@ -220,6 +238,43 @@ pub fn bind_loopback(address: &str) -> std::io::Result<TcpListener> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_login_short_circuits_the_native_query() {
+        let dir = std::env::temp_dir().join(format!(
+            "caligo-login-backend-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let config = crate::daemon::DaemonConfig {
+            pipe_prefix: format!("caligo-login-backend-{}", std::process::id()),
+            journal_path: dir.join("journal.jsonl"),
+            module_baseline: "test".into(),
+            account: "1694717255".into(),
+            core_build: "test".into(),
+            expect_client_pid: 0,
+            runtime: crate::runtime::RuntimeConfig::default(),
+            test_fault_break_bridge_after_hello: false,
+            test_fault_break_bridge_after_result: false,
+        };
+        let daemon = Daemon::start(config).expect("daemon");
+        daemon.remember_login_info("1694717255", "nick");
+        let backend = DaemonQueryBackend::new(daemon.clone());
+        match backend.query_host(HostQuery::LoginInfo, Duration::from_millis(1)) {
+            QueryOutcome::Success(QueryData::LoginInfo(info)) => {
+                assert_eq!(info.user_id, "1694717255");
+                assert_eq!(info.nickname, "nick");
+            }
+            other => panic!("cached login was not served: {other:?}"),
+        }
+        drop(backend);
+        drop(daemon);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn listener_accepts_ephemeral_loopback_and_rejects_external_bind() {

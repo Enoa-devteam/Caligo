@@ -8,9 +8,10 @@
 //! 前在途项显式 unknown)。core 非正常退出由断连恢复(测试在 recovery_contract)。
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +29,7 @@ use crate::runtime::{host_identity, AccountActor, NativeResult, RuntimeConfig};
 use crate::transport::{
     connect_client, generate_token, token_hex, PipeConnection, PipeServer, TransportError,
 };
-use caligo_model::capability::{positive_decimal, HostQuery, QueryOutcome, QueryScope};
+use caligo_model::capability::{positive_decimal, HostQuery, LoginInfo, QueryOutcome, QueryScope};
 use caligo_model::{
     Direction, EventSource, MsgEvent, NativeMessageId, SendTextRequest, SessionIdentity,
 };
@@ -141,6 +142,42 @@ pub struct DaemonConfig {
     pub test_fault_break_bridge_after_result: bool,
 }
 
+/// Durable default-login cache.
+///
+/// `get_login_info` without `no_cache` must not depend on a live native query:
+/// a locked QQ can leave that query unanswered while the bridge and event chain
+/// stay healthy. The last successful LoginInfo/SelfProfile answer is persisted
+/// in the account directory and returned by default after a core restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LoginCacheFile {
+    v: u32,
+    account: String,
+    user_id: String,
+    nickname: String,
+    updated_unix_ms: u64,
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn valid_login_cache(account: &str, cache: &LoginCacheFile) -> bool {
+    cache.v == 1
+        && cache.account == account
+        && cache.user_id.parse::<u64>().is_ok_and(|id| id > 0)
+        && !cache.nickname.trim().is_empty()
+        && cache.nickname.len() <= 4096
+}
+
+fn load_login_cache(account: &str, path: &Path) -> Option<LoginCacheFile> {
+    let bytes = std::fs::read(path).ok()?;
+    let cache: LoginCacheFile = serde_json::from_slice(&bytes).ok()?;
+    valid_login_cache(account, &cache).then_some(cache)
+}
+
 /// 常驻 core(LAB 形态;计划 §7-D5)。
 pub struct Daemon {
     pub(crate) voice_media: Option<MediaTool>,
@@ -164,6 +201,8 @@ pub struct Daemon {
     pub(crate) bridge_wake: Arc<AtomicBool>,
     api_request_seq: AtomicU64,
     query_broker: CapabilityBroker,
+    login_cache: Mutex<Option<LoginCacheFile>>,
+    login_cache_path: PathBuf,
 }
 
 /// Every return path (including wire errors) releases ephemeral query waiters.
@@ -200,6 +239,8 @@ impl Daemon {
             }
             _ => None,
         };
+        let login_cache_path = config.journal_path.with_file_name("login.private.json");
+        let login_cache = load_login_cache(&config.account, &login_cache_path);
         let (actor, _report) = match message_store {
             Some(store) => AccountActor::open_with_message_store(
                 config.journal_path.clone(),
@@ -230,8 +271,52 @@ impl Daemon {
             bridge_wake: Arc::new(AtomicBool::new(false)),
             api_request_seq: AtomicU64::new(1),
             query_broker: CapabilityBroker::default(),
+            login_cache: Mutex::new(login_cache),
+            login_cache_path,
             config,
         }))
+    }
+
+    /// Last confirmed account identity, persisted across core restarts.
+    pub fn cached_login_info(&self) -> Option<LoginInfo> {
+        let guard = self.login_cache.lock().ok()?;
+        let cache = guard.as_ref()?;
+        Some(LoginInfo {
+            user_id: cache.user_id.clone(),
+            nickname: cache.nickname.clone(),
+            online: true,
+        })
+    }
+
+    /// Cache a successful LoginInfo/SelfProfile answer for default
+    /// `get_login_info`. Persistence is best-effort; a failed write keeps the
+    /// in-memory value and is never reported as a successful native query.
+    pub fn remember_login_info(&self, user_id: &str, nickname: &str) {
+        let Ok(id) = user_id.parse::<u64>() else {
+            return;
+        };
+        if id == 0 {
+            return;
+        }
+        if nickname.trim().is_empty() || nickname.len() > 4096 {
+            return;
+        }
+        let cache = LoginCacheFile {
+            v: 1,
+            account: self.config.account.clone(),
+            user_id: user_id.to_string(),
+            nickname: nickname.to_string(),
+            updated_unix_ms: unix_ms_now(),
+        };
+        if !valid_login_cache(&self.config.account, &cache) {
+            return;
+        }
+        if let Ok(mut guard) = self.login_cache.lock() {
+            *guard = Some(cache.clone());
+        }
+        if let Ok(bytes) = serde_json::to_vec(&cache) {
+            let _ = std::fs::write(&self.login_cache_path, bytes);
+        }
     }
 
     /// (bridge, control) 管道名。前缀可以是短名(自动补 `\.\pipe\`)
@@ -1486,6 +1571,11 @@ impl StoreReader for Daemon {
     }
 
     fn login_info(&self) -> Option<(u64, String)> {
+        if let Some(info) = self.cached_login_info() {
+            if let Ok(user_id) = info.user_id.parse::<u64>() {
+                return Some((user_id, info.nickname));
+            }
+        }
         self.actor.lock().ok()?.login_info()
     }
 
@@ -1666,5 +1756,77 @@ impl BridgeClient {
 
     pub fn recv(&mut self) -> Result<CoreToBridgeMsg, SessionError> {
         self.stream.recv_json(&self.conn, &AtomicBool::new(false))
+    }
+}
+
+#[cfg(test)]
+mod login_cache_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "caligo-{tag}-{}-{}",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn config(dir: &Path) -> DaemonConfig {
+        DaemonConfig {
+            pipe_prefix: format!("caligo-login-test-{}", unix_ms_now()),
+            journal_path: dir.join("journal.jsonl"),
+            module_baseline: "test".into(),
+            account: "1694717255".into(),
+            core_build: "test".into(),
+            expect_client_pid: 0,
+            runtime: RuntimeConfig::default(),
+            test_fault_break_bridge_after_hello: false,
+            test_fault_break_bridge_after_result: false,
+        }
+    }
+
+    #[test]
+    fn login_cache_is_default_and_survives_restart() {
+        let dir = temp_dir("login-cache");
+        let daemon = Daemon::start(config(&dir)).expect("first daemon");
+        assert!(daemon.cached_login_info().is_none());
+        daemon.remember_login_info("1694717255", "nick");
+        let cached = daemon.cached_login_info().expect("cached");
+        assert_eq!(cached.user_id, "1694717255");
+        assert_eq!(cached.nickname, "nick");
+        drop(daemon);
+
+        let daemon = Daemon::start(config(&dir)).expect("second daemon");
+        let cached = daemon.cached_login_info().expect("reloaded cache");
+        assert_eq!(cached.user_id, "1694717255");
+        assert_eq!(cached.nickname, "nick");
+        assert_eq!(
+            StoreReader::login_info(daemon.as_ref()),
+            Some((1694717255, "nick".to_string()))
+        );
+        drop(daemon);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn login_cache_rejects_invalid_identity_and_account_drift() {
+        let dir = temp_dir("login-cache-invalid");
+        let daemon = Daemon::start(config(&dir)).expect("daemon");
+        daemon.remember_login_info("0", "nick");
+        assert!(daemon.cached_login_info().is_none());
+        daemon.remember_login_info("1694717255", "");
+        assert!(daemon.cached_login_info().is_none());
+
+        let mut other = config(&dir);
+        other.account = "10001".into();
+        daemon.remember_login_info("1694717255", "nick");
+        assert!(dir.join("login.private.json").exists());
+        drop(daemon);
+        let drifted = Daemon::start(other).expect("drifted daemon");
+        assert!(drifted.cached_login_info().is_none());
+        drop(drifted);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

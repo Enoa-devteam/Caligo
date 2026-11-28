@@ -441,6 +441,37 @@ fn event_queue_overflow_records_gap_and_degrades() {
     );
 }
 
+#[test]
+fn projected_event_is_published_even_when_control_drain_queue_is_full() {
+    let path = tmp_journal("efull-projected");
+    let _ = std::fs::remove_file(&path);
+    let cfg = RuntimeConfig {
+        event_queue_max_items: 1,
+        ..RuntimeConfig::default()
+    };
+    let (mut a, _) = AccountActor::open(&path, cfg).unwrap();
+    a.attach_session(session(1)).unwrap();
+    a.mark_connection_ready(conn(1)).unwrap();
+    let t = private_target("123");
+    let plain = event(1, &t, "E1", "a", EventSource::Recv);
+    a.on_event(plain).unwrap();
+    let mut projected = event(1, &t, "E2", "b", EventSource::Recv);
+    projected.onebot_projection = Some(caligo_model::OneBotMessageProjection {
+        peer_id: 123,
+        sender_user_id: 1,
+        real_id: 2,
+        time: 1,
+        sender_nickname: None,
+        sub_type: Some("friend".into()),
+        font: None,
+    });
+    let receipt = a.on_event(projected).unwrap();
+    assert!(matches!(receipt, EventReceipt::Published { event_seq: 2 }));
+    assert_eq!(a.phase(), Phase::Active);
+    assert_eq!(a.counters.events_deliverable_queue_dropped, 1);
+    assert_eq!(a.gaps().len(), 0);
+}
+
 // ---- 停止协议:排队项取消;在途项 close 时显式 unknown;不回 Active ----
 
 #[test]

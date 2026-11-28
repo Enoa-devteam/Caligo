@@ -596,10 +596,15 @@ fn d8_owned_records_reach_journal_and_only_current_incoming_messages_fan_out() {
         Err(caligo_model::RejectReason::SessionStale)
     );
     assert!(event.queue_bytes() > events[0].text.len() + 1024);
+    // The bounded queue is the control DrainEvents diagnostic queue, not the
+    // production OneBot fanout. A wrapper record that does not fit must still
+    // be journaled/published; only the diagnostic copy is dropped and counted.
     assert!(matches!(
         budget_actor.on_event(event),
-        Err(caligo_model::RejectReason::CapacityExhausted { .. })
+        Ok(caligo_core::runtime::EventReceipt::Published { .. })
     ));
+    assert_eq!(budget_actor.counters.events_deliverable_queue_dropped, 1);
+    assert_eq!(budget_actor.gaps().len(), 0);
     let (_, report) = AccountActor::open(&journal, RuntimeConfig::default()).unwrap();
     assert_eq!(report.recovered_events, 6);
     let store = caligo_core::message_store::MessageStore::open(

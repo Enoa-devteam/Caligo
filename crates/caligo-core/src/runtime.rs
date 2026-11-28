@@ -146,6 +146,7 @@ pub struct RuntimeCounters {
     pub events_persisted: u64,
     pub events_duplicate_suppressed: u64,
     pub events_old_generation_audited: u64,
+    pub events_deliverable_queue_dropped: u64,
     pub gaps_recorded: u64,
     pub receipts_duplicate_ignored: u64,
     pub receipts_corrected: u64,
@@ -1055,17 +1056,29 @@ impl AccountActor {
 
         // 交付队列限额(items/bytes 任一到达 → Gap + 拒绝;bridge 依契约保留
         // replay 窗口,不是静默丢弃)。
+        //
+        // 生产 OneBot 事件在 `Daemon::publish_onebot_message` 直接 fanout;
+        // `events_out` 只是 control `DrainEvents` 的诊断队列。wrapper/projection
+        // 事件即使诊断队列已满也必须继续持久化并发布,否则长时间运行会把
+        // 正常的 OneBot 交付误判为 core 容量耗尽。此时只记录计数,不写 Gap,
+        // 也不进入 Degraded。
         let ev_bytes = ev.queue_bytes();
+        let mut enqueue_deliverable = true;
         if self.events_out.len() + 1 > self.config.event_queue_max_items
             || self.events_out_bytes.saturating_add(ev_bytes) > self.config.event_queue_max_bytes
         {
-            self.record_gap(
-                self.event_seq_next,
-                None,
-                "event queue overflow (items/bytes limit)",
-            )?;
-            self.degrade("event queue overflow");
-            return Err(RejectReason::CapacityExhausted { queue: "events" });
+            if ev.onebot_projection.is_some() || ev.wrapper_message.is_some() {
+                self.counters.events_deliverable_queue_dropped += 1;
+                enqueue_deliverable = false;
+            } else {
+                self.record_gap(
+                    self.event_seq_next,
+                    None,
+                    "event queue overflow (items/bytes limit)",
+                )?;
+                self.degrade("event queue overflow");
+                return Err(RejectReason::CapacityExhausted { queue: "events" });
+            }
         }
 
         let seq = self.alloc_seq();
@@ -1091,8 +1104,10 @@ impl AccountActor {
             self.persist_message_projection(&ev)?;
             self.pending_message_store.remove(&dedup_key);
         }
-        self.events_out.push_back(ev);
-        self.events_out_bytes += ev_bytes;
+        if enqueue_deliverable {
+            self.events_out.push_back(ev);
+            self.events_out_bytes += ev_bytes;
+        }
         self.counters.events_persisted += 1;
         Ok(EventReceipt::Published { event_seq: seq })
     }
@@ -1115,6 +1130,10 @@ impl AccountActor {
         if self.events_out.len() + 1 > self.config.event_queue_max_items
             || self.events_out_bytes.saturating_add(ev_bytes) > self.config.event_queue_max_bytes
         {
+            if ev.onebot_projection.is_some() || ev.wrapper_message.is_some() {
+                self.counters.events_deliverable_queue_dropped += 1;
+                return Ok(());
+            }
             self.record_gap(
                 ev.event_seq,
                 None,
